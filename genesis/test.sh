@@ -225,4 +225,73 @@ for bad in ' x <- 1' ' break' ' continue' ' if 1
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 rejects undefined names, stray break/continue/elif, unterminated blocks, trailing tokens"
-echo "genesis: layer 3 (oli-core compiler, steps 0-4) passed"
+# step 5: procedures, parameters, calls (SysV registers), forward calls, recursion
+for pair in "fact 120" "fib 55" "six_args 91" "noret 42"; do
+    set -- $pair
+    ./build/oli1.bin < "3-oli1/tests/$1.oli" > build/o3.elf
+    chmod +x build/o3.elf
+    set +e; timeout 10 ./build/o3.elf; st=$?; set -e
+    [ "$st" = "$2" ] || fail "oli1: $1.oli expected exit $2 got $st"
+done
+./build/oli1.bin < 3-oli1/tests/put.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 0 ] || fail "oli1: put.oli exit $st"
+printf 'first second\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: put.oli wrote wrong bytes"
+echo "ok: oli1 compiles procedures with parameters, recursion, forward calls and results"
+for bad in 'proc start
+ entry
+ ret nosuch(1)
+end' 'proc f(a: u64)
+ ret a
+end
+proc start
+ entry
+ ret f(1, 2)
+end' 'proc start
+ ret 1
+end' 'proc start
+ entry
+ ret 1
+end
+proc other
+ entry
+ ret 2
+end' 'proc f
+ ret 1
+end
+proc f
+ ret 2
+end
+proc start
+ entry
+ ret f()
+end' 'proc f(a: u64, b: u64, c: u64, d: u64, e: u64, g: u64, h: u64)
+ ret a
+end
+proc start
+ entry
+ ret f(1,2,3,4,5,6,7)
+end' 'proc f(a)
+ ret a
+end
+proc start
+ entry
+ ret f(1)
+end' 'proc start
+ entry
+ ret 1
+end
+layout P
+end'; do
+    set +e
+    printf '%s\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed program exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed program produced output"
+    grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
+done
+echo "ok: oli1 rejects undefined/duplicate procedures, arity mismatches, missing or multiple entry"
+echo "genesis: layer 3 (oli-core compiler, steps 0-5) passed"

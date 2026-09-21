@@ -1,6 +1,6 @@
 # 0020 — Genesis layer 3: the oli-core compiler (oli1)
 
-Status: in progress. Steps 0–4 implemented and tested 2026-09-21.
+Status: in progress. Steps 0–5 implemented and tested 2026-09-21.
 
 ## Problem
 Layer 2 (`asm`) turns the `machine x64` sub-language into ELF. To reach a
@@ -35,6 +35,12 @@ non-constant sources — syscall results — need no special case. Forward branc
 use compile-time fixup stacks in scratch instead of a second pass; `if`-chain
 fixups and `break` fixups are separate stacks because they are resolved by
 different enclosing constructs.
+
+Step 5 keeps the single pass: a call to a not-yet-declared procedure creates a
+placeholder table entry and a fixup; finalize resolves every `call rel32` and
+checks arity, so declaration order never matters (design 0016: `entry` may be
+anywhere). Parameters are spilled to frame slots in the prologue so that the
+rest of the generator treats them as ordinary locals.
 
 ## Advantages
 - The assembler→compiler step is small and each increment runs on real hardware.

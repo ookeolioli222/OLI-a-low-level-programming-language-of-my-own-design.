@@ -36,8 +36,8 @@ observable result. Nothing is marked done without such a test.
 | 2 | `name := <expr>` bindings; `ret <expr>`; `+ - *` with precedence; names as syscall args | symbol table + compile-time constant folding | **done** |
 | 3 | string literals with every §2.4 escape; `name.addr`/`name.len` as factors; hello | string pool before code, fixed addresses | **done** |
 | 4 | run-time locals (frame slots), `<-` stores, `/ %`, unary `-`, comparisons, `if/elif/else`, `while`, `break`, `continue`, `os.syscall` as a value | frame + rax/stack codegen, rel32 branches with fixups | **done** |
-| 5 | multiple `proc`s and calls; parameters (SysV) | call/ret, arg regs | next |
-| 6 | views, `zone`, layouts, `T or E` — enough for a compiler | frames + checks | planned |
+| 5 | several `proc`s per file, parameters (`p: T`, up to six), `-> T`, calls as statements and factors, forward calls, recursion | SysV registers, `call rel32` with fixups, `leave; ret` | **done** |
+| 6 | views, `zone`, layouts, `T or E` — enough for a compiler | frames + checks | next |
 
 Steps 2–6 grow oli-core until it can express `olic` (layer 4), at which point the
 compiler is ported into oli-core, `oli1` compiles it, and the fixpoint
@@ -139,6 +139,40 @@ precedence, parentheses, `/`, `%`, unary minus, all six comparisons),
 (`elif` branch taken, byte-exact stdout), `echo.oli` (stdin echoed through an
 `mmap` buffer, exit = byte count, empty input handled) and fifteen rejection
 programs in the harness. Every step 0–3 fixture still passes unchanged.
+
+## Step 5 (implemented)
+
+A file is an optional `module` line followed by procedures. `proc NAME`
+takes an optional parameter list `(p: T, ...)` — at most six, each parameter
+name bound to slots 0..n-1 and spilled from `rdi rsi rdx rcx r8 r9` in the
+prologue — and an optional `-> T`; type names are read and ignored (every
+value is a 64-bit integer in oli-core). The symbol table and the slot counter
+are reset per procedure. `NAME(args)` is a factor and a statement: arguments
+are evaluated left to right and pushed, popped into the argument registers in
+reverse order, then `call rel32`. The callee's `ret expr` leaves the value in
+`rax` (`leave; ret`); falling off the end returns 0. In the procedure that
+carries `entry`, `ret` remains `exit`. The ELF entry point is the entry
+procedure's code address wherever it appears in the file.
+
+Procedures live in a table (name, code position, parameter count). A call to
+a procedure declared later creates a placeholder entry; every `call rel32` is
+recorded as a fixup (field position, procedure index, argument count) and
+resolved at finalize, which also checks that every called procedure was
+defined, that argument counts match parameter counts, and that exactly one
+procedure has `entry`. Duplicate procedure names, more than six parameters
+or arguments, a parameter without a type, an empty `-> `, and any declaration
+other than `proc` reject with exit 2.
+
+Stack alignment before `call` is not maintained (the callee is always oli-core
+code that does not depend on it); this becomes an obligation of G4, which
+must follow `docs/ABI.md` exactly.
+
+Proven by `fact.oli` (recursive factorial, 120), `fib.oli` (forward reference
+to a doubly recursive procedure, 55), `six_args.oli` (all six argument
+registers, 91), `put.oli` (a `write_all` procedure with a loop and a result,
+byte-exact stdout), `noret.oli` (procedure without `ret`, call as statement,
+42) and eight rejection programs in the harness. Every earlier fixture passes
+unchanged.
 
 ## Diagnostics
 

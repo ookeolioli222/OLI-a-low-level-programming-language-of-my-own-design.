@@ -1,24 +1,33 @@
--- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 4.
+-- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 5.
 -- A real code generator: integer bindings are stack-frame locals, expressions
 -- are evaluated at run time (in rax, with push/pop for the right operand),
--- control flow is compiled to rel32 branches with forward fixups.
---   [module path]  proc NAME  [entry | calls ... | permit ...]*  block  end
+-- control flow is compiled to rel32 branches with forward fixups, procedures
+-- follow the SysV register convention (docs/ABI.md).
+--   [module path]  { proc NAME [(p: T, ...)] [-> T] [entry | calls ... | permit ...]* block end }
+--   NAME(args)                  call (statement or factor); up to six arguments in
+--                               rdi rsi rdx rcx r8 r9; result in rax; forward calls allowed
 --   name := <expr>              bind a new local (8-byte frame slot)
 --   name := "text"              bind a name to a .rodata string (escapes of syntax §2.4)
 --   name <- <expr>              store into an existing local
---   ret [<expr>]                exit(value); bare ret exits 0
+--   ret [<expr>]                in the entry procedure exit(value); elsewhere return it
 --   if <expr> NL block { elif <expr> NL block } [ else NL block ] end
 --   while <expr> NL block end ; break ; continue
 --   os.syscall(e0 .. e6)        statement or factor; its value is the result
 -- expr  = add [ ('=='|'!='|'<'|'<='|'>'|'>=') add ]     (result 1 or 0)
 -- add   = mul { ('+'|'-') mul } ; mul = unary { ('*'|'/'|'%') unary }
 -- unary = '-' unary | primary
--- primary = int | name | name '.' ('addr'|'len') | os.syscall(args) | '(' expr ')'
+-- primary = int | name | name '.' ('addr'|'len') | os.syscall(args) | name '(' args ')'
+--         | '(' expr ')'
 -- Scratch is a 2 MiB mmap: input [base,+1M), output [base+1M,+1.375M),
 -- string pool [base+1.375M,+64K), code temp [base+1.4375M,+64K),
+-- call fixups [base+1.6875M,+64K), procedure table [base+1.75M,+64K),
 -- break-fixup stack [base+1.8125M,+64K), if-fixup stack [base+1.875M,+64K),
--- state [base+1.9375M): nslots, loop start, if-fixup top, frame-size field,
--- break-fixup top; symbol table [base+1.5M,+384K).
+-- state [base+1.9375M): +0 nslots, +8 loop start, +16 if-fixup top, +24 frame
+-- field, +32 break-fixup top, +40 current proc is entry, +48 entry code pos,
+-- +56 entry count, +64 proc count, +72 call fixup count; symbols [base+1.5M).
+-- Procedure entry (32 bytes): name ptr, name len, code pos (0 = not yet
+-- defined), param count (-1 = unknown). Call fixup (24 bytes): rel32 field
+-- pos, proc index, argument count; resolved at finalize.
 -- asm has no byte store, so emit writes an 8-byte value < 256 and advances one.
 -- Output layout: 120-byte ELF header | string pool | code. Strings have a fixed
 -- address (0x400078 + pool offset) the moment they are bound; at finalize the code
@@ -26,8 +35,10 @@
 -- Symbol entry (32 bytes): name ptr, name len, value (slot index for integers,
 -- address for strings), kind (0 = integer local, string length + 1 = string).
 -- Lookup is newest-first, so rebinding a name shadows the older binding.
--- Generated code: push rbp; mov rbp,rsp; sub rsp,FRAME (patched); locals live at
--- [rbp - 8*(slot+1)]; falling off the end exits 0.
+-- Generated code: push rbp; mov rbp,rsp; sub rsp,FRAME (patched); parameters are
+-- spilled to slots 0..n-1; locals live at [rbp - 8*(slot+1)]; falling off the end
+-- exits 0 in the entry procedure and returns 0 elsewhere. The symbol table is
+-- reset per procedure.
 -- Registers: r14 in base, r13 in end, r12 out base, rbx symtab base, r15 symbol
 -- count, rbp string pool cursor, rdi emit ptr, rsi in cursor.
 module oli1
@@ -60,6 +71,12 @@ proc start
         mov rax, r14
         add rax, 0x1D0000
         mov [r14+0x1F0020], rax
+        mov rax, 0
+        mov [r14+0x1F0028], rax
+        mov [r14+0x1F0030], rax
+        mov [r14+0x1F0038], rax
+        mov [r14+0x1F0040], rax
+        mov [r14+0x1F0048], rax
         mov rcx, r14
 .rd:
         mov rdi, 0
@@ -88,9 +105,13 @@ proc start
         jne .hcpy
         mov rsi, r14
 .hdr:
+        cmp rsi, r13
+        jae .finalize
         call .word
         cmp rcx, 0
         jne .hdr_word
+        cmp rsi, r13
+        jae .finalize
         call .blank
         jmp .hdr
 .hdr_word:
@@ -107,9 +128,113 @@ proc start
         call .iskw
         cmp rax, 1
         jne .err
+        call .proc_decl
+        jmp .hdr
+.proc_decl:
         call .word
         cmp rcx, 0
         je .err
+        call .proc_find
+        cmp r11, 0
+        je .pd_new
+        mov rax, [r11+16]
+        cmp rax, 0
+        jne .err
+        jmp .pd_have
+.pd_new:
+        call .proc_add
+.pd_have:
+        push r11
+        mov r15, 0
+        mov rax, 0
+        mov [r14+0x1F0000], rax
+        mov [r14+0x1F0008], rax
+        mov [r14+0x1F0028], rax
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
+        jne .pd_noparams
+        add rsi, 1
+.pd_param:
+        call .word
+        cmp rcx, 0
+        jne .pd_pname
+        mov rax, 41
+        call .expect
+        jmp .pd_params_done
+.pd_pname:
+        mov rax, [r14+0x1F0000]
+        cmp rax, 6
+        jae .err
+        mov r11, r15
+        shl r11, 5
+        add r11, rbx
+        mov [r11], r8
+        mov [r11+8], rcx
+        mov [r11+16], rax
+        mov rdx, 0
+        mov [r11+24], rdx
+        add r15, 1
+        add rax, 1
+        mov [r14+0x1F0000], rax
+        mov rax, 58
+        call .expect
+        call .word
+        cmp rcx, 0
+        je .err
+.pd_ptype:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 44
+        je .pd_pcomma
+        cmp rax, 41
+        je .pd_pclose
+        call .word
+        cmp rcx, 0
+        je .err
+        jmp .pd_ptype
+.pd_pcomma:
+        add rsi, 1
+        jmp .pd_param
+.pd_pclose:
+        add rsi, 1
+.pd_params_done:
+.pd_noparams:
+        pop r11
+        mov rax, [r14+0x1F0000]
+        mov [r11+24], rax
+        push r11
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 45
+        jne .pd_hdr_eol
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 62
+        jne .err
+        add rsi, 2
+        call .word
+        cmp rcx, 0
+        je .err
+.pd_rtype:
+        call .sksp
+        cmp rsi, r13
+        jae .pd_hdr_eol
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .pd_hdr_eol
+        cmp rax, 13
+        je .pd_hdr_eol
+        cmp rax, 45
+        je .pd_hdr_eol
+        call .word
+        cmp rcx, 0
+        je .err
+        jmp .pd_rtype
+.pd_hdr_eol:
         call .eol
 .hdr2:
         call .word
@@ -122,7 +247,7 @@ proc start
         mov r9, 5
         call .iskw
         cmp rax, 1
-        je .hdr2_eol
+        je .hdr2_entry
         mov rdx, kw_calls
         mov r9, 5
         call .iskw
@@ -135,25 +260,67 @@ proc start
         je .hdr2_blind
         mov rsi, r8
         jmp .body
-.hdr2_eol:
+.hdr2_entry:
+        mov rax, 1
+        mov [r14+0x1F0028], rax
+        mov rax, [r14+0x1F0038]
+        add rax, 1
+        mov [r14+0x1F0038], rax
         call .eol
         jmp .hdr2
 .hdr2_blind:
         call .eol_blind
         jmp .hdr2
 .body:
+        pop r11
+        mov [r11+16], rdi
+        mov rax, [r14+0x1F0028]
+        cmp rax, 0
+        je .body_code
+        mov [r14+0x1F0030], rdi
+.body_code:
         mov rdx, seq_prologue
         mov rcx, 7
         call .ebytes
         mov [r14+0x1F0018], rdi
         mov rdx, 0
         call .eimm
+        mov r9, 0
+.spill:
+        cmp r9, [r14+0x1F0000]
+        jae .spill_done
+        push r9
+        mov rdx, spilltab
+        lea rdx, [rdx+r9*2]
+        add rdx, r9
+        mov rcx, 3
+        call .ebytes
+        pop r9
+        mov rdx, r9
+        add rdx, 1
+        shl rdx, 3
+        neg rdx
+        call .eimm
+        add r9, 1
+        jmp .spill
+.spill_done:
         call .block
         cmp rax, 1
         jne .err
+        mov rax, [r14+0x1F0028]
+        cmp rax, 0
+        je .body_leave
         mov rdx, seq_exit0
         mov rcx, 12
         call .ebytes
+        jmp .body_frame
+.body_leave:
+        mov rdx, 0
+        call .e_movimm
+        mov rdx, seq_leave
+        mov rcx, 2
+        call .ebytes
+.body_frame:
         mov rax, [r14+0x1F0000]
         shl rax, 3
         add rax, 15
@@ -161,7 +328,58 @@ proc start
         mov rcx, rax
         mov rdx, [r14+0x1F0018]
         call .put32
-        jmp .finalize
+        ret
+.proc_find:
+        mov r9, [r14+0x1F0040]
+.pf_loop:
+        cmp r9, 0
+        je .pf_none
+        sub r9, 1
+        mov r11, r9
+        shl r11, 5
+        add r11, r14
+        add r11, 0x1C0000
+        mov rdx, [r11+8]
+        cmp rdx, rcx
+        jne .pf_loop
+        mov r11, [r11]
+        mov rdx, 0
+.pf_cmp:
+        cmp rdx, rcx
+        jae .pf_found
+        mov rax, [r8+rdx]
+        and rax, 255
+        mov r10, [r11+rdx]
+        and r10, 255
+        cmp rax, r10
+        jne .pf_loop
+        add rdx, 1
+        jmp .pf_cmp
+.pf_found:
+        mov r11, r9
+        shl r11, 5
+        add r11, r14
+        add r11, 0x1C0000
+        ret
+.pf_none:
+        mov r11, 0
+        ret
+.proc_add:
+        mov r9, [r14+0x1F0040]
+        mov r11, r9
+        shl r11, 5
+        add r11, r14
+        add r11, 0x1C0000
+        mov [r11], r8
+        mov [r11+8], rcx
+        mov rax, 0
+        mov [r11+16], rax
+        mov rax, -1
+        mov [r11+24], rax
+        add r9, 1
+        mov [r14+0x1F0040], r9
+        sub r9, 1
+        ret
 .block:
         cmp rsi, r13
         jae .blk_eof
@@ -252,6 +470,15 @@ proc start
         call .eol
         jmp .block
 .blk_name:
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
+        jne .blk_name2
+        mov rsi, r8
+        call .expr
+        call .eol
+        jmp .block
+.blk_name2:
         call .sksp
         mov rax, [rsi]
         and rax, 255
@@ -352,8 +579,17 @@ proc start
         mov rdx, 0
         call .e_movimm
 .ret_emit:
+        mov rax, [r14+0x1F0028]
+        cmp rax, 0
+        je .ret_leave
         mov rdx, seq_ret
         mov rcx, 10
+        call .ebytes
+        call .eol
+        ret
+.ret_leave:
+        mov rdx, seq_leave
+        mov rcx, 2
         call .ebytes
         call .eol
         ret
@@ -620,6 +856,10 @@ proc start
         call .iskw
         cmp rax, 1
         je .pr_syscall
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
+        je .pr_call
         call .lookup_name
         mov rdx, [r11+24]
         cmp rdx, 0
@@ -672,6 +912,77 @@ proc start
         mov rdx, [r11+24]
         sub rdx, 1
         call .e_movimm
+        ret
+.pr_call:
+        call .proc_find
+        cmp r11, 0
+        jne .pc_have
+        call .proc_add
+.pc_have:
+        push r9
+        add rsi, 1
+        mov r10, 0
+.pc_arg:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 41
+        je .pc_end
+        cmp r10, 6
+        jae .err
+        push r10
+        call .expr
+        pop r10
+        mov rax, 80
+        call .emit
+        add r10, 1
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 41
+        je .pc_end
+        cmp rax, 44
+        jne .err
+        add rsi, 1
+        jmp .pc_arg
+.pc_end:
+        add rsi, 1
+        push r10
+.pc_pop:
+        cmp r10, 0
+        je .pc_call
+        sub r10, 1
+        mov rdx, argpop
+        add rdx, r10
+        add rdx, r10
+        mov rax, [rdx]
+        and rax, 255
+        cmp rax, 65
+        jne .pc_pop1
+        call .emit
+        mov rax, [rdx+1]
+        and rax, 255
+.pc_pop1:
+        call .emit
+        jmp .pc_pop
+.pc_call:
+        mov rax, 232
+        call .emit
+        mov rax, [r14+0x1F0048]
+        mov r11, rax
+        lea r11, [r11+r11*2]
+        shl r11, 3
+        add r11, r14
+        add r11, 0x1B0000
+        add rax, 1
+        mov [r14+0x1F0048], rax
+        mov [r11], rdi
+        pop rax
+        mov [r11+16], rax
+        pop rax
+        mov [r11+8], rax
+        mov rdx, 0
+        call .eimm
         ret
 .pr_syscall:
         mov rax, 46
@@ -1054,6 +1365,33 @@ proc start
         mov rax, [r11+16]
         ret
 .finalize:
+        mov rax, [r14+0x1F0038]
+        cmp rax, 1
+        jne .err
+        mov r9, 0
+.fx_loop:
+        cmp r9, [r14+0x1F0048]
+        jae .fx_done
+        mov r11, r9
+        lea r11, [r11+r11*2]
+        shl r11, 3
+        add r11, r14
+        add r11, 0x1B0000
+        mov r10, [r11+8]
+        shl r10, 5
+        add r10, r14
+        add r10, 0x1C0000
+        mov rax, [r10+16]
+        cmp rax, 0
+        je .err
+        mov rdx, [r10+24]
+        cmp rdx, [r11+16]
+        jne .err
+        mov rdx, [r11]
+        call .patch_to
+        add r9, 1
+        jmp .fx_loop
+.fx_done:
         mov r8, rdi
         sub r8, r12
         sub r8, 120
@@ -1086,6 +1424,9 @@ proc start
         mov [r12+104], rax
         mov rdx, r9
         add rdx, 0x400078
+        add rdx, [r14+0x1F0030]
+        sub rdx, r12
+        sub rdx, 120
         mov [r12+24], rdx
         mov rdx, rax
         mov rdi, 1
@@ -1258,6 +1599,15 @@ rodata seq_prologue
 end
 rodata seq_exit0
     byte 0xbf, 0x00, 0x00, 0x00, 0x00, 0xb8, 0x3c, 0x00, 0x00, 0x00, 0x0f, 0x05
+end
+rodata seq_leave
+    byte 0xc9, 0xc3
+end
+rodata spilltab
+    byte 0x48, 0x89, 0xbd, 0x48, 0x89, 0xb5, 0x48, 0x89, 0x95, 0x48, 0x89, 0x8d, 0x4c, 0x89, 0x85, 0x4c, 0x89, 0x8d
+end
+rodata argpop
+    byte 0x5f, 0x00, 0x5e, 0x00, 0x5a, 0x00, 0x59, 0x00, 0x41, 0x58, 0x41, 0x59
 end
 rodata seq_ret
     byte 0x48, 0x89, 0xc7, 0xb8, 0x3c, 0x00, 0x00, 0x00, 0x0f, 0x05

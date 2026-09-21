@@ -1,0 +1,11 @@
+module fact
+proc fact(n: u64) -> u64
+    if n <= 1
+        ret 1
+    end
+    ret n * fact(n - 1)
+end
+proc start
+    entry
+    ret fact(5)
+end
