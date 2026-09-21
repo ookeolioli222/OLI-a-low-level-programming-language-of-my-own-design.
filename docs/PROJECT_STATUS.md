@@ -23,9 +23,10 @@ is complete. The working directory has no `.git` metadata.
 - `genesis/3-oli1/` (the oli-core compiler `oli1`, written in `machine x64`)
   exists and passes layer 3 of `genesis/test.sh` for steps 0–6d: locals,
   expressions, strings, control flow, syscalls, procedures, zones, views, raw
-  memory, layouts, refs and fallible results. `compiler/`, the OIR
-  implementation, full native backend, standard-library implementation and
-  kernel do not yet exist.
+  memory, layouts, refs, fallible results and module constants. `compiler/`
+  has begun (design 0022): the V0 lexer in oli-core, built by `oli1`, passes
+  the fixture corpus at layer 4. The parser, semantic analysis, OIR, native
+  backend, standard-library implementation and kernel do not yet exist.
 - README and ROADMAP originally disagreed with each other and with G2's code.
 
 ## Completion gates

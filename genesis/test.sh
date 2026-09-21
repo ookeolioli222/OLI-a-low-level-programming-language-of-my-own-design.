@@ -915,3 +915,36 @@ end'; do
 done
 echo "ok: oli1 compiles module-level constants; rejects duplicates, non-literal values, stores and members"
 echo "genesis: layer 3 (oli-core compiler, steps 0-6d) passed"
+
+# --- layer 4: olic (G4), written in oli-core and compiled by oli1 ---
+cat ../compiler/io.oli ../compiler/lex.oli ../compiler/show_tokens.oli > build/show_tokens.oli
+./build/oli1.bin < build/show_tokens.oli > build/show_tokens || fail "oli1 could not compile compiler/ (show_tokens)"
+chmod +x build/show_tokens
+./build/oli1.bin < build/show_tokens.oli > build/show_tokens.again
+cmp build/show_tokens build/show_tokens.again || fail "show_tokens build is not deterministic"
+./build/show_tokens < ../examples/hello.oli > build/hello.tokens 2> build/tok.err || fail "lexer: hello.oli reported diagnostics"
+cmp build/hello.tokens ../tests/snapshots/hello.tokens || fail "lexer: hello.oli token stream differs from tests/snapshots/hello.tokens"
+echo "ok: olic lexer (oli-core, built by oli1) tokenizes examples/hello.oli byte for byte as the snapshot"
+for f in ../tests/parse/ok/*.oli ../tests/sema/ok/*.oli ../tests/sema/err/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli ../compiler/*.oli 3-oli1/tests/*.oli; do
+    ./build/show_tokens < "$f" > build/tok.out 2> build/tok.err || fail "lexer: diagnostics for $f: $(cat build/tok.err)"
+    tail -n 1 build/tok.out | grep -q ' eof$' || fail "lexer: $f does not end with eof"
+done
+echo "ok: olic lexer accepts every fixture, example, library module and its own source without diagnostics"
+for f in ../tests/parse/err/*.oli; do
+    want=$(grep -- '-- expect: E000' "$f" | sed 's/-- expect: //' | sort)
+    set +e; ./build/show_tokens < "$f" > build/tok.out 2> build/tok.err; st=$?; set -e
+    got=$(awk '/^error\[/ {code=substr($1,7,5)} /^ --> stdin:/ {split($2,a,":"); print code " @ " a[2] ":" a[3]}' build/tok.err | sort)
+    [ "$got" = "$want" ] || fail "lexer: $f expected [$want] got [$got]"
+    if [ -n "$want" ]; then [ "$st" = 1 ] || fail "lexer: $f exit $st"; else [ "$st" = 0 ] || fail "lexer: $f exit $st"; fi
+    tail -n 1 build/tok.out | grep -q ' eof$' || fail "lexer: $f does not end with eof"
+done
+echo "ok: olic lexer reports exactly the E0001-E0006 diagnostics the parse/err fixtures expect, at their positions"
+printf 'a := 0xFFFF800000000000\nb := 18446744073709551615\nc := 18446744073709551616\nd := 64K + 2M + 1G\ne := 0b1010_1010 + 0o17\nf := %s\ng := %s\n' "'a'" "'\\x41'" > build/tok.in
+set +e; ./build/show_tokens < build/tok.in > build/tok.out 2> build/tok.err; st=$?; set -e
+[ "$st" = 1 ] || fail "lexer: literal boundaries exit $st"
+got=$(grep -c 'E0003' build/tok.err)
+[ "$got" = 1 ] || fail "lexer: expected one E0003, got $got"
+got=$(grep ' int \| char ' build/tok.out | awk '{print $3}' | tr '\n' ' ')
+[ "$got" = "18446603336221196288 18446744073709551615 0 65536 2097152 1073741824 170 15 97 65 " ] || fail "lexer: literal values [$got]"
+echo "ok: olic lexer scales K/M/G, reads hex/binary/octal, u64 boundaries, char and escape values"
+echo "genesis: layer 4 (olic lexer) passed"

@@ -26,11 +26,11 @@ layout, not existing code.
 | Module | Stage | Contents | Status |
 |-------|-------|----------|--------|
 | `oli_diag` | all | `Span`, `SourceFile` (line table), `Diagnostic`/`Diagnostics`, the §8 renderer | designed; to be written in Oli-- |
-| `oli_lexer` | 1 | tokens (`Kw`, `Prim`, operators, `Doc`, `Newline`), the lexer | designed; to be written in Oli-- |
+| `oli_lexer` | 1 | tokens (`Kw`, `Prim`, operators, `Doc`, `Newline`), the lexer | **`compiler/lex.oli` (oli-core), built by `oli1`; passes the corpus (layer 4)** |
 | `oli_ast` | 1 | syntax tree types, S-expression printer (`--show-ast`, snapshots) | designed; to be written in Oli-- |
 | `oli_parser` | 1 | recursive-descent parser with recovery (`decl`, `stmt`, `expr`, `types`, `machine`) | designed; to be written in Oli-- |
 | `oli_sema` | 1b | module loader, `hir` (the semantic graph), name/type resolution, layouts, constant evaluation, flow, regions, capabilities, `--show-sema` printer | designed; to be written in Oli-- |
-| `olic` | driver | CLI: `--show-tokens`, `--show-ast`, `--show-sema`, `--check-syntax`, `--check`, `--freestanding`, `--lib` | designed; to be written in Oli-- |
+| `olic` | driver | CLI: `--show-tokens`, `--show-ast`, `--show-sema`, `--check-syntax`, `--check`, `--freestanding`, `--lib` | `--show-tokens` exists as `compiler/show_tokens.oli` (stdin → stdout, one driver per stage until argv access exists); the rest to be written |
 | `lib/` | library | `core.oli` (`TrapKind`, `Site`), `core/mem.oli`, `std/os.oli` — written in Oli-- | V0 subset |
 | `oli_oir` | 2 | OIR, verifier, passes | not started |
 | `oli_x64` | 2 | machine lowering, register allocation, encoder | not started |

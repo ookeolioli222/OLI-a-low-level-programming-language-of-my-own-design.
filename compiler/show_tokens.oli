@@ -1,0 +1,96 @@
+module olic.show_tokens
+-- `olic --show-tokens` of the genesis compiler: reads a source file on stdin,
+-- prints one token per line (`LINE:COL kind text`) on stdout, diagnostics on
+-- stderr; exit status 1 when any diagnostic was reported.
+
+proc kind_name(k: u64) -> view u8
+    if k == TK_EOF
+        ret "eof"
+    end
+    if k == TK_NL
+        ret "nl"
+    end
+    if k == TK_IDENT
+        ret "ident"
+    end
+    if k == TK_INT
+        ret "int"
+    end
+    if k == TK_CHAR
+        ret "char"
+    end
+    if k == TK_STR
+        ret "str"
+    end
+    if k == TK_KW
+        ret "kw"
+    end
+    if k == TK_OP
+        ret "op"
+    end
+    ret "doc"
+end
+
+proc has_text(k: u64) -> word
+    if k == TK_IDENT
+        ret 1
+    end
+    if k == TK_STR
+        ret 1
+    end
+    if k == TK_KW
+        ret 1
+    end
+    if k == TK_OP
+        ret 1
+    end
+    if k == TK_DOC
+        ret 1
+    end
+    ret 0
+end
+
+proc print_tokens(lx: ref Lex)
+    src := lx.src
+    tmp := lx.tmp
+    i := 0
+    while i < lx.ntok
+        t := tok_at(lx, i)
+        k := t.kind
+        put_uint(1, tmp, t.line)
+        put(1, ":")
+        put_uint(1, tmp, t.col)
+        put(1, " ")
+        put(1, kind_name(k))
+        if k == TK_INT
+            put(1, " ")
+            put_uint(1, tmp, t.val)
+        end
+        if k == TK_CHAR
+            put(1, " ")
+            put_uint(1, tmp, t.val)
+        end
+        if has_text(k)
+            put(1, " ")
+            s := t.start
+            put(1, src[s..s + t.len])
+        end
+        put(1, "\n")
+        i <- i + 1
+    end
+end
+
+proc start
+    entry
+    permit os.syscall
+    zone z 16777216
+        src := read_all(z, 1048576)
+        lx := lex_new(z, src, 200000)
+        lex_all(lx)
+        print_tokens(lx)
+        if lx.nerr > 0
+            ret 1
+        end
+        ret 0
+    end
+end

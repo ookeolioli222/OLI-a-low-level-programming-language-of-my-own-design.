@@ -314,5 +314,11 @@ constant is a factor lowered to `mov rax, imm64`; storing into it, `.addr`/
 
 Out-of-scope or malformed input must be rejected without emitting a partial ELF,
 following `asm`'s convention. Since step 3 every rejection exits 2 and writes
-`oli1: error` to stderr; positions and codes arrive with the lexer in later
-steps.
+`oli1: error at line N` to stderr, N being the input line at which the
+rejection was detected (added with G4, when `oli1` started compiling
+multi-module programs); codes arrive with `olic`.
+
+Two limits were raised for G4: the scratch mapping is 4 MiB and the code
+temporary used at finalize has 2 MiB, so a compiled program may hold up to
+384 KiB of code and string data (the output region). `name..` after a name in
+an index (`v[i..]`) is a range, not a member access, since G4.

@@ -25,7 +25,8 @@ fallible results (`T or E`, `fail`, `else` handlers, `case`) —
 `genesis/3-oli1/tests/hello.oli` prints `Hello Oli--`, `fib.oli` computes
 fib(10), `slurp.oli` reads stdin into a zone and upper-cases it in place and
 `propagate.oli` propagates parse failures through two procedures, all from
-oli-core source.**
+oli-core source. G4 has begun: `compiler/lex.oli`, the V0 lexer written in
+oli-core and built by `oli1`, tokenizes every fixture (`docs/design/0022`).**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -35,7 +36,7 @@ oli-core source.**
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
 | G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6d done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`) and module constants; next: `oli1` compiles the first `olic` modules (G4) |
-| G4 | `compiler/`: `olic` in Oli--, fixpoint `stage2 == stage3` | not started |
+| G4 | `compiler/`: `olic` in oli-core (design 0022) — `olic.lex` and the `--show-tokens` driver pass the corpus; parser, sema and back end next; fixpoint `stage2 == stage3` | **in progress** |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |
 | M3 | Freestanding binary with own entry point and own stack | not started |
@@ -103,6 +104,7 @@ Normative V0 specification (`spec/`):
 
 ```
 genesis/             the bootstrap chain: hex0 (bytes) → hex2 → asm → oli1 → olic
+compiler/            olic written in oli-core (G4): io, lexer, --show-tokens driver
 genesis/hexbin.sh    the only non-Oli-- build step: materializes hex0.bin once (POSIX sh)
 genesis/test.sh      verifies every layer (POSIX sh + coreutils)
 lib/                 core and std library modules written in Oli-- (V0 subset)

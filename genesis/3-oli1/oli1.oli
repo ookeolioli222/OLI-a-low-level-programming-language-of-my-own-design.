@@ -46,8 +46,8 @@
 -- slots below it), 4 ref local (1 slot, extra = layout index).
 -- A parameter type is `[rw] view ...` (1), `zone` (2), `[rw] ref Name` (3+i),
 -- anything else an integer; the same words after `->` give the result type.
--- Scratch is a 2 MiB mmap: input [base,+1M), output [base+1M,+1.375M),
--- string pool [base+1.375M,+64K), code temp [base+1.4375M,+64K),
+-- Scratch is a 4 MiB mmap: input [base,+1M), output [base+1M,+1.375M),
+-- string pool [base+1.375M,+64K), code temp [base+2M,+2M),
 -- call fixups [base+1.6875M,+64K), procedure table [base+1.75M,+64K),
 -- break-fixup stack [base+1.8125M,+64K), if-fixup stack [base+1.875M,+64K),
 -- field table [base+1.5625M,+64K), layout table [base+1.625M,+64K),
@@ -87,7 +87,7 @@ proc start
     entry
     machine x64
         mov rdi, 0
-        mov rsi, 0x200000
+        mov rsi, 0x400000
         mov rdx, 3
         mov r10, 0x22
         mov r8, -1
@@ -2140,7 +2140,13 @@ proc start
         mov rax, [rsi]
         and rax, 255
         cmp rax, 46
-        je .pr_member
+        jne .pr_nomember
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 46
+        jne .pr_member
+        mov rax, 46
+.pr_nomember:
         cmp rax, 91
         je .pr_subscript
         cmp rdx, 0
@@ -3303,7 +3309,7 @@ proc start
         mov rsi, r12
         add rsi, 120
         mov rdi, r14
-        add rdi, 0x170000
+        add rdi, 0x200000
         mov rcx, r8
         call .copy8
         mov rsi, r14
@@ -3313,7 +3319,7 @@ proc start
         mov rcx, r9
         call .copy8
         mov rsi, r14
-        add rsi, 0x170000
+        add rsi, 0x200000
         mov rdi, r12
         add rdi, 120
         add rdi, r9
@@ -3432,9 +3438,54 @@ proc start
 .hd_ok:
         ret
 .err:
+        mov rcx, r14
+        mov rdx, 1
+.err_cnt:
+        cmp rcx, rsi
+        jae .err_cnt_done
+        cmp rcx, r13
+        jae .err_cnt_done
+        mov rax, [rcx]
+        and rax, 255
+        cmp rax, 10
+        jne .err_cnt_next
+        add rdx, 1
+.err_cnt_next:
+        add rcx, 1
+        jmp .err_cnt
+.err_cnt_done:
+        mov rax, rdx
+        mov rdi, r12
+        mov r9, 0
+.err_dig:
+        mov rdx, 0
+        mov r8, 10
+        div r8
+        add rdx, 48
+        mov [rdi+r9], rdx
+        add r9, 1
+        cmp rax, 0
+        jne .err_dig
         mov rdi, 2
         mov rsi, errmsg
-        mov rdx, 12
+        mov rdx, 20
+        mov rax, 1
+        syscall
+.err_out:
+        cmp r9, 0
+        je .err_nl
+        sub r9, 1
+        mov rsi, r12
+        add rsi, r9
+        mov rdi, 2
+        mov rdx, 1
+        mov rax, 1
+        syscall
+        jmp .err_out
+.err_nl:
+        mov rdi, 2
+        mov rsi, nlmsg
+        mov rdx, 1
         mov rax, 1
         syscall
         mov rdi, 2
@@ -3443,7 +3494,10 @@ proc start
     end
 end
 rodata errmsg
-    ascii "oli1: error\n"
+    ascii "oli1: error at line "
+end
+rodata nlmsg
+    ascii "\n"
 end
 rodata trapmsg
     ascii "oli: trap\n"
