@@ -4,7 +4,8 @@
 -- control flow is compiled to rel32 branches with forward fixups, procedures
 -- follow the SysV register convention (docs/ABI.md), views are two-word values
 -- (rax = addr, rdx = len), zones are (base, cursor, limit) triples.
---   [module path]  { layout NAME [packed] [align N] NL { f : T [align N] NL } end
+--   [module path]  { NAME := <decimal>            module-level integer constant
+--                  | layout NAME [packed] [align N] NL { f : T [align N] NL } end
 --                  | proc NAME [(p: T, ...)] [-> T [or E]] [entry | calls ... | permit ...]* block end }
 --   -> T or E                  fallible result (design 0007): T an integer or ref, E an
 --                               integer type or none; tag in rax (0 ok, 1 fail), payload in rdx
@@ -67,7 +68,9 @@
 -- signed, type code (0 integer, 1 view).
 -- Symbol entry (48 bytes): name ptr, name len, value (slot index, or string
 -- address), kind, extra (string length; base slot of a hosted zone, -1 for at;
--- layout index of a ref).
+-- layout index of a ref); kind 5 is a module constant (value = the integer),
+-- kept in a separate table (48-byte entries at [base+0x1F1000), count at state
+-- +160) that name lookup searches after the procedure's locals.
 -- asm has no byte store, so emit writes an 8-byte value < 256 and advances one.
 -- Output layout: 120-byte ELF header | string pool | trap stub | code. Strings
 -- have a fixed address (0x400078 + pool offset) the moment they are bound; at
@@ -114,6 +117,7 @@ proc start
         mov [r14+0x1F0070], rax
         mov [r14+0x1F0080], rax
         mov [r14+0x1F0088], rax
+        mov [r14+0x1F00A0], rax
         mov rax, r14
         add rax, 0x1E0000
         mov [r14+0x1F0010], rax
@@ -247,7 +251,7 @@ proc start
         mov r9, 4
         call .iskw
         cmp rax, 1
-        jne .err
+        jne .hdr_const
         call .parse_sig
 .hdr2:
         call .word
@@ -345,6 +349,69 @@ proc start
         mov rdx, [r14+0x1F0018]
         call .put32
         jmp .hdr
+.hdr_const:
+        push r8
+        push rcx
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 58
+        jne .err
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 61
+        jne .err
+        add rsi, 2
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        sub rax, 48
+        cmp rax, 9
+        ja .err
+        call .pint
+        pop rcx
+        pop r8
+        push rdx
+        call .glob_find
+        cmp r11, 0
+        jne .err
+        mov r11, [r14+0x1F00A0]
+        lea r11, [r11+r11*2]
+        shl r11, 4
+        add r11, r14
+        add r11, 0x1F1000
+        mov [r11], r8
+        mov [r11+8], rcx
+        pop rdx
+        mov [r11+16], rdx
+        mov rax, 5
+        mov [r11+24], rax
+        mov rax, 0
+        mov [r11+32], rax
+        mov rax, [r14+0x1F00A0]
+        add rax, 1
+        mov [r14+0x1F00A0], rax
+        call .eol
+        jmp .hdr
+.glob_find:
+        mov r9, [r14+0x1F00A0]
+.gf_loop:
+        cmp r9, 0
+        je .gf_none
+        sub r9, 1
+        mov rdx, r9
+        lea rdx, [rdx+rdx*2]
+        shl rdx, 4
+        add rdx, r14
+        add rdx, 0x1F1000
+        call .name_eq
+        cmp rax, 1
+        jne .gf_loop
+        mov r11, rdx
+        ret
+.gf_none:
+        mov r11, 0
+        ret
 .parse_sig:
         pop rax
         mov [r14+0x1F0078], rax
@@ -2082,6 +2149,8 @@ proc start
         je .pr_intlocal
         cmp rdx, 4
         je .pr_reflocal
+        cmp rdx, 5
+        je .pr_const
         cmp rdx, 1
         je .pr_strval
         mov rdx, [r11+16]
@@ -2092,6 +2161,10 @@ proc start
         call .e_load_rdx
         mov rax, 1
         mov [r14+0x1F0050], rax
+        ret
+.pr_const:
+        mov rdx, [r11+16]
+        call .e_movimm
         ret
 .pr_intlocal:
         mov rdx, [r11+16]
@@ -3190,7 +3263,11 @@ proc start
         mov rax, [r11+16]
         ret
 .ln_none:
-        mov r11, 0
+        call .glob_find
+        cmp r11, 0
+        je .ln_gnone
+        mov rax, [r11+16]
+.ln_gnone:
         ret
 .finalize:
         mov rax, [r14+0x1F0038]

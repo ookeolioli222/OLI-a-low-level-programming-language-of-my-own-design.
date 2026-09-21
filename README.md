@@ -34,7 +34,7 @@ oli-core source.**
 | G0 | `genesis/0-hex0`: hex listing → bytes, self-reproducing | **done** |
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
-| G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6c done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`); next: `oli1` compiles the first `olic` modules (G4) |
+| G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6d done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`) and module constants; next: `oli1` compiles the first `olic` modules (G4) |
 | G4 | `compiler/`: `olic` in Oli--, fixpoint `stage2 == stage3` | not started |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |

@@ -21,7 +21,7 @@ is complete. The working directory has no `.git` metadata.
   suite does not prove these features exist. Until G4, no program in the
   repository can parse high-level Oli--.
 - `genesis/3-oli1/` (the oli-core compiler `oli1`, written in `machine x64`)
-  exists and passes layer 3 of `genesis/test.sh` for steps 0–6c: locals,
+  exists and passes layer 3 of `genesis/test.sh` for steps 0–6d: locals,
   expressions, strings, control flow, syscalls, procedures, zones, views, raw
   memory, layouts, refs and fallible results. `compiler/`, the OIR
   implementation, full native backend, standard-library implementation and

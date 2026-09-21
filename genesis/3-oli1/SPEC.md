@@ -39,6 +39,7 @@ observable result. Nothing is marked done without such a test.
 | 5 | several `proc`s per file, parameters (`p: T`, up to six), `-> T`, calls as statements and factors, forward calls, recursion | SysV registers, `call rel32` with fixups, `leave; ret` | **done** |
 | 6a | `zone z SIZE [at ADDR] … end`, `z.bytes(n)`, views as two-word values (literals, params, results, locals), `v[i]`, `v[i] <- x`, `v[a..b]`, `v[..b]`, `v[a..]`, `.addr`/`.len`, raw `[a]`/`[a] <- x`, traps | mmap/munmap, bump allocation, `cmp`/`jcc` to a shared trap stub | **done** |
 | 6b | `layout Name [packed] [align N] … end` with `f : T [align N]`, `Name.size`/`.align`/`.at(v)`, `z.make(Name)`, `ref Name` locals/params/results, `r.f` loads (zero/sign-extended) and `r.f <- x` stores, view fields | field offsets, sized moves, `cmp`/`test` + trap | **done** |
+| 6d | `NAME := <decimal>` at module level: integer constants, visible in every procedure after the line; a local of the same name shadows one | `mov rax, imm64` | **done** |
 | 6c | `-> T or E` results, `fail [e]`, `e else fail` / `e else ret [v]` / `e else v`, `case e … when ok [x] … when fail [e] … end` (second arm may be `else`) | tag in `rax`, payload in `rdx`; `test`/`jcc` per resolution | **done** |
 
 Steps 2–6 grow oli-core until it can express `olic` (layer 4), at which point the
@@ -299,6 +300,15 @@ or passed; `E` is untyped (any integer type name is one word); `fail` in an
 `else` handler propagates only from a call (there is no other fallible
 expression); `case` on integers, `choice` types and payload field patterns are
 not in oli-core.
+
+## Step 6d (implemented)
+
+`NAME := <decimal>` at module level defines an integer constant (V0 §7 rule
+3), kept in a table of its own that name lookup consults after the current
+procedure's locals, so a parameter or local of the same name shadows it. A
+constant is a factor lowered to `mov rax, imm64`; storing into it, `.addr`/
+`.len`/`[i]` on it, a non-literal value and a duplicate name reject. Proven by
+`consts.oli` (42) and four rejection programs in the harness.
 
 ## Diagnostics
 

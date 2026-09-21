@@ -881,4 +881,37 @@ end'; do
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 rejects unresolved/discarded fallible values, fail outside fallible procedures, E mismatches, bad case arms"
-echo "genesis: layer 3 (oli-core compiler, steps 0-6c) passed"
+# step 6d: module-level integer constants
+./build/oli1.bin < 3-oli1/tests/consts.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf; st=$?; set -e
+[ "$st" = 42 ] || fail "oli1: consts.oli expected exit 42 got $st"
+for bad in 'A := 1
+A := 2
+proc start
+ entry
+ ret 1
+end' 'A := x
+proc start
+ entry
+ ret 1
+end' 'A := 1
+proc start
+ entry
+ A <- 2
+ ret 1
+end' 'A := 1
+proc start
+ entry
+ ret A.len
+end'; do
+    set +e
+    printf '%s\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed program exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed program produced output"
+    grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
+done
+echo "ok: oli1 compiles module-level constants; rejects duplicates, non-literal values, stores and members"
+echo "genesis: layer 3 (oli-core compiler, steps 0-6d) passed"

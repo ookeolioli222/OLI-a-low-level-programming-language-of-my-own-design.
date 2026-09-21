@@ -1,6 +1,6 @@
 # 0020 — Genesis layer 3: the oli-core compiler (oli1)
 
-Status: oli-core subset complete. Steps 0–6c implemented and tested 2026-09-21.
+Status: oli-core subset complete. Steps 0–6d implemented and tested 2026-09-21.
 
 ## Problem
 Layer 2 (`asm`) turns the `machine x64` sub-language into ELF. To reach a
