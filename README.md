@@ -21,7 +21,7 @@ memory operands, branches and read-only data into runnable Linux ELF files.**
 | Phase | Content | Status |
 |-------|---------|--------|
 | 0 | Language design: syntax experiments, memory model, machine model, OIR, ABI | done |
-| 1, 1b | Reference front end in Rust (lexer, parser, semantics) — now an oracle under `reference/`, not part of the toolchain | done |
+| 1, 1b | Front-end design validated on the fixture corpus (`tests/`, `tests/snapshots`); the temporary foreign oracle was removed on 2026-09-21 — the corpus is now the target for the Oli-- front end | done |
 | G0 | `genesis/0-hex0`: hex listing → bytes, self-reproducing | **done** |
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
@@ -36,7 +36,6 @@ memory operands, branches and read-only data into runnable Linux ELF files.**
 
 ```bash
 sh genesis/test.sh                      # Linux x86-64 (WSL is fine): builds and verifies the genesis chain
-cd reference && cargo test --workspace  # the Rust oracle (optional, never part of the toolchain)
 ```
 
 After the genesis tests, run this from the repository root in Linux/WSL:
@@ -97,13 +96,12 @@ Normative V0 specification (`spec/`):
 genesis/             the bootstrap chain: hex0 (bytes) → hex2 → asm → oli1 → olic
 genesis/hexbin.sh    the only non-Oli-- build step: materializes hex0.bin once (POSIX sh)
 genesis/test.sh      verifies every layer (POSIX sh + coreutils)
-reference/           Rust front end from Phases 1–1b: an oracle for fixtures, not a toolchain
 lib/                 core and std library modules written in Oli-- (V0 subset)
 examples/            hello.oli, packet_demo.oli (reference programs)
 tests/parse/ok       programs that must parse cleanly
 tests/parse/err      programs with `-- expect: CODE @ LINE:COL` lines
 tests/sema/ok,err    the same for semantic analysis (with the real lib/)
-tests/snapshots      expected --show-ast and --show-sema output
+tests/snapshots      expected --show-ast and --show-sema output (target for the Oli-- front end)
 docs/, spec/         design documents and the normative V0 specification
 ```
 

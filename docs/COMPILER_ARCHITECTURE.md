@@ -2,8 +2,12 @@
 
 **Autonomy (design 0017).** The Oli-- toolchain is bootstrapped from
 hand-written machine code (`genesis/`) and written in Oli--; no Rust, C or
-C++ is part of it. The Rust workspace under `reference/` described below is
-the implementation of Phases 1–1b, kept only as an *oracle* for the fixtures.
+C++ is part of it. Phases 1–1b were validated with a temporary foreign
+front end that was **removed on 2026-09-21** (the user's decision; 0017
+amendment). What remains of it is its output — the fixture corpus in `tests/`
+and the snapshots — and the architecture below, which the Oli-- front end
+(G4) must implement. Module and file names below are the *planned* Oli--
+layout, not existing code.
 
 ## The genesis chain (`genesis/`)
 
@@ -17,21 +21,16 @@ the implementation of Phases 1–1b, kept only as an *oracle* for the fixtures.
 
 `sh genesis/test.sh` rebuilds and verifies every layer on Linux x86-64.
 
-## The reference (`reference/`, Rust, oracle only)
+## Modules of `olic` (G4, written in Oli--)
 
-The reference has **no external dependencies**: it builds with a bare stable
-toolchain and nothing is downloaded.
-
-## Crates
-
-| Crate | Stage | Contents | Status |
+| Module | Stage | Contents | Status |
 |-------|-------|----------|--------|
-| `oli_diag` | all | `Span`, `SourceFile` (line table), `Diagnostic`/`Diagnostics`, the §8 renderer | done |
-| `oli_lexer` | 1 | tokens (`Kw`, `Prim`, operators, `Doc`, `Newline`), the lexer | done |
-| `oli_ast` | 1 | syntax tree types, S-expression printer (`--show-ast`, snapshots) | done |
-| `oli_parser` | 1 | recursive-descent parser with recovery (`decl`, `stmt`, `expr`, `types`, `machine`) | done |
-| `oli_sema` | 1b | module loader, `hir` (the semantic graph), name/type resolution, layouts, constant evaluation, flow, regions, capabilities, `--show-sema` printer | done |
-| `olic` | driver | CLI: `--show-tokens`, `--show-ast`, `--show-sema`, `--check-syntax`, `--check`, `--freestanding`, `--lib`; integration tests | front end + semantics |
+| `oli_diag` | all | `Span`, `SourceFile` (line table), `Diagnostic`/`Diagnostics`, the §8 renderer | designed; to be written in Oli-- |
+| `oli_lexer` | 1 | tokens (`Kw`, `Prim`, operators, `Doc`, `Newline`), the lexer | designed; to be written in Oli-- |
+| `oli_ast` | 1 | syntax tree types, S-expression printer (`--show-ast`, snapshots) | designed; to be written in Oli-- |
+| `oli_parser` | 1 | recursive-descent parser with recovery (`decl`, `stmt`, `expr`, `types`, `machine`) | designed; to be written in Oli-- |
+| `oli_sema` | 1b | module loader, `hir` (the semantic graph), name/type resolution, layouts, constant evaluation, flow, regions, capabilities, `--show-sema` printer | designed; to be written in Oli-- |
+| `olic` | driver | CLI: `--show-tokens`, `--show-ast`, `--show-sema`, `--check-syntax`, `--check`, `--freestanding`, `--lib` | designed; to be written in Oli-- |
 | `lib/` | library | `core.oli` (`TrapKind`, `Site`), `core/mem.oli`, `std/os.oli` — written in Oli-- | V0 subset |
 | `oli_oir` | 2 | OIR, verifier, passes | not started |
 | `oli_x64` | 2 | machine lowering, register allocation, encoder | not started |
@@ -39,14 +38,13 @@ toolchain and nothing is downloaded.
 
 Pipeline and observability flags: `OIR_SPEC.md` §1.
 
-## Policies enforced by the build
+## Policies
 
-- `unsafe_code = "forbid"` in every crate.
-- `clippy::unwrap_used`, `expect_used`, `panic`, `indexing_slicing`, `todo`,
-  `unimplemented` are **denied** in compiler code: untrusted source text must
-  never crash the compiler. Test code opts out per file.
-- CI (`.github/workflows/ci.yml`): `cargo fmt --check`, `cargo clippy -D warnings`,
-  `cargo test` on Linux, Windows and macOS.
+- The compiler never traps on user input: every failure path is a diagnostic
+  (`spec/OLI_SYNTAX_V0.md` §8) or a defined exit status; bounds and overflow
+  checks stay enabled in the compiler itself (design 0006).
+- No `machine` blocks outside `genesis/` and `arch.x64.*`.
+- CI (`.github/workflows/ci.yml`): `sh genesis/test.sh` on Linux x86-64.
 
 ## Semantic analysis (Phase 1b)
 
@@ -132,19 +130,21 @@ Semantic codes (`E01xx`–`E06xx`, `W0002`, `W0003`, `W0100`) are listed in
 
 | Kind | Where | What |
 |------|-------|------|
-| unit | `crates/oli_diag`, `oli_lexer`, `oli_parser` (`src/tests.rs`) | positions, rendering, every token class, precedence, disambiguation rules, recovery, nesting limit, truncation and garbage inputs |
+| unit | `olic` self-tests (planned) | positions, rendering, every token class, precedence, disambiguation rules, recovery, nesting limit, truncation and garbage inputs |
 | fixtures | `tests/parse/ok/*.oli`, `examples/*.oli` | must parse with zero diagnostics |
 | negative fixtures | `tests/parse/err/*.oli` | diagnostics must equal the file's `-- expect: CODE @ LINE:COL` lines, exactly |
-| snapshots | `tests/snapshots/*.ast` | `--show-ast` of the reference programs; regenerate with `UPDATE_SNAPSHOTS=1 cargo test` |
-| semantic unit | `crates/oli_sema/src/tests.rs` | every diagnostic code, layout sizes, escape analysis (accept and reject), flow, freestanding rules |
+| snapshots | `tests/snapshots/*.ast` | `--show-ast` of the reference programs; frozen (see CONTRIBUTING) |
+| semantic unit | `olic` self-tests (planned) | every diagnostic code, layout sizes, escape analysis (accept and reject), flow, freestanding rules |
 | semantic fixtures | `tests/sema/ok/*.oli`, `tests/sema/err/*.oli` | analyzed with the real `lib/`; `-- target: freestanding` on the first line selects the target |
 | semantic snapshots | `tests/snapshots/*.sema` | `--show-sema` of `hello`, `packet_demo`, `freestanding` |
-| CLI | `crates/olic/tests/cli.rs` | flags, exit codes, the exact §8 format, non-UTF-8 input, `--check`, `--show-sema`, `E0900` honesty |
+| CLI | `olic` self-tests (planned) | flags, exit codes, the exact §8 format, non-UTF-8 input, `--check`, `--show-sema`, `E0900` honesty |
 
-Run everything with `cargo test --workspace`.
+Today only the genesis chain is executable: `sh genesis/test.sh`. The rows
+above are the acceptance suite the Oli-- `olic` must pass.
 
-## Performance (Phases 1–1b)
+## Performance baseline (Phases 1–1b, measured on the removed foreign front end)
 
+Kept as the number the Oli-- front end must at least match.
 Synthetic 19.4k-line / 553 KiB file (`packet_demo` ×200), release build, desktop x86-64,
 process start (~68 ms on Windows) subtracted:
 

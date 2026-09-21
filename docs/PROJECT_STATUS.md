@@ -1,6 +1,6 @@
 # Oli-- completion plan and verified baseline
 
-Reviewed 2026-09-20. The requested scope is the entire roadmap, in order.
+Reviewed 2026-09-20; foreign oracle removed 2026-09-21. The requested scope is the entire roadmap, in order.
 This document records actual implementation, not an assertion that the project
 is complete. The working directory has no `.git` metadata.
 
@@ -13,10 +13,13 @@ is complete. The working directory has no `.git` metadata.
 - The original G2 implementation accepted only `bytes`, silently ignored other
   lines, and did not validate structure or entry selection. Its encoding-table
   CPU fixtures validated manually written bytes, not the assembler's encoder.
-- The Rust reference is a front end, not a compiler. All 77 tests passed in the
-  baseline run. Fixture groups can contain multiple source files. Fixtures
-  marked `-- reference: skip` are excluded by its harness; passing the suite
-  does not prove these features exist.
+- The temporary foreign front end (Phases 1–1b) was removed on 2026-09-21 at
+  the user's direction. Its last run passed all 77 fixture tests; that corpus
+  (`tests/`, `tests/snapshots`) is now the acceptance suite for the Oli--
+  front end. Fixture groups can contain multiple source files. Fixtures
+  marked `-- reference: skip` were excluded by the old harness; passing the
+  suite does not prove these features exist. Until G4, no program in the
+  repository can parse high-level Oli--.
 - `compiler/`, `genesis/3-oli1/`, the OIR implementation, full native backend,
   standard-library implementation and kernel do not yet exist.
 - README and ROADMAP originally disagreed with each other and with G2's code.
@@ -30,7 +33,7 @@ is complete. The working directory has no `.git` metadata.
    its compiler in the machine sub-language; verify examples and diagnostics.
 3. **G4 self-hosting V0:** port lexer/parser/semantics into Oli--; implement OIR,
    x64 lowering and ELF; pass the shared fixtures; establish stage2 == stage3.
-   Remove the Rust oracle only after its replacement passes the required tests.
+   The fixture corpus is the required test set; there is no other oracle.
 4. **M1-M2:** run the high-level hello and packet examples; exercise arithmetic,
    control flow, procedures, layouts, views and zones with native runtime tests.
 5. **M3-M4:** freestanding output, own entry/stack, bootable minimal kernel;

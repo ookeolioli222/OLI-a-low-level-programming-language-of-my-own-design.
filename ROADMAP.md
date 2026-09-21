@@ -8,12 +8,12 @@ next. Nothing depends on another language (design 0017).
 | Stage | Content | Status |
 |-------|---------|--------|
 | Phase 0 | Language design (syntax, memory, machine, OIR, ABI) | done |
-| Phase 1 / 1b | Reference front end in Rust (lexer, parser, semantics) — oracle only, under `reference/` | done |
+| Phase 1 / 1b | Front-end design and the fixture corpus (`tests/`, `tests/snapshots`); the temporary foreign oracle was removed 2026-09-21 | done |
 | Genesis G0 | `hex0`: hand-written bytes, self-reproducing | done |
 | Genesis G1 | `hex2`: labels and displacements | done |
 | Genesis G2 | `asm`: r32/r64 encoder, memory operands (ModRM/SIB/REX), two-pass symbols, rel32, read-only data, executable Hello Oli--; out-of-scope operands rejected | **suite green (`genesis/test.sh`); multi-segment ELF + remaining forms pending** |
 | Genesis G3 | `oli1`: oli-core compiler in `machine x64` (asm); step 0 compiles `ret <int>` -> native ELF | **in progress; step 0 green (`genesis/test.sh` layer 3)** |
-| Genesis G4 | `olic` in Oli--; fixpoint `stage2 == stage3`; delete Rust oracle | planned |
+| Genesis G4 | `olic` in Oli--; fixpoint `stage2 == stage3`; passes every fixture in `tests/` | planned |
 | M1 | `olic hello.oli && ./hello` (raw syscalls, no libc) | planned |
 | M2 | variables, arithmetic, control flow, procedures, layouts, views, zones | planned |
 | M3 | freestanding program (own entry, own stack) | planned |

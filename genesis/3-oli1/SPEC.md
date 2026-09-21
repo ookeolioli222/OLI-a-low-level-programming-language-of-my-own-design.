@@ -41,7 +41,7 @@ observable result. Nothing is marked done without such a test.
 
 Steps 2–6 grow oli-core until it can express `olic` (layer 4), at which point the
 compiler is ported into oli-core, `oli1` compiles it, and the fixpoint
-`stage2 == stage3` establishes self-hosting; only then is the Rust oracle removed.
+`stage2 == stage3` establishes self-hosting and `olic` passes every fixture in `tests/`.
 
 ## Step 0 (implemented)
 

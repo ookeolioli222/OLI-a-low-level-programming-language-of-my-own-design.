@@ -34,10 +34,10 @@ Rules:
 3. From layer 2 on, every source file is Oli-- syntax: the language
    bootstraps from its own `machine` sub-language, which is why `machine`
    blocks remain in the language (0015 keeps them as the escape hatch).
-4. The Rust implementation of Phases 1–1b moves to `reference/` as an
-   *oracle*: it produced the snapshots and expected diagnostics, and the
-   Oli-- compiler is compared against it until it passes every fixture. It is
-   never built into the toolchain and is deleted afterwards.
+4. The foreign implementation of Phases 1–1b produced the snapshots and
+   expected diagnostics in `tests/`. It was kept briefly as an *oracle*
+   and removed on 2026-09-21 (see the amendment below); the fixture corpus
+   is the only oracle the Oli-- compiler is compared against.
 5. Linux x86-64 first (the seed is an ELF that uses `read`/`write`/`exit`);
    the Windows PE target is added by the Oli-- compiler after the fixpoint.
 
@@ -67,3 +67,11 @@ No foreign compiler can inject behaviour into the toolchain; the seed is
   own design; the `machine` sub-language of Oli-- already plays that role.
 - Checking in later-stage binaries: allowed only for the seed; every other
   binary must be rebuilt from text by the chain.
+
+## Amendment 2026-09-21 — oracle removed early
+The user directed that no foreign-language code remain in the repository at
+all, even as a non-toolchain oracle. `reference/` and its CI job were deleted
+before G4. Consequence: until the Oli-- front end exists, the fixtures in
+`tests/` and the snapshots cannot be executed by anything in the repository;
+they are frozen and serve as the acceptance suite for G4. No design decision
+of this record changes.
