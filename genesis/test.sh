@@ -294,4 +294,140 @@ end'; do
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 rejects undefined/duplicate procedures, arity mismatches, missing or multiple entry"
-echo "genesis: layer 3 (oli-core compiler, steps 0-5) passed"
+# step 6a: zones, views, raw memory, traps
+for pair in "view_param 23" "raw 68" "zone_scope 6"; do
+    set -- $pair
+    ./build/oli1.bin < "3-oli1/tests/$1.oli" > build/o3.elf
+    chmod +x build/o3.elf
+    set +e; timeout 10 ./build/o3.elf; st=$?; set -e
+    [ "$st" = "$2" ] || fail "oli1: $1.oli expected exit $2 got $st"
+done
+./build/oli1.bin < 3-oli1/tests/zone_bytes.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 116 ] || fail "oli1: zone_bytes.oli exit $st"
+printf 'Hi\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: zone_bytes.oli wrote wrong bytes"
+./build/oli1.bin < 3-oli1/tests/subview.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 12 ] || fail "oli1: subview.oli exit $st"
+printf 'OliHelloello\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: subview.oli wrote wrong bytes"
+./build/oli1.bin < 3-oli1/tests/slurp.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; printf 'hello, zone\n' | ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 12 ] || fail "oli1: slurp.oli exit $st"
+printf 'HELLO, ZONE\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: slurp.oli did not upper-case its input in place"
+echo "ok: oli1 compiles zones (mmap/munmap), z.bytes, views, subviews, byte and raw word access"
+for trap in ' s := "abc"
+ ret s[3]' ' s := "abc"
+ w := s[2..1]
+ ret w.len' ' s := "abc"
+ w := s[1..4]
+ ret w.len' ' zone z 4096
+ b := z.bytes(5000)
+ ret 1
+ end' ' zone z 4096
+ b := z.bytes(4000)
+ c := z.bytes(100)
+ ret 1
+ end' ' zone z 4096
+ b := z.bytes(10)
+ i := 10
+ b[i] <- 1
+ ret 1
+ end'; do
+    printf 'proc start\n entry\n%s\nend\n' "$trap" | ./build/oli1.bin > build/t.elf
+    chmod +x build/t.elf
+    set +e; ./build/t.elf > build/t.out 2> build/t.err; st=$?; set -e
+    [ "$st" = 3 ] || fail "oli1: bounds/zone violation exited $st instead of trapping"
+    [ "$(wc -c < build/t.out)" -eq 0 ] || fail "oli1: trapping program wrote to stdout"
+    grep -q 'oli: trap' build/t.err || fail "oli1: trap gave no diagnostic"
+done
+echo "ok: bounds, subview and zone-exhaustion violations trap with exit 3"
+for bad in 'proc start
+ entry
+ s := "x"
+ s[0] <- 1
+end' 'proc start
+ entry
+ x := 1
+ ret x + "a"
+end' 'proc start
+ entry
+ v := "a"
+ v <- 1
+end' 'proc f(v: view u8)
+ ret 1
+end
+proc start
+ entry
+ ret f(1)
+end' 'proc f(x: u64)
+ ret 1
+end
+proc start
+ entry
+ ret f("a")
+end' 'proc f() -> view u8
+ ret 1
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> u64
+ ret "a"
+end
+proc start
+ entry
+ ret 1
+end' 'proc f()
+ zone z 4096
+ ret 1
+ end
+end
+proc start
+ entry
+ ret f()
+end' 'proc start
+ entry
+ while 1
+ zone z 4096
+ break
+ end
+ end
+end' 'proc start
+ entry
+ x := 1
+ ret x.bytes(1)
+end' 'proc f(a: view u8, b: view u8, c: view u8, d: view u8)
+ ret 1
+end
+proc start
+ entry
+ ret 1
+end' 'proc start
+ entry
+ x := 1
+ ret x[0]
+end' 'proc start
+ entry
+ ret "a" == "a"
+end' 'proc start
+ entry
+ zone z
+ ret 1
+ end
+end'; do
+    set +e
+    printf '%s\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed program exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed program produced output"
+    grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
+done
+echo "ok: oli1 rejects type mismatches, stores into strings, ret/break across zones, oversize signatures"
+echo "genesis: layer 3 (oli-core compiler, steps 0-6a) passed"

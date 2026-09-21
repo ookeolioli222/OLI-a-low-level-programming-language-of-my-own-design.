@@ -37,7 +37,9 @@ observable result. Nothing is marked done without such a test.
 | 3 | string literals with every §2.4 escape; `name.addr`/`name.len` as factors; hello | string pool before code, fixed addresses | **done** |
 | 4 | run-time locals (frame slots), `<-` stores, `/ %`, unary `-`, comparisons, `if/elif/else`, `while`, `break`, `continue`, `os.syscall` as a value | frame + rax/stack codegen, rel32 branches with fixups | **done** |
 | 5 | several `proc`s per file, parameters (`p: T`, up to six), `-> T`, calls as statements and factors, forward calls, recursion | SysV registers, `call rel32` with fixups, `leave; ret` | **done** |
-| 6 | views, `zone`, layouts, `T or E` — enough for a compiler | frames + checks | next |
+| 6a | `zone z SIZE [at ADDR] … end`, `z.bytes(n)`, views as two-word values (literals, params, results, locals), `v[i]`, `v[i] <- x`, `v[a..b]`, `v[..b]`, `v[a..]`, `.addr`/`.len`, raw `[a]`/`[a] <- x`, traps | mmap/munmap, bump allocation, `cmp`/`jcc` to a shared trap stub | **done** |
+| 6b | layouts (`layout … end`, `Name.size`, `Name.at(v)`, `r.f` loads/stores) | field offsets | next |
+| 6c | `T or E`, `case`, `fail` | tagged two-word values | planned |
 
 Steps 2–6 grow oli-core until it can express `olic` (layer 4), at which point the
 compiler is ported into oli-core, `oli1` compiles it, and the fixpoint
@@ -131,7 +133,9 @@ seven syscall arguments all reject with exit 2 and `oli1: error`.
 Known deviations from V0, to be closed by G4: names are one flat scope per
 procedure (a binding inside a block stays visible after it; rebinding a name
 shadows it instead of being an error); integers are untyped 64-bit; there is
-no `and`/`or`/`not`, no `loop`, no shifts/bitwise operators yet.
+no `and`/`or`/`not`, no `loop`, no shifts/bitwise operators yet; `rw` is not
+distinguished from read-only views (only static strings are read-only);
+`.addr`/`.len`/`[i]` apply to names, not to arbitrary view expressions.
 
 Proven by `while_sum.oli` (55), `break_continue.oli` (7), `ops.oli` (26:
 precedence, parentheses, `/`, `%`, unary minus, all six comparisons),
@@ -173,6 +177,44 @@ registers, 91), `put.oli` (a `write_all` procedure with a loop and a result,
 byte-exact stdout), `noret.oli` (procedure without `ret`, call as statement,
 42) and eight rejection programs in the harness. Every earlier fixture passes
 unchanged.
+
+## Step 6a (implemented)
+
+Two compile-time types: integer word and view. A view is two words — `rax` =
+address, `rdx` = length — exactly the ABI classification of `view T`
+(`docs/ABI.md` §2), so a view local takes two frame slots, a view parameter two
+argument registers, and a `-> view u8` procedure returns in `rax:rdx`. The type
+of the last expression is tracked in compiler state and checked wherever an
+integer is required (arithmetic, comparisons, conditions, indices, syscall
+arguments, exit codes) and where a store, return or argument must match.
+
+Memory constructs, all following `spec/OLI_MEMORY_V0.md` §3–4 in the hosted
+subset: `zone z SIZE` rounds SIZE up to 4096, `mmap`s it and stores the
+`(base, cursor, limit)` triple in the frame; the handle `z` is the address of
+the triple (ABI §2), so it can be passed to a `z: zone` parameter. `z.bytes(n)`
+bump-allocates 16-byte-aligned zero-filled memory and traps when the cursor
+would pass the limit; `end` releases the zone with `munmap` (`at ADDR` zones
+release nothing). `ret` inside a zone of a non-entry procedure and `break`/
+`continue` that would leave a zone are rejected — the release on every exit
+edge is deferred to G4. `v[i]` and `v[i] <- x` are bounds-checked byte
+accesses; `v[a..b]`, `v[..b]`, `v[a..]` are bounds-checked subviews; `[a]` and
+`[a] <- x` are raw word accesses (the `memory.raw` permit is not yet enforced).
+String literals are views wherever an expression is allowed. Every trap goes
+through one 36-byte stub placed at the start of the code that writes
+`oli: trap` and exits 3.
+
+Pass 1 now reads every `proc` header into the procedure table before any code
+is generated, so calls are checked for parameter count, view/integer type of
+every argument and word count where they occur, and a call's result type is
+known even for a procedure declared later.
+
+Proven by `zone_bytes.oli` (`Hi`, 116), `view_param.oli` (byte counting over
+string-literal arguments, 23), `subview.oli` (`OliHelloello`, 12), `raw.oli`
+(word store/load through a zone buffer, 68), `slurp.oli` (a zone handle passed
+to a procedure that returns a view of stdin, upper-cased in place by another
+procedure, `HELLO, ZONE`), `zone_scope.oli` (a zone created and released on
+every loop iteration, 6), six trapping programs and fourteen rejection
+programs in the harness. Every earlier fixture passes unchanged.
 
 ## Diagnostics
 

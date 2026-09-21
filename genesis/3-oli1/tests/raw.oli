@@ -1,0 +1,12 @@
+proc start
+    entry
+    permit os.syscall
+    permit memory.raw
+    zone z 4096
+        b := z.bytes(64)
+        p := b.addr
+        [p] <- 1234
+        [p + 8] <- [p] * 2
+        ret [p + 8] - 2400
+    end
+end

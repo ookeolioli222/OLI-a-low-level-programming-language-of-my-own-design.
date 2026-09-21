@@ -1,6 +1,6 @@
 # 0020 — Genesis layer 3: the oli-core compiler (oli1)
 
-Status: in progress. Steps 0–5 implemented and tested 2026-09-21.
+Status: in progress. Steps 0–6a implemented and tested 2026-09-21.
 
 ## Problem
 Layer 2 (`asm`) turns the `machine x64` sub-language into ELF. To reach a
@@ -41,6 +41,16 @@ placeholder table entry and a fixup; finalize resolves every `call rel32` and
 checks arity, so declaration order never matters (design 0016: `entry` may be
 anywhere). Parameters are spilled to frame slots in the prologue so that the
 rest of the generator treats them as ordinary locals.
+
+Step 6a chooses the ABI's own representation for the two aggregate values the
+compiler needs: a view is `rax:rdx` and two slots, a zone handle is the
+address of its `(base, cursor, limit)` triple. That keeps one expression
+model (a value is one or two registers) and makes views and handles passable
+to procedures with no special cases. Traps share one stub rather than being
+inlined, and a pre-pass over `proc` headers replaces placeholders so that
+types are checked at the call site. The per-exit-edge zone release of
+`OLI_MEMORY_V0.md` §3 is not implemented; the compiler rejects the cases where
+it would be needed instead of silently leaking.
 
 ## Advantages
 - The assembler→compiler step is small and each increment runs on real hardware.

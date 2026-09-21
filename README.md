@@ -19,9 +19,11 @@ G0/G1 reproduce their binaries. G2 assembles real r64 instructions,
 memory operands, branches and read-only data into runnable Linux ELF files.
 G3 (`oli1`, written in `machine x64`) compiles oli-core programs with
 run-time locals, expressions, strings, `if`/`while`, syscall results and
-procedures (SysV parameters, recursion, forward calls) —
-`genesis/3-oli1/tests/hello.oli` prints `Hello Oli--`, `echo.oli` echoes
-stdin and `fib.oli` computes fib(10), all from oli-core source.**
+procedures (SysV parameters, recursion, forward calls), zones (`mmap`-backed,
+`z.bytes`), bounds-checked views and raw memory —
+`genesis/3-oli1/tests/hello.oli` prints `Hello Oli--`, `fib.oli` computes
+fib(10) and `slurp.oli` reads stdin into a zone and upper-cases it in place,
+all from oli-core source.**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -30,7 +32,7 @@ stdin and `fib.oli` computes fib(10), all from oli-core source.**
 | G0 | `genesis/0-hex0`: hex listing → bytes, self-reproducing | **done** |
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
-| G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–5 done: locals, expressions, strings, `if`/`while`, syscall results, procedures with parameters and recursion; next: views, zones, layouts |
+| G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6a done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps; next: layouts |
 | G4 | `compiler/`: `olic` in Oli--, fixpoint `stage2 == stage3` | not started |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |
