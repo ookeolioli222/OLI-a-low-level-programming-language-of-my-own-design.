@@ -1,0 +1,22 @@
+layout Token
+    kind : u8
+    text : view u8
+end
+proc show(t: ref Token)
+    permit os.syscall
+    w := t.text
+    os.syscall(1, 1, w.addr, w.len)
+end
+proc start
+    entry
+    permit os.syscall
+    zone z 4096
+        t := z.make(Token)
+        t.kind <- 3
+        t.text <- "hello\n"
+        show(t)
+        u := t
+        v := u.text
+        ret u.kind + v.len
+    end
+end

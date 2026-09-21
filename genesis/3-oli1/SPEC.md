@@ -38,7 +38,7 @@ observable result. Nothing is marked done without such a test.
 | 4 | run-time locals (frame slots), `<-` stores, `/ %`, unary `-`, comparisons, `if/elif/else`, `while`, `break`, `continue`, `os.syscall` as a value | frame + rax/stack codegen, rel32 branches with fixups | **done** |
 | 5 | several `proc`s per file, parameters (`p: T`, up to six), `-> T`, calls as statements and factors, forward calls, recursion | SysV registers, `call rel32` with fixups, `leave; ret` | **done** |
 | 6a | `zone z SIZE [at ADDR] … end`, `z.bytes(n)`, views as two-word values (literals, params, results, locals), `v[i]`, `v[i] <- x`, `v[a..b]`, `v[..b]`, `v[a..]`, `.addr`/`.len`, raw `[a]`/`[a] <- x`, traps | mmap/munmap, bump allocation, `cmp`/`jcc` to a shared trap stub | **done** |
-| 6b | layouts (`layout … end`, `Name.size`, `Name.at(v)`, `r.f` loads/stores) | field offsets | next |
+| 6b | `layout Name [packed] [align N] … end` with `f : T [align N]`, `Name.size`/`.align`/`.at(v)`, `z.make(Name)`, `ref Name` locals/params/results, `r.f` loads (zero/sign-extended) and `r.f <- x` stores, view fields | field offsets, sized moves, `cmp`/`test` + trap | **done** |
 | 6c | `T or E`, `case`, `fail` | tagged two-word values | planned |
 
 Steps 2–6 grow oli-core until it can express `olic` (layer 4), at which point the
@@ -135,7 +135,8 @@ procedure (a binding inside a block stays visible after it; rebinding a name
 shadows it instead of being an error); integers are untyped 64-bit; there is
 no `and`/`or`/`not`, no `loop`, no shifts/bitwise operators yet; `rw` is not
 distinguished from read-only views (only static strings are read-only);
-`.addr`/`.len`/`[i]` apply to names, not to arbitrary view expressions.
+`.addr`/`.len`/`[i]`/`.f` apply to names, not to arbitrary expressions
+(`r.f.len` needs an intermediate binding).
 
 Proven by `while_sum.oli` (55), `break_continue.oli` (7), `ops.oli` (26:
 precedence, parentheses, `/`, `%`, unary minus, all six comparisons),
@@ -214,6 +215,40 @@ string-literal arguments, 23), `subview.oli` (`OliHelloello`, 12), `raw.oli`
 to a procedure that returns a view of stdin, upper-cased in place by another
 procedure, `HELLO, ZONE`), `zone_scope.oli` (a zone created and released on
 every loop iteration, 6), six trapping programs and fourteen rejection
+programs in the harness. Every earlier fixture passes unchanged.
+
+## Step 6b (implemented)
+
+Pass 0 reads every `layout` block into a layout table before the procedure
+headers are read, so `ref Name` parameter and result types resolve whatever
+the declaration order. Fields are laid out in declaration order with natural
+alignment and padding (`docs/ABI.md` §3): the alignment of a field is
+`min(size, 8)`, raised by `align N` on the field, dropped to 1 by `packed` on
+the layout; the layout's alignment is the maximum (or the `align N` clause)
+and its size is rounded up to it. Field types come from a fixed table:
+`u8 s8 byte bool` (1), `u16 s16` (2), `u32 s32` (4), `u64 s64 word uword addr
+physaddr ref` (8) and `view` (16, two words); trailing type words are ignored.
+Nested layouts by value, `be`/`le` and arrays are not in oli-core.
+
+A third expression type, `ref Name` (code 3 + layout index), is one word.
+`Name.at(v)` takes a view, traps when `v.len < Name.size` or, unless packed,
+when `v.addr` is not a multiple of `Name.align`, and yields the ref;
+`z.make(Name)` allocates `Name.size` zero-filled bytes from a zone (16-byte
+aligned, so any layout alignment up to 16 is honoured). `r.f` loads by the
+field's size and signedness — `movzx`/`movsx`/`movsxd`/`mov` — or two words
+for a view field; `r.f <- x` stores by size and requires the value to match
+the field type. Parameter type codes are packed eight bits each into the
+procedure entry and every argument is checked against its parameter where
+the call is parsed, including refs to distinct layouts. `Name.size` and
+`Name.align` are compile-time constants.
+
+Proven by `layout_basic.oli` (four fields, stores through a ref obtained by
+`Header.at` visible as bytes of the buffer, 154), `layout_signed.oli` (s8/u8
+… s64 read back sign- or zero-extended, 39), `layout_view.oli` (a `view u8`
+field, a ref passed to a procedure, `hello`, 9), `layout_param.oli`
+(`-> rw ref Rect` and `ref Rect` parameters, `z.make`, 44),
+`layout_packed.oli` (`packed`, `align 32` on a layout, `align 4` on a field,
+`P.at` of an odd address, 80), two `Name.at` traps and fifteen rejection
 programs in the harness. Every earlier fixture passes unchanged.
 
 ## Diagnostics

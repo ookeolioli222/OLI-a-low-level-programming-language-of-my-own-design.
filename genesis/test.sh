@@ -283,7 +283,7 @@ end' 'proc start
  entry
  ret 1
 end
-layout P
+choice P
 end'; do
     set +e
     printf '%s\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
@@ -430,4 +430,170 @@ end'; do
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 rejects type mismatches, stores into strings, ret/break across zones, oversize signatures"
-echo "genesis: layer 3 (oli-core compiler, steps 0-6a) passed"
+# step 6b: layouts, refs, field access, Name.at, z.make
+for pair in "layout_basic 154" "layout_signed 39" "layout_param 44" "layout_packed 80"; do
+    set -- $pair
+    ./build/oli1.bin < "3-oli1/tests/$1.oli" > build/o3.elf
+    chmod +x build/o3.elf
+    set +e; timeout 10 ./build/o3.elf; st=$?; set -e
+    [ "$st" = "$2" ] || fail "oli1: $1.oli expected exit $2 got $st"
+done
+./build/oli1.bin < 3-oli1/tests/layout_view.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 9 ] || fail "oli1: layout_view.oli exit $st"
+printf 'hello\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: layout_view.oli wrote wrong bytes"
+echo "ok: oli1 compiles layouts (natural/packed/align), refs, sized field loads and stores, Name.at, z.make"
+for trap in ' s := "abcd"
+ h := H.at(s)
+ ret 1' ' zone z 4096
+ b := z.bytes(64)
+ h := H.at(b[1..])
+ ret 1
+ end'; do
+    printf 'layout H\n a : u32\n b : u64\nend\nproc start\n entry\n%s\nend\n' "$trap" | ./build/oli1.bin > build/t.elf
+    chmod +x build/t.elf
+    set +e; ./build/t.elf > build/t.out 2> build/t.err; st=$?; set -e
+    [ "$st" = 3 ] || fail "oli1: Name.at violation exited $st instead of trapping"
+    grep -q 'oli: trap' build/t.err || fail "oli1: Name.at trap gave no diagnostic"
+done
+echo "ok: Name.at traps on short and misaligned views"
+for bad in 'layout H
+ a : u32
+end
+proc start
+ entry
+ ret H.at(5)
+end' 'layout H
+ a : u32
+end
+proc start
+ entry
+ zone z 4096
+ h := z.make(H)
+ ret h.nofield
+ end
+end' 'layout H
+ a : u32
+end
+proc start
+ entry
+ zone z 4096
+ h := z.make(H)
+ h.a <- "x"
+ ret 1
+ end
+end' 'layout H
+ a : u32
+ t : view u8
+end
+proc start
+ entry
+ zone z 4096
+ h := z.make(H)
+ h.t <- 1
+ ret 1
+ end
+end' 'layout H
+ a : float
+end
+proc start
+ entry
+ ret 1
+end' 'layout H
+ a : u32
+end
+layout H
+ b : u8
+end
+proc start
+ entry
+ ret 1
+end' 'layout H
+ a : u32
+ a : u8
+end
+proc start
+ entry
+ ret 1
+end' 'proc start
+ entry
+ zone z 4096
+ h := z.make(Nope)
+ ret 1
+ end
+end' 'layout A
+ x : u8
+end
+layout B
+ x : u8
+end
+proc f(a: ref A)
+ ret 1
+end
+proc start
+ entry
+ zone z 4096
+ b := z.make(B)
+ ret f(b)
+ end
+end' 'layout A
+ x : u8
+end
+proc f(a: ref A)
+ ret 1
+end
+proc start
+ entry
+ ret f(1)
+end' 'layout A
+ x : u8
+end
+proc f() -> ref A
+ ret 1
+end
+proc start
+ entry
+ ret 1
+end' 'layout A
+ x : u8
+end
+proc start
+ entry
+ ret A.nope
+end' 'layout A
+ x : u8
+proc start
+ entry
+ ret 1
+end' 'layout A
+ x : u8
+end
+layout B
+ x : u8
+end
+proc start
+ entry
+ zone z 4096
+ a := z.make(A)
+ a <- z.make(B)
+ ret 1
+ end
+end' 'proc start
+ entry
+ layout A
+ x : u8
+ end
+ ret 1
+end'; do
+    set +e
+    printf '%s\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed program exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed program produced output"
+    grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
+done
+echo "ok: oli1 rejects unknown fields/types/layouts, duplicate layouts and fields, ref type mismatches"
+echo "genesis: layer 3 (oli-core compiler, steps 0-6b) passed"

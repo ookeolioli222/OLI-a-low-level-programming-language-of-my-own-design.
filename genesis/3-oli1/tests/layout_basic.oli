@@ -1,0 +1,20 @@
+layout Header
+    magic  : u32
+    length : u16
+    flags  : u16
+    payload : u64
+end
+proc start
+    entry
+    permit os.syscall
+    zone z 4096
+        buf := z.bytes(64)
+        h := Header.at(buf)
+        h.magic <- 305419896
+        h.length <- 513
+        h.flags <- 7
+        h.payload <- 1000000
+        -- 0x78 + 1 + 7 + 10 + 16
+        ret buf[0] + buf[4] + buf[6] + h.payload / 100000 + Header.size
+    end
+end

@@ -1,6 +1,6 @@
 # 0020 — Genesis layer 3: the oli-core compiler (oli1)
 
-Status: in progress. Steps 0–6a implemented and tested 2026-09-21.
+Status: in progress. Steps 0–6b implemented and tested 2026-09-21.
 
 ## Problem
 Layer 2 (`asm`) turns the `machine x64` sub-language into ELF. To reach a
@@ -51,6 +51,13 @@ inlined, and a pre-pass over `proc` headers replaces placeholders so that
 types are checked at the call site. The per-exit-edge zone release of
 `OLI_MEMORY_V0.md` §3 is not implemented; the compiler rejects the cases where
 it would be needed instead of silently leaking.
+
+Step 6b adds layouts as the ABI §3 describes them and a `ref` type that is
+plainly an address with a compile-time layout attached, so field access is an
+offset and a sized move. Layouts are collected in a pass of their own before
+procedure headers, which keeps the single code-generation pass. With views,
+zones and layouts, oli-core can now express tokens, tree nodes and symbol
+tables — the data structures of a compiler.
 
 ## Advantages
 - The assembler→compiler step is small and each increment runs on real hardware.

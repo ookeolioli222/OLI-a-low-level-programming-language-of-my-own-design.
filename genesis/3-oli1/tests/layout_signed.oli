@@ -1,0 +1,24 @@
+layout Mixed
+    a : s8
+    b : u8
+    c : s16
+    d : u16
+    e : s32
+    f : u32
+    g : s64
+end
+proc start
+    entry
+    zone z 4096
+        m := Mixed.at(z.bytes(Mixed.size))
+        m.a <- 255
+        m.b <- 255
+        m.c <- 65535
+        m.d <- 65535
+        m.e <- 4294967295
+        m.f <- 4294967295
+        m.g <- -1
+        -- a, c, e, g read back as -1; b, d, f as their maxima
+        ret (m.a + m.c + m.e + m.g + 4) + (m.b - 250) + (m.d - 65530) + (m.f - 4294967290) + Mixed.size
+    end
+end
