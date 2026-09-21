@@ -186,4 +186,43 @@ for bad in 'x := 5
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 binds string literals with every escape, .addr/.len, rejects misuse"
-echo "genesis: layer 3 (oli-core compiler, steps 0-3) passed"
+# step 4: run-time locals, expressions, comparisons, if/elif/else, while, break, continue
+for pair in "while_sum 55" "break_continue 7" "ops 26" "nested 9"; do
+    set -- $pair
+    ./build/oli1.bin < "3-oli1/tests/$1.oli" > build/o3.elf
+    chmod +x build/o3.elf
+    set +e; timeout 10 ./build/o3.elf; st=$?; set -e
+    [ "$st" = "$2" ] || fail "oli1: $1.oli expected exit $2 got $st"
+done
+./build/oli1.bin < 3-oli1/tests/if_chain.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 0 ] || fail "oli1: if_chain.oli exit $st"
+printf 'seven\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: if_chain.oli took the wrong branch"
+./build/oli1.bin < 3-oli1/tests/echo.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; printf 'Oli-- reads stdin\n' | ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 18 ] || fail "oli1: echo.oli returned $st instead of the byte count"
+printf 'Oli-- reads stdin\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: echo.oli did not echo its input"
+set +e; ./build/o3.elf < /dev/null > build/o3.got; st=$?; set -e
+[ "$st" = 0 ] || fail "oli1: echo.oli on empty input exit $st"
+[ "$(wc -c < build/o3.got)" -eq 0 ] || fail "oli1: echo.oli wrote on empty input"
+echo "ok: oli1 compiles run-time locals, if/elif/else, while, break, continue, syscall results"
+for bad in ' x <- 1' ' break' ' continue' ' if 1
+ ret 1' ' while 1' ' ret 5 junk' ' s := "x"
+ ret s' ' x := 1
+ ret x.len' ' x := 1
+ ret x <- 1' ' os.syscall(1 2)' ' foo bar' ' s := "x"
+ s <- 1' ' os.syscall(1,2,3,4,5,6,7,8)' ' elif 1' ' ret (1 + 2'; do
+    set +e
+    printf 'proc start\n entry\n%s\nend\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed program exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed program produced output"
+    grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
+done
+echo "ok: oli1 rejects undefined names, stray break/continue/elif, unterminated blocks, trailing tokens"
+echo "genesis: layer 3 (oli-core compiler, steps 0-4) passed"

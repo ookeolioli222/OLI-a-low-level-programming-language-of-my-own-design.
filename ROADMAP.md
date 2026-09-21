@@ -12,7 +12,7 @@ next. Nothing depends on another language (design 0017).
 | Genesis G0 | `hex0`: hand-written bytes, self-reproducing | done |
 | Genesis G1 | `hex2`: labels and displacements | done |
 | Genesis G2 | `asm`: r32/r64 encoder, memory operands (ModRM/SIB/REX), two-pass symbols, rel32, read-only data, executable Hello Oli--; out-of-scope operands rejected | **suite green (`genesis/test.sh`); multi-segment ELF + remaining forms pending** |
-| Genesis G3 | `oli1`: oli-core compiler in `machine x64` (asm); steps 0–3: `ret`, `os.syscall`, bindings, expressions, strings | **in progress; steps 0–3 green (`genesis/test.sh` layer 3); next: control flow** |
+| Genesis G3 | `oli1`: oli-core compiler in `machine x64` (asm); steps 0–4: locals, expressions, strings, control flow, syscall values | **in progress; steps 0–4 green (`genesis/test.sh` layer 3); next: procedures and calls** |
 | Genesis G4 | `olic` in Oli--; fixpoint `stage2 == stage3`; passes every fixture in `tests/` | planned |
 | M1 | `olic hello.oli && ./hello` (raw syscalls, no libc) | planned |
 | M2 | variables, arithmetic, control flow, procedures, layouts, views, zones | planned |

@@ -1,0 +1,14 @@
+proc start
+    entry
+    permit os.syscall
+    x := 7
+    if x < 5
+        ret 1
+    elif x == 7
+        yes := "seven\n"
+        os.syscall(1, 1, yes.addr, yes.len)
+    else
+        ret 3
+    end
+    ret 0
+end

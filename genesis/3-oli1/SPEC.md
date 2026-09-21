@@ -35,8 +35,8 @@ observable result. Nothing is marked done without such a test.
 | 1 | `permit os.syscall`; `os.syscall(nr, a1..a6)` (integer args); multi-statement bodies | mov-imm per arg reg + `syscall` | **done** |
 | 2 | `name := <expr>` bindings; `ret <expr>`; `+ - *` with precedence; names as syscall args | symbol table + compile-time constant folding | **done** |
 | 3 | string literals with every §2.4 escape; `name.addr`/`name.len` as factors; hello | string pool before code, fixed addresses | **done** |
-| 4 | `if/elif/else`, `while`, comparisons | rel32 branches | next |
-| 5 | multiple `proc`s and calls; parameters (SysV) | call/ret, arg regs | planned |
+| 4 | run-time locals (frame slots), `<-` stores, `/ %`, unary `-`, comparisons, `if/elif/else`, `while`, `break`, `continue`, `os.syscall` as a value | frame + rax/stack codegen, rel32 branches with fixups | **done** |
+| 5 | multiple `proc`s and calls; parameters (SysV) | call/ret, arg regs | next |
 | 6 | views, `zone`, layouts, `T or E` — enough for a compiler | frames + checks | planned |
 
 Steps 2–6 grow oli-core until it can express `olic` (layer 4), at which point the
@@ -93,6 +93,52 @@ stdout and `oli1: error` on stderr. Proven by `hello.oli` (byte-exact stdout),
 `escapes.oli` (all ten escape bytes), `two_strings.oli` (two pools entries,
 integer binding between them, exit 5), `strlen.oli` (`greeting.len + extra` = 42)
 and six rejection programs in the harness. Limits: 64 KiB of string data.
+
+## Step 4 (implemented)
+
+The constant folder of step 2 is replaced by a code generator. Every integer
+binding gets an 8-byte slot in a stack frame (`push rbp; mov rbp,rsp; sub
+rsp,FRAME`, FRAME patched at the end of the procedure to 16-byte alignment) and
+lives at `[rbp - 8*(slot+1)]`. Expressions evaluate into `rax`: the left operand
+is pushed, the right evaluated, then `mov rcx,rax; pop rax; op rax,rcx`.
+Grammar: `expr = add [cmpop add]`, `add = mul {(+|-) mul}`, `mul = unary
+{(*|/|%) unary}`, `unary = - unary | primary`, `primary = int | name |
+name.addr | name.len | os.syscall(args) | (expr)`. Comparisons produce 1/0 via
+`cmp; setcc al; movzx eax,al`; `/` and `%` are signed (`cqo; idiv`). Integer
+literals are emitted as `mov rax, imm64`.
+
+`os.syscall(...)` is an expression: each argument is evaluated and pushed, the
+values are popped into `rax, rdi, rsi, rdx, r10, r8, r9` in reverse order, then
+`syscall`; the result in `rax` is the value, so `buf := os.syscall(9, ...)`
+and `n := os.syscall(0, 0, buf, 4096)` give oli-core programs run-time input
+(`tests/echo.oli`).
+
+Control flow: `if`/`elif`/`else`/`end` and `while`/`end` compile to
+`test rax,rax; jz rel32` and `jmp rel32` with forward references recorded on
+two compile-time fixup stacks in scratch — one for the jumps to the end of an
+`if` chain, one for `break` — and patched when the target is known; `continue`
+jumps back to the loop condition directly. The two stacks are separate so that a
+`break` inside an `if` is patched by the enclosing loop, not by the `if`.
+
+The statement parser now knows the whole file: an optional `module` line,
+`proc NAME`, then `entry`/`calls`/`permit` lines, the body, `end`. Unknown
+statements, trailing tokens after a statement (anything but a `--` comment),
+`elif`/`else`/`end` without an opener, `break`/`continue` outside a loop, a
+block left open at EOF, a string used as a value, `.addr`/`.len` on an integer,
+storing into a string, `<-` inside an expression, a missing comma or more than
+seven syscall arguments all reject with exit 2 and `oli1: error`.
+
+Known deviations from V0, to be closed by G4: names are one flat scope per
+procedure (a binding inside a block stays visible after it; rebinding a name
+shadows it instead of being an error); integers are untyped 64-bit; there is
+no `and`/`or`/`not`, no `loop`, no shifts/bitwise operators yet.
+
+Proven by `while_sum.oli` (55), `break_continue.oli` (7), `ops.oli` (26:
+precedence, parentheses, `/`, `%`, unary minus, all six comparisons),
+`nested.oli` (9: nested loops with `continue` in an inner `if`), `if_chain.oli`
+(`elif` branch taken, byte-exact stdout), `echo.oli` (stdin echoed through an
+`mmap` buffer, exit = byte count, empty input handled) and fifteen rejection
+programs in the harness. Every step 0–3 fixture still passes unchanged.
 
 ## Diagnostics
 

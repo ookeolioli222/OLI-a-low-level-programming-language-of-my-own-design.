@@ -1,6 +1,6 @@
 # 0020 — Genesis layer 3: the oli-core compiler (oli1)
 
-Status: in progress. Steps 0–3 implemented and tested 2026-09-21.
+Status: in progress. Steps 0–4 implemented and tested 2026-09-21.
 
 ## Problem
 Layer 2 (`asm`) turns the `machine x64` sub-language into ELF. To reach a
@@ -27,6 +27,14 @@ string's address is known the moment it is bound and no fixup table is needed
 in the bootstrap compiler; the code is moved behind the pool at finalize and
 `e_entry` is patched. This costs one extra copy of the code per compile and
 nothing at run time.
+
+Step 4 abandons constant folding for a uniform run-time model: every integer
+binding is a frame slot and every expression is compiled, even when constant.
+The bootstrap compiler stays small (one code path per construct) and
+non-constant sources — syscall results — need no special case. Forward branches
+use compile-time fixup stacks in scratch instead of a second pass; `if`-chain
+fixups and `break` fixups are separate stacks because they are resolved by
+different enclosing constructs.
 
 ## Advantages
 - The assembler→compiler step is small and each increment runs on real hardware.
