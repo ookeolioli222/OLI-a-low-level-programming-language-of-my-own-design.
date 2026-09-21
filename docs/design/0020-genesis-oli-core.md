@@ -1,6 +1,6 @@
 # 0020 — Genesis layer 3: the oli-core compiler (oli1)
 
-Status: in progress. Step 0 implemented and tested 2026-09-21.
+Status: in progress. Steps 0–3 implemented and tested 2026-09-21.
 
 ## Problem
 Layer 2 (`asm`) turns the `machine x64` sub-language into ELF. To reach a
@@ -21,6 +21,12 @@ Two constraints from `asm` shaped the design:
 - asm has no 8/16-bit register ops, so oli1 reads source bytes with a masked
   64-bit load and builds output from a template patched by 32-bit stores. Byte
   load/store is added to asm later, when oli1 emits variable-length code.
+
+Step 3 places string data *before* the code (`header | pool | code`) so that a
+string's address is known the moment it is bound and no fixup table is needed
+in the bootstrap compiler; the code is moved behind the pool at finalize and
+`e_entry` is patched. This costs one extra copy of the code per compile and
+nothing at run time.
 
 ## Advantages
 - The assembler→compiler step is small and each increment runs on real hardware.

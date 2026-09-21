@@ -15,8 +15,11 @@ C++ in the toolchain. No LLVM, GCC, `as` or `ld`. No runtime, no libc.
 ## Project status
 
 **Genesis — bootstrapping from hand-written machine code (`docs/design/0017`).
-G0/G1 reproduce their binaries. G2 now assembles real r64 instructions,
-memory operands, branches and read-only data into runnable Linux ELF files.**
+G0/G1 reproduce their binaries. G2 assembles real r64 instructions,
+memory operands, branches and read-only data into runnable Linux ELF files.
+G3 (`oli1`, written in `machine x64`) compiles oli-core programs with
+bindings, expressions and strings — `genesis/3-oli1/tests/hello.oli` prints
+`Hello Oli--` from oli-core source.**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -25,7 +28,7 @@ memory operands, branches and read-only data into runnable Linux ELF files.**
 | G0 | `genesis/0-hex0`: hex listing → bytes, self-reproducing | **done** |
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
-| G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | not started |
+| G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–3 done: `ret`, `os.syscall`, bindings, expressions, strings; hello in oli-core runs |
 | G4 | `compiler/`: `olic` in Oli--, fixpoint `stage2 == stage3` | not started |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |

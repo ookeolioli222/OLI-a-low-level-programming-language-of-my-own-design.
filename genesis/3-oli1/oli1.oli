@@ -1,17 +1,27 @@
--- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 2.
--- Adds a symbol table, an expression parser with precedence, and bindings:
+-- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 3.
+-- Symbol table, expression parser with precedence, bindings and string literals:
 --   name := <expr>              bind a name to a compile-time integer value
+--   name := "text"              bind a name to a .rodata string (escapes of syntax §2.4)
+--   name.addr / name.len        address / byte length of a string binding (factors)
 --   ret <expr>                  exit(value of expr)
 --   os.syscall(nr, e1 .. e6)    args are expressions/names too
--- expr = term (('+'|'-') term)* ;  term = factor ('*' factor)* ;  factor = int | name
--- The step-2 subset is entirely compile-time constant, so expressions are folded
--- in the compiler and lowered to `mov <reg>, imm32`; runtime evaluation (frames,
+-- expr = term (('+'|'-') term)* ;  term = factor ('*' factor)* ;
+-- factor = int | name | name '.' ('addr'|'len')
+-- The subset is entirely compile-time constant, so expressions are folded in the
+-- compiler and lowered to `mov <reg>, imm32`; runtime evaluation (frames,
 -- register allocation) arrives when non-constant sources (parameters, syscall
--- results) do. Scratch is a 2 MiB mmap: input [base,+1M), output [base+1M,+1.5M),
--- symbol table [base+1.5M,+2M). asm has no byte store, so emit_byte writes an
--- 8-byte value < 256 and advances one byte.
+-- results) do. Scratch is a 2 MiB mmap: input [base,+1M), output [base+1M,+1.375M),
+-- string pool [base+1.375M,+64K), code temp [base+1.4375M,+64K), symbol table
+-- [base+1.5M,+2M). asm has no byte store, so emit_byte writes an 8-byte value
+-- < 256 and advances one byte.
+-- Output layout: 120-byte ELF header | string pool | code. Strings therefore have
+-- a fixed address (0x400078 + pool offset) the moment they are bound; at finalize
+-- the code is moved behind the pool and e_entry is patched to 0x400078 + pool size.
+-- Symbol entry (32 bytes): name ptr, name len, value (int, or string address),
+-- kind (0 = integer, string length + 1 = string).
 -- Registers: r14 in base, r13 in end, r12 out base, rbx symtab base, r15 symbol
--- count, rdi emit ptr, rsi in cursor, r10 arg index (saved across eval).
+-- count, rbp string pool cursor, rdi emit ptr, rsi in cursor, r10 arg index
+-- (saved across eval).
 module oli1
 proc start
     calls none
@@ -30,6 +40,8 @@ proc start
         add r12, 0x100000
         mov rbx, r14
         add rbx, 0x180000
+        mov rbp, r14
+        add rbp, 0x160000
         mov r15, 0
         mov rcx, r14
 .rd:
@@ -117,16 +129,37 @@ proc start
         add rsi, 1
         push r8
         push rcx
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 34
+        jne .bind_int
+        mov rax, rbp
+        sub rax, r14
+        sub rax, 0x160000
+        add rax, 0x400078
+        push rax
+        push rbp
+        call .pstr
+        pop rax
+        mov rdx, rbp
+        sub rdx, rax
+        add rdx, 1
+        pop rax
+        jmp .bind_store
+.bind_int:
         call .eval_expr
+        mov rdx, 0
+.bind_store:
         pop rcx
         pop r8
         mov r11, r15
-        lea r11, [r11+r11*2]
-        shl r11, 3
+        shl r11, 5
         add r11, rbx
         mov [r11], r8
         mov [r11+8], rcx
         mov [r11+16], rax
+        mov [r11+24], rdx
         add r15, 1
         call .eol
         jmp .stmt
@@ -239,16 +272,147 @@ proc start
         call .eol
         jmp .stmt
 .finalize:
-        mov rax, rdi
-        sub rax, r12
+        mov r8, rdi
+        sub r8, r12
+        sub r8, 120
+        mov r9, rbp
+        sub r9, r14
+        sub r9, 0x160000
+        mov rsi, r12
+        add rsi, 120
+        mov rdi, r14
+        add rdi, 0x170000
+        mov rcx, r8
+        call .copy8
+        mov rsi, r14
+        add rsi, 0x160000
+        mov rdi, r12
+        add rdi, 120
+        mov rcx, r9
+        call .copy8
+        mov rsi, r14
+        add rsi, 0x170000
+        mov rdi, r12
+        add rdi, 120
+        add rdi, r9
+        mov rcx, r8
+        call .copy8
+        mov rax, r8
+        add rax, r9
+        add rax, 120
         mov [r12+96], rax
         mov [r12+104], rax
+        mov rdx, r9
+        add rdx, 0x400078
+        mov [r12+24], rdx
         mov rdx, rax
         mov rdi, 1
         mov rsi, r12
         mov rax, 1
         syscall
         mov rdi, 0
+        mov rax, 60
+        syscall
+.copy8:
+        cmp rcx, 0
+        jle .c8_done
+        mov rax, [rsi]
+        mov [rdi], rax
+        add rsi, 8
+        add rdi, 8
+        sub rcx, 8
+        jmp .copy8
+.c8_done:
+        ret
+.pstr:
+        add rsi, 1
+.ps_l:
+        cmp rsi, r13
+        jae .err
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        cmp rax, 34
+        je .ps_done
+        cmp rax, 10
+        je .err
+        cmp rax, 0
+        je .err
+        cmp rax, 92
+        jne .ps_put
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        cmp rax, 110
+        je .ps_n
+        cmp rax, 116
+        je .ps_t
+        cmp rax, 114
+        je .ps_r
+        cmp rax, 48
+        je .ps_0
+        cmp rax, 92
+        je .ps_put
+        cmp rax, 34
+        je .ps_put
+        cmp rax, 39
+        je .ps_put
+        cmp rax, 120
+        je .ps_x
+        jmp .err
+.ps_n:
+        mov rax, 10
+        jmp .ps_put
+.ps_t:
+        mov rax, 9
+        jmp .ps_put
+.ps_r:
+        mov rax, 13
+        jmp .ps_put
+.ps_0:
+        mov rax, 0
+        jmp .ps_put
+.ps_x:
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        call .hexd
+        shl rax, 4
+        mov rdx, rax
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        call .hexd
+        add rax, rdx
+.ps_put:
+        mov [rbp], rax
+        add rbp, 1
+        jmp .ps_l
+.ps_done:
+        ret
+.hexd:
+        sub rax, 48
+        cmp rax, 9
+        jbe .hd_ok
+        sub rax, 7
+        cmp rax, 10
+        jb .err
+        cmp rax, 15
+        jbe .hd_ok
+        sub rax, 32
+        cmp rax, 10
+        jb .err
+        cmp rax, 15
+        ja .err
+.hd_ok:
+        ret
+.err:
+        mov rdi, 2
+        mov rsi, errmsg
+        mov rdx, 12
+        mov rax, 1
+        syscall
+        mov rdi, 2
         mov rax, 60
         syscall
 .emit:
@@ -396,6 +560,35 @@ proc start
         mov rcx, rsi
         sub rcx, r8
         call .lookup_name
+        mov rdx, [rsi]
+        and rdx, 255
+        cmp rdx, 46
+        jne .ef_ret
+        add rsi, 1
+        mov rdx, [r11+24]
+        cmp rdx, 0
+        je .err
+        mov r8, rsi
+        call .skipname
+        mov rcx, rsi
+        sub rcx, r8
+        mov rax, [r8]
+        and rax, 255
+        cmp rax, 97
+        je .ef_addr
+        cmp rax, 108
+        jne .err
+        cmp rcx, 3
+        jne .err
+        mov rax, rdx
+        sub rax, 1
+        ret
+.ef_addr:
+        cmp rcx, 4
+        jne .err
+        mov rax, [r11+16]
+        ret
+.ef_ret:
         ret
 .lookup_name:
         mov r9, 0
@@ -403,8 +596,7 @@ proc start
         cmp r9, r15
         jae .ln_notfound
         mov r11, r9
-        lea r11, [r11+r11*2]
-        shl r11, 3
+        shl r11, 5
         add r11, rbx
         mov rdx, [r11+8]
         cmp rdx, rcx
@@ -424,8 +616,7 @@ proc start
         jmp .ln_cmp
 .ln_found:
         mov r11, r9
-        lea r11, [r11+r11*2]
-        shl r11, 3
+        shl r11, 5
         add r11, rbx
         mov rax, [r11+16]
         ret
@@ -433,10 +624,11 @@ proc start
         add r9, 1
         jmp .ln_loop
 .ln_notfound:
-        mov rdi, 2
-        mov rax, 60
-        syscall
+        jmp .err
     end
+end
+rodata errmsg
+    ascii "oli1: error\n"
 end
 rodata template
     byte 0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00

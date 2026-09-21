@@ -34,8 +34,8 @@ observable result. Nothing is marked done without such a test.
 | 0 | `proc NAME` + `entry` + `ret <decimal>` + `end` | exit(value) | **done** |
 | 1 | `permit os.syscall`; `os.syscall(nr, a1..a6)` (integer args); multi-statement bodies | mov-imm per arg reg + `syscall` | **done** |
 | 2 | `name := <expr>` bindings; `ret <expr>`; `+ - *` with precedence; names as syscall args | symbol table + compile-time constant folding | **done** |
-| 3 | string literals + `.addr`/`.len`; write a message (hello) | rodata + syscall | next |
-| 4 | `if/elif/else`, `while`, comparisons | rel32 branches | planned |
+| 3 | string literals with every §2.4 escape; `name.addr`/`name.len` as factors; hello | string pool before code, fixed addresses | **done** |
+| 4 | `if/elif/else`, `while`, comparisons | rel32 branches | next |
 | 5 | multiple `proc`s and calls; parameters (SysV) | call/ret, arg regs | planned |
 | 6 | views, `zone`, layouts, `T or E` — enough for a compiler | frames + checks | planned |
 
@@ -78,9 +78,25 @@ Proven by `bind.oli` (42), `arith.oli` (2+3*4 = 14), `prec.oli` (5*3+1 = 16) and
 skipper must preserve the accumulator register, since the expression evaluator
 calls it while a computed operand is live.
 
+## Step 3 (implemented)
+
+`name := "text"` copies the literal, with every escape of `spec/OLI_SYNTAX_V0.md`
+§2.4 (`\n \t \r \0 \\ \" \' \xHH`), into a string pool in scratch. Symbol
+entries grow to 32 bytes: name pointer, name length, value, kind (0 = integer,
+string length + 1 = string). The output file is `header | pool | code`, so a
+string's address is fixed at bind time — `0x400078` + its pool offset — and no
+fixups are needed; at finalize the code is moved behind the pool and `e_entry`
+is patched to `0x400078 + pool size`. `name.addr` and `name.len` are factors of
+the expression grammar; `.addr`/`.len` on an integer, an unknown member, an
+unterminated string, a bad escape or an undefined name reject with exit 2, no
+stdout and `oli1: error` on stderr. Proven by `hello.oli` (byte-exact stdout),
+`escapes.oli` (all ten escape bytes), `two_strings.oli` (two pools entries,
+integer binding between them, exit 5), `strlen.oli` (`greeting.len + extra` = 42)
+and six rejection programs in the harness. Limits: 64 KiB of string data.
+
 ## Diagnostics
 
 Out-of-scope or malformed input must be rejected without emitting a partial ELF,
-following `asm`'s convention (a non-zero exit and an `oli1:` diagnostic). Step 0
-exits non-zero when no `ret` is found; richer diagnostics arrive with the lexer
-in later steps.
+following `asm`'s convention. Since step 3 every rejection exits 2 and writes
+`oli1: error` to stderr; positions and codes arrive with the lexer in later
+steps.

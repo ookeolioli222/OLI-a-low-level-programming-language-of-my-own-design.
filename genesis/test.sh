@@ -148,4 +148,42 @@ for pair in "bind 42" "arith 14" "prec 16" "nameos 7"; do
     [ "$st" = "$2" ] || fail "oli1: $1.oli expected exit $2 got $st"
 done
 echo "ok: oli1 folds expressions with precedence, bindings and names in os.syscall args"
-echo "genesis: layer 3 (oli-core compiler, steps 0-2) passed"
+# step 3: string literals, .addr/.len, the oli-core hello
+./build/oli1.bin < 3-oli1/tests/hello.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 0 ] || fail "oli1: hello.oli exit $st"
+printf 'Hello Oli--\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: hello.oli wrote wrong bytes"
+./build/oli1.bin < 3-oli1/tests/escapes.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 0 ] || fail "oli1: escapes.oli exit $st"
+got=$(od -A n -t x1 build/o3.got | tr -d ' \n')
+[ "$got" = "610962415c22270d000a" ] || fail "oli1: escapes.oli wrote $got"
+./build/oli1.bin < 3-oli1/tests/two_strings.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 5 ] || fail "oli1: two_strings.oli exit $st"
+printf 'two\none\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: two_strings.oli wrote wrong bytes"
+./build/oli1.bin < 3-oli1/tests/strlen.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf; st=$?; set -e
+[ "$st" = 42 ] || fail "oli1: strlen.oli expected exit 42 got $st"
+for bad in 'x := 5
+ ret x.addr' 's := "abc
+ ret 1' 's := "a\qb"
+ ret 1' 's := "ab"
+ ret s.foo' 's := "\x4G"
+ ret 1' ' ret nosuch'; do
+    set +e
+    printf 'proc start\n entry\n %s\nend\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed program exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed program produced output"
+    grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
+done
+echo "ok: oli1 binds string literals with every escape, .addr/.len, rejects misuse"
+echo "genesis: layer 3 (oli-core compiler, steps 0-3) passed"

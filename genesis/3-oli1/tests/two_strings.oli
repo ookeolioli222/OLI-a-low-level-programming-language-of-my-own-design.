@@ -1,0 +1,10 @@
+proc start
+    entry
+    permit os.syscall
+    first := "one\n"
+    n := 5
+    second := "two\n"
+    os.syscall(1, 1, second.addr, second.len)
+    os.syscall(1, 1, first.addr, first.len)
+    ret n
+end
