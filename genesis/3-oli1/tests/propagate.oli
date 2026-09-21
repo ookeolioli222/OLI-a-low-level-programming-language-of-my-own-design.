@@ -1,0 +1,47 @@
+module propagate
+-- Failures propagate with `else fail` through two levels; the top resolves
+-- with case and writes which channel arrived.
+proc parse_digit(v: view u8, i: u64) -> word or word
+    if i >= v.len
+        fail 1
+    end
+    c := v[i]
+    if c < 48
+        fail 2
+    end
+    if c > 57
+        fail 2
+    end
+    ret c - 48
+end
+proc two_digits(v: view u8) -> word or word
+    hi := parse_digit(v, 0) else fail
+    lo := parse_digit(v, 1) else fail
+    ret hi * 10 + lo
+end
+proc value_or(v: view u8, dflt: u64) -> u64
+    ret two_digits(v) else dflt
+end
+proc write(v: view u8)
+    os.syscall(1, 1, v.addr, v.len)
+end
+proc report(v: view u8)
+    case two_digits(v)
+    when ok n
+        write("ok\n")
+    when fail code
+        if code == 1
+            write("short\n")
+        else
+            write("bad\n")
+        end
+    end
+end
+proc start
+    entry
+    permit os.syscall
+    report("42")
+    report("4")
+    report("4x")
+    ret value_or("42", 9) + value_or("x", 9)     -- 42 + 9 = 51
+end

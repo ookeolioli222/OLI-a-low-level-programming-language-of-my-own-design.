@@ -596,4 +596,289 @@ end'; do
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 rejects unknown fields/types/layouts, duplicate layouts and fields, ref type mismatches"
-echo "genesis: layer 3 (oli-core compiler, steps 0-6b) passed"
+# step 6c: fallible results (T or E), fail, else handlers, case
+for pair in "fallible 157" "optional 140"; do
+    set -- $pair
+    ./build/oli1.bin < "3-oli1/tests/$1.oli" > build/o3.elf
+    chmod +x build/o3.elf
+    set +e; timeout 10 ./build/o3.elf; st=$?; set -e
+    [ "$st" = "$2" ] || fail "oli1: $1.oli expected exit $2 got $st"
+done
+./build/oli1.bin < 3-oli1/tests/propagate.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf > build/o3.got; st=$?; set -e
+[ "$st" = 51 ] || fail "oli1: propagate.oli exit $st"
+printf 'ok\nshort\nbad\n' > build/o3.want
+cmp build/o3.got build/o3.want || fail "oli1: propagate.oli wrote wrong bytes"
+printf 'proc f(x: word) -> word or word
+ if x > 5
+  fail x
+ end
+ ret x
+end
+proc start
+ entry
+ a := f(9) else ret 7
+ ret 1
+end
+' | ./build/oli1.bin > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf; st=$?; set -e
+[ "$st" = 7 ] || fail "oli1: else ret in the entry procedure exit $st"
+printf 'proc f(x: word) -> word or none
+ if x > 5
+  fail
+ end
+ ret x
+end
+proc g(x: word) -> word or none
+ y := f(x) else fail
+ ret y + 1
+end
+proc h(x: word)
+ y := g(x) else ret
+ os.syscall(60, y)
+end
+proc start
+ entry
+ h(9)
+ h(3)
+ ret 1
+end
+' | ./build/oli1.bin > build/o3.elf
+chmod +x build/o3.elf
+set +e; ./build/o3.elf; st=$?; set -e
+[ "$st" = 4 ] || fail "oli1: none propagation and bare else ret exit $st"
+printf 'proc f(x: word) -> word or word
+ if x > 5
+  fail x
+ end
+ ret x
+end
+proc g() -> word
+ ret 30
+end
+proc pick(x: word) -> word
+ case f(x)
+ when ok v
+  ret v * 10
+ when fail e
+  ret e
+ end
+end
+proc start
+ entry
+ n := 0
+ if f(9) else 0
+  n <- 1
+ end
+ if f(2) else 0
+  n <- n + 2
+ end
+ m := f(7) else g()
+ i := 0
+ s := 0
+ while i < 10
+  case f(i)
+  when fail e
+   break
+  when ok v
+   s <- s + v
+  end
+  i <- i + 1
+ end
+ ret n + m + s + pick(3) + pick(8)
+end
+' | ./build/oli1.bin > build/o3.elf
+chmod +x build/o3.elf
+set +e; timeout 10 ./build/o3.elf; st=$?; set -e
+[ "$st" = 85 ] || fail "oli1: fallible conditions, call defaults, case in a loop exit $st"
+echo "ok: oli1 compiles T or E results, fail, else fail/ret/default handlers and case with ok/fail arms"
+for bad in 'proc f() -> word or word
+ ret 1
+end
+proc start
+ entry
+ x := f()
+ ret 1
+end' 'proc f() -> word or word
+ ret 1
+end
+proc start
+ entry
+ f()
+ ret 1
+end' 'proc f() -> word
+ ret 1
+end
+proc start
+ entry
+ x := f() else 0
+ ret 1
+end' 'proc f() -> word
+ fail 1
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> word or none
+ fail 1
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> word or word
+ fail
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> word or word
+ ret 1
+end
+proc g() -> word
+ ret f() else fail
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> word or word
+ ret 1
+end
+proc g() -> word or none
+ ret f() else fail
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> word or word
+ ret 1
+end
+proc start
+ entry
+ case f()
+ when ok x
+  ret x
+ end
+end' 'proc f() -> word or word
+ ret 1
+end
+proc start
+ entry
+ case f()
+ when ok x
+  ret x
+ when ok y
+  ret y
+ end
+end' 'proc f() -> word or word
+ ret 1
+end
+proc start
+ entry
+ x := f() else "s"
+ ret 1
+end' 'proc f() -> view u8 or word
+ ret "s"
+end
+proc start
+ entry
+ ret 1
+end' 'proc f(x: word or none) -> word
+ ret 1
+end
+proc start
+ entry
+ ret 1
+end' 'proc start -> word or word
+ entry
+ ret 1
+end' 'proc f() -> word or none
+ fail
+end
+proc start
+ entry
+ case f()
+ when ok x
+  ret 1
+ when fail e
+  ret 2
+ end
+end' 'proc f() -> word or word
+ ret
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> word
+ ret 1
+end
+proc start
+ entry
+ case f()
+ when ok x
+  ret 1
+ when fail e
+  ret 2
+ end
+end' 'proc f() -> word or word
+ ret 1
+end
+proc start
+ entry
+ x := f() else fail
+ ret 1
+end' 'proc f() -> word or word
+ ret 1
+end
+proc start
+ entry
+ if f() else 0
+  ret 1
+ when ok x
+  ret 2
+ end
+end' 'proc f() -> word or word
+ ret 1
+end
+proc start
+ entry
+ x := f() == 1 else 0
+ ret 1
+end' 'proc f() -> word or word
+ zone z 4096
+  fail 1
+ end
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> word or word
+ ret 1
+end
+proc g() -> word or word
+ zone z 4096
+  x := f() else fail
+ end
+ ret 1
+end
+proc start
+ entry
+ ret 1
+end' 'proc f() -> word or word or none
+ ret 1
+end
+proc start
+ entry
+ ret 1
+end'; do
+    set +e
+    printf '%s\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed program exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed program produced output"
+    grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
+done
+echo "ok: oli1 rejects unresolved/discarded fallible values, fail outside fallible procedures, E mismatches, bad case arms"
+echo "genesis: layer 3 (oli-core compiler, steps 0-6c) passed"

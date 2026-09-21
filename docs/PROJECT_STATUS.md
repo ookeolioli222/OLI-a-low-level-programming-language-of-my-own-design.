@@ -20,8 +20,12 @@ is complete. The working directory has no `.git` metadata.
   marked `-- reference: skip` were excluded by the old harness; passing the
   suite does not prove these features exist. Until G4, no program in the
   repository can parse high-level Oli--.
-- `compiler/`, `genesis/3-oli1/`, the OIR implementation, full native backend,
-  standard-library implementation and kernel do not yet exist.
+- `genesis/3-oli1/` (the oli-core compiler `oli1`, written in `machine x64`)
+  exists and passes layer 3 of `genesis/test.sh` for steps 0–6c: locals,
+  expressions, strings, control flow, syscalls, procedures, zones, views, raw
+  memory, layouts, refs and fallible results. `compiler/`, the OIR
+  implementation, full native backend, standard-library implementation and
+  kernel do not yet exist.
 - README and ROADMAP originally disagreed with each other and with G2's code.
 
 ## Completion gates

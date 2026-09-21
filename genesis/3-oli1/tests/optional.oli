@@ -1,0 +1,53 @@
+module optional
+-- T or none: bare fail, `when fail` without a binding, `else ret`, a ref payload.
+layout Pair
+    a : u32
+    b : u32
+end
+proc find(v: view u8, want: u8) -> u64 or none
+    i := 0
+    while i < v.len
+        if v[i] == want
+            ret i
+        end
+        i <- i + 1
+    end
+    fail
+end
+proc make(z: zone, n: u64) -> ref Pair or none
+    if n == 0
+        fail
+    end
+    p := z.make(Pair)
+    p.a <- n
+    p.b <- n * 2
+    ret p
+end
+proc sum(z: zone, n: u64) -> u64
+    p := make(z, n) else ret 0
+    ret p.a + p.b
+end
+proc start
+    entry
+    s := "hello"
+    x := find(s, 108) else 99        -- 2
+    y := find(s, 122) else 99        -- 99
+    r := 0
+    case find(s, 111)
+    when ok i
+        r <- i                       -- 4
+    when fail
+        r <- 50
+    end
+    q := 0
+    case find(s, 113)
+    when ok i
+        q <- 1
+    else
+        q <- 20
+    end
+    zone z 4096
+        t := sum(z, 5) + sum(z, 0)   -- 15 + 0
+        ret x + y + r + q + t        -- 2 + 99 + 4 + 20 + 15 = 140
+    end
+end

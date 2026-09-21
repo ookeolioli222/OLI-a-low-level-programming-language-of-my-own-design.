@@ -1,6 +1,6 @@
 # 0020 — Genesis layer 3: the oli-core compiler (oli1)
 
-Status: in progress. Steps 0–6b implemented and tested 2026-09-21.
+Status: oli-core subset complete. Steps 0–6c implemented and tested 2026-09-21.
 
 ## Problem
 Layer 2 (`asm`) turns the `machine x64` sub-language into ELF. To reach a
@@ -58,6 +58,15 @@ offset and a sized move. Layouts are collected in a pass of their own before
 procedure headers, which keeps the single code-generation pass. With views,
 zones and layouts, oli-core can now express tokens, tree nodes and symbol
 tables — the data structures of a compiler.
+
+Step 6c uses the ABI's representation of `T or E` directly (tag `rax`,
+payload `rdx`) and restricts `T` to one word so that no `sret` path exists in
+the bootstrap compiler. Resolution is attached to the expression grammar
+(`expr = cmp_expr [else handler]`) rather than to bindings, so every context
+that evaluates an expression enforces "a fallible value must be resolved" with
+one check, and `case` is the only construct that sees the raw tagged value.
+Fallible values are deliberately not bindable or passable in oli-core: the
+compiler needs propagation and defaults, not storage of results.
 
 ## Advantages
 - The assembler→compiler step is small and each increment runs on real hardware.

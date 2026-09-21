@@ -1,11 +1,19 @@
--- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 6b.
+-- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 6c.
 -- A real code generator: integer bindings are stack-frame locals, expressions
 -- are evaluated at run time (in rax, with push/pop for the right operand),
 -- control flow is compiled to rel32 branches with forward fixups, procedures
 -- follow the SysV register convention (docs/ABI.md), views are two-word values
 -- (rax = addr, rdx = len), zones are (base, cursor, limit) triples.
 --   [module path]  { layout NAME [packed] [align N] NL { f : T [align N] NL } end
---                  | proc NAME [(p: T, ...)] [-> T] [entry | calls ... | permit ...]* block end }
+--                  | proc NAME [(p: T, ...)] [-> T [or E]] [entry | calls ... | permit ...]* block end }
+--   -> T or E                  fallible result (design 0007): T an integer or ref, E an
+--                               integer type or none; tag in rax (0 ok, 1 fail), payload in rdx
+--   ret v / fail [e]            in a fallible procedure: ok(v) / fail(e); bare fail only for none
+--   f(args) else fail           propagate the failure to the caller (same E kind required)
+--   f(args) else ret [v]        diverge; f(args) else v : default value of type T
+--   case f(args) NL when ok [x] NL block when fail [e] NL block end   (either order;
+--                               the second arm may be `else`); x : T, e : E are bindings
+--   an unresolved fallible value anywhere else is a compile error
 --   Name.size, Name.align      compile-time constants; Name.at(v) checks v.len and
 --                               alignment and yields ref Name; z.make(Name) allocates one
 --   r.f / r.f <- x              field load (zero/sign extended by the field type) / store
@@ -29,7 +37,9 @@
 --         | z.make(Name) | Name.size | Name.align | Name.at(v) | r.f
 -- Type codes at compile time: 0 = integer word, 1 = view (addr, len), 2 = zone
 -- handle (parameters only; an integer argument satisfies it), 3+i = ref to
--- layout i. Symbol kinds: 0 int local (1 slot), 1 static string (addr, len
+-- layout i; a fallible result type adds 256 (bit 8) to the code of T and 512
+-- (bit 9) when E is none — only results and call values carry these bits.
+-- Symbol kinds: 0 int local (1 slot), 1 static string (addr, len
 -- known), 2 view local (2 slots), 3 zone handle (slot holding the address of
 -- the triple; a local zone keeps limit, cursor, base in three ascending-address
 -- slots below it), 4 ref local (1 slot, extra = layout index).
@@ -280,6 +290,9 @@ proc start
         mov rax, [r14+0x1F0028]
         cmp rax, 0
         je .body_code
+        mov rax, [r14+0x1F0058]
+        cmp rax, 256
+        jae .err
         mov [r14+0x1F0030], rdi
 .body_code:
         mov rdx, seq_prologue
@@ -396,8 +409,13 @@ proc start
         je .sig_pt_end
         push r9
         call .word
-        pop r9
         cmp rcx, 0
+        je .err
+        mov rdx, kw_or
+        mov r9, 2
+        call .iskw
+        pop r9
+        cmp rax, 1
         je .err
         jmp .sig_pt_rest
 .sig_pt_end:
@@ -472,6 +490,57 @@ proc start
         call .word
         cmp rcx, 0
         je .err
+        cmp rcx, 2
+        jne .sig_rtype_rest
+        mov rdx, kw_or
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .sig_rtype_rest
+        mov r11, [rsp]
+        mov rax, [r11+56]
+        cmp rax, 1
+        je .err
+        cmp rax, 256
+        jae .err
+        add rax, 256
+        push rax
+        call .word
+        cmp rcx, 0
+        je .err
+        mov rdx, kw_none
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .sig_rtype_e
+        pop rax
+        add rax, 512
+        jmp .sig_rtype_set
+.sig_rtype_e:
+        mov rdx, kw_view
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .err
+        mov rdx, kw_zone
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .err
+        mov rdx, kw_ref
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        je .err
+        mov rdx, kw_rw
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        je .err
+        pop rax
+.sig_rtype_set:
+        mov r11, [rsp]
+        mov [r11+56], rax
         jmp .sig_rtype_rest
 .sig_eol:
         call .eol
@@ -942,10 +1011,34 @@ proc start
         mov r9, 4
         call .iskw
         cmp rax, 1
-        jne .blk_ret
+        jne .blk_when
         call .eol
         mov rax, 3
         ret
+.blk_when:
+        mov rdx, kw_when
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_fail
+        mov rax, 4
+        ret
+.blk_fail:
+        mov rdx, kw_fail
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_case
+        call .s_fail
+        jmp .block
+.blk_case:
+        mov rdx, kw_case
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_ret
+        call .s_case
+        jmp .block
 .blk_ret:
         mov rdx, kw_ret
         mov r9, 3
@@ -1339,6 +1432,11 @@ proc start
 .zone_done:
         ret
 .s_ret:
+        call .ret_check
+        call .ret_tail
+        call .eol
+        ret
+.ret_check:
         mov rax, [r14+0x1F0028]
         cmp rax, 1
         je .ret_ok
@@ -1346,6 +1444,8 @@ proc start
         cmp rax, 0
         jne .err
 .ret_ok:
+        ret
+.ret_tail:
         call .sksp
         cmp rsi, r13
         jae .ret_bare
@@ -1366,10 +1466,17 @@ proc start
         mov rax, [r14+0x1F0028]
         cmp rax, 1
         je .ret_emit
-        mov rax, [r14+0x1F0050]
-        cmp rax, [r14+0x1F0058]
+        mov rax, [r14+0x1F0058]
+        mov rcx, rax
+        and rcx, 255
+        cmp rcx, [r14+0x1F0050]
         jne .err
-        jmp .ret_emit
+        cmp rax, 256
+        jb .ret_emit
+        mov rdx, seq_okret
+        mov rcx, 7
+        call .ebytes
+        ret
 .ret_bare:
         mov rax, [r14+0x1F0058]
         cmp rax, 0
@@ -1384,14 +1491,203 @@ proc start
         mov rdx, seq_ret
         mov rcx, 10
         call .ebytes
-        call .eol
         ret
 .ret_leave:
         mov rdx, seq_leave
         add rdx, 2
         mov rcx, 2
         call .ebytes
+        ret
+.s_fail:
+        mov rax, [r14+0x1F0058]
+        cmp rax, 256
+        jb .err
+        mov rax, [r14+0x1F0060]
+        cmp rax, 0
+        jne .err
+        call .fail_tail
         call .eol
+        ret
+.fail_tail:
+        call .sksp
+        cmp rsi, r13
+        jae .fail_bare
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .fail_bare
+        cmp rax, 13
+        je .fail_bare
+        cmp rax, 45
+        jne .fail_expr
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 45
+        je .fail_bare
+.fail_expr:
+        mov rax, [r14+0x1F0058]
+        and rax, 512
+        cmp rax, 0
+        jne .err
+        call .expr
+        call .need_int
+        mov rdx, seq_tordx
+        mov rcx, 3
+        call .ebytes
+        jmp .fail_emit
+.fail_bare:
+        mov rax, [r14+0x1F0058]
+        and rax, 512
+        cmp rax, 0
+        je .err
+        mov rax, 49
+        call .emit
+        mov rax, 210
+        call .emit
+.fail_emit:
+        mov rdx, seq_fail
+        mov rcx, 7
+        call .ebytes
+        ret
+.s_case:
+        call .cmpx
+        mov rax, [r14+0x1F0050]
+        cmp rax, 256
+        jb .err
+        push rax
+        call .eol
+        call .when_line
+        call .when_arm
+        push rax
+        push r8
+        push rcx
+        cmp rax, 1
+        jne .case_first_fail
+        call .e_jnz
+        jmp .case_first_bind
+.case_first_fail:
+        call .e_jz
+.case_first_bind:
+        pop rcx
+        pop r8
+        push rdx
+        mov rax, [rsp+8]
+        mov rdx, [rsp+16]
+        call .case_bind
+        call .block
+        cmp rax, 3
+        je .case_else
+        cmp rax, 4
+        jne .err
+        call .when_arm
+        cmp rax, [rsp+8]
+        je .err
+        push rax
+        push r8
+        push rcx
+        call .e_jmp
+        mov rax, [rsp+24]
+        mov [rsp+24], rdx
+        mov rdx, rax
+        call .patch_here
+        pop rcx
+        pop r8
+        pop rax
+        mov rdx, [rsp+16]
+        call .case_bind
+        call .block
+        cmp rax, 1
+        jne .err
+        pop rdx
+        call .patch_here
+        pop rax
+        pop rax
+        ret
+.case_else:
+        call .e_jmp
+        mov rax, [rsp]
+        mov [rsp], rdx
+        mov rdx, rax
+        call .patch_here
+        call .block
+        cmp rax, 1
+        jne .err
+        pop rdx
+        call .patch_here
+        pop rax
+        pop rax
+        ret
+.when_line:
+        cmp rsi, r13
+        jae .err
+        call .word
+        cmp rcx, 0
+        jne .wl_word
+        call .blank
+        jmp .when_line
+.wl_word:
+        mov rdx, kw_when
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+        ret
+.when_arm:
+        call .word
+        cmp rcx, 2
+        jne .wa_fail
+        mov rdx, kw_ok
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rax, 1
+        jmp .wa_ident
+.wa_fail:
+        mov rdx, kw_fail
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rax, 2
+.wa_ident:
+        push rax
+        call .word
+        push r8
+        push rcx
+        call .eol
+        pop rcx
+        pop r8
+        pop rax
+        ret
+.case_bind:
+        cmp rcx, 0
+        je .cb_none
+        cmp rax, 1
+        je .cb_ok
+        mov r9, rdx
+        and r9, 512
+        cmp r9, 0
+        jne .err
+        mov r9, 0
+        jmp .cb_new
+.cb_ok:
+        mov r9, rdx
+        and r9, 255
+.cb_new:
+        push r9
+        call .sym_new
+        pop r9
+        call .kind_of_code
+        mov [r11+24], rax
+        mov [r11+32], rdx
+        mov rax, [r14+0x1F0000]
+        mov [r11+16], rax
+        add rax, 1
+        mov [r14+0x1F0000], rax
+        mov rdx, [r11+16]
+        call .e_store_rdx
+.cb_none:
         ret
 .s_if:
         mov rax, [r14+0x1F0010]
@@ -1408,6 +1704,8 @@ proc start
         je .if_end
         cmp rax, 0
         je .err
+        cmp rax, 3
+        ja .err
         push rax
         push rdx
         call .e_jmp
@@ -1484,6 +1782,97 @@ proc start
         jne .err
         ret
 .expr:
+        call .cmpx
+        call .word
+        cmp rcx, 4
+        jne .expr_noelse
+        mov rdx, kw_else
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .expr_else
+.expr_noelse:
+        mov rsi, r8
+        mov rax, [r14+0x1F0050]
+        cmp rax, 256
+        jae .err
+        ret
+.expr_else:
+        mov rax, [r14+0x1F0050]
+        cmp rax, 256
+        jb .err
+        push rax
+        call .e_jz
+        push rdx
+        call .word
+        cmp rcx, 4
+        jne .expr_else_ret
+        mov rdx, kw_fail
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .expr_else_ret
+        mov rax, [r14+0x1F0028]
+        cmp rax, 0
+        jne .err
+        mov rax, [r14+0x1F0060]
+        cmp rax, 0
+        jne .err
+        mov rax, [r14+0x1F0058]
+        cmp rax, 256
+        jb .err
+        and rax, 512
+        mov rdx, [rsp+8]
+        and rdx, 512
+        cmp rax, rdx
+        jne .err
+        mov rdx, seq_fail
+        mov rcx, 7
+        call .ebytes
+        jmp .expr_else_ok
+.expr_else_ret:
+        cmp rcx, 3
+        jne .expr_else_val
+        mov rdx, kw_ret
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        jne .expr_else_val
+        call .ret_check
+        call .ret_tail
+        jmp .expr_else_ok
+.expr_else_val:
+        mov rsi, r8
+        call .cmpx
+        mov rax, [rsp+8]
+        and rax, 255
+        cmp rax, [r14+0x1F0050]
+        jne .err
+        call .e_jmp
+        pop rax
+        push rdx
+        mov rdx, rax
+        call .patch_here
+        mov rdx, seq_movrdx
+        mov rcx, 3
+        call .ebytes
+        pop rdx
+        call .patch_here
+        pop rax
+        and rax, 255
+        mov [r14+0x1F0050], rax
+        ret
+.expr_else_ok:
+        pop rdx
+        call .patch_here
+        mov rdx, seq_movrdx
+        mov rcx, 3
+        call .ebytes
+        pop rax
+        and rax, 255
+        mov [r14+0x1F0050], rax
+        ret
+.cmpx:
         call .add
         call .sksp
         mov rax, [rsi]
@@ -2495,6 +2884,16 @@ proc start
         call .eimm
         pop rdx
         ret
+.e_jnz:
+        mov rdx, seq_jnz
+        mov rcx, 5
+        call .ebytes
+        mov rdx, rdi
+        push rdx
+        mov rdx, 0
+        call .eimm
+        pop rdx
+        ret
 .e_jmp:
         mov rax, 233
         call .emit
@@ -3043,6 +3442,36 @@ rodata kw_ref
 end
 rodata kw_rw
     ascii "rw"
+end
+rodata kw_or
+    ascii "or"
+end
+rodata kw_none
+    ascii "none"
+end
+rodata kw_fail
+    ascii "fail"
+end
+rodata kw_case
+    ascii "case"
+end
+rodata kw_when
+    ascii "when"
+end
+rodata kw_ok
+    ascii "ok"
+end
+rodata seq_jnz
+    byte 0x48, 0x85, 0xc0, 0x0f, 0x85
+end
+rodata seq_tordx
+    byte 0x48, 0x89, 0xc2
+end
+rodata seq_fail
+    byte 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc9, 0xc3
+end
+rodata seq_okret
+    byte 0x48, 0x89, 0xc2, 0x31, 0xc0, 0xc9, 0xc3
 end
 rodata typetab
     byte 2

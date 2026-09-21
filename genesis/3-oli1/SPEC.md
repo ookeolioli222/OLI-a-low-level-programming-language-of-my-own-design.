@@ -39,7 +39,7 @@ observable result. Nothing is marked done without such a test.
 | 5 | several `proc`s per file, parameters (`p: T`, up to six), `-> T`, calls as statements and factors, forward calls, recursion | SysV registers, `call rel32` with fixups, `leave; ret` | **done** |
 | 6a | `zone z SIZE [at ADDR] … end`, `z.bytes(n)`, views as two-word values (literals, params, results, locals), `v[i]`, `v[i] <- x`, `v[a..b]`, `v[..b]`, `v[a..]`, `.addr`/`.len`, raw `[a]`/`[a] <- x`, traps | mmap/munmap, bump allocation, `cmp`/`jcc` to a shared trap stub | **done** |
 | 6b | `layout Name [packed] [align N] … end` with `f : T [align N]`, `Name.size`/`.align`/`.at(v)`, `z.make(Name)`, `ref Name` locals/params/results, `r.f` loads (zero/sign-extended) and `r.f <- x` stores, view fields | field offsets, sized moves, `cmp`/`test` + trap | **done** |
-| 6c | `T or E`, `case`, `fail` | tagged two-word values | planned |
+| 6c | `-> T or E` results, `fail [e]`, `e else fail` / `e else ret [v]` / `e else v`, `case e … when ok [x] … when fail [e] … end` (second arm may be `else`) | tag in `rax`, payload in `rdx`; `test`/`jcc` per resolution | **done** |
 
 Steps 2–6 grow oli-core until it can express `olic` (layer 4), at which point the
 compiler is ported into oli-core, `oli1` compiles it, and the fixpoint
@@ -250,6 +250,55 @@ field, a ref passed to a procedure, `hello`, 9), `layout_param.oli`
 `layout_packed.oli` (`packed`, `align 32` on a layout, `align 4` on a field,
 `P.at` of an odd address, 80), two `Name.at` traps and fifteen rejection
 programs in the harness. Every earlier fixture passes unchanged.
+
+## Step 6c (implemented)
+
+Fallible results follow design 0007 and `docs/ABI.md` §2: a `-> T or E`
+procedure returns the tag in `rax` (0 = ok, 1 = fail) and the payload in
+`rdx`. In oli-core `T` is an integer or `ref Name` (a view payload would need
+`sret`; rejected) and `E` is an integer type or `none`; the compile-time type
+code of a fallible result is `T + 256`, plus 512 when `E` is `none`. Only
+results and call values carry these bits: a parameter of type `T or E` and a
+fallible `entry` procedure are rejected.
+
+Inside a fallible procedure `ret v` (`v : T`) emits `mov rdx,rax; xor eax,eax;
+leave; ret` and `fail e` (`e : E`) emits `mov rdx,rax; mov eax,1; leave; ret`;
+bare `fail` is allowed only when `E` is `none` (it clears `rdx`) and `fail e`
+is rejected there. A call whose result is fallible must be resolved where it
+occurs — `expr` is `cmp_expr [else handler]` — and every other use (binding,
+statement, operand, argument, condition) rejects an unresolved value:
+
+- `e else fail` — `test rax,rax; jz ok; mov eax,1; leave; ret; ok: mov rax,rdx`:
+  the callee's payload propagates unchanged; the current procedure must be
+  fallible with the same `E` kind (`none` or integer), and, as for `ret`, not
+  inside a zone.
+- `e else ret [v]` — the ok test, then the `ret` statement's code (exit in the
+  entry procedure, ok-tagged return in a fallible one), then `mov rax,rdx`.
+- `e else v` — `v` must have type `T`; the fail branch evaluates `v` and jumps
+  past the `mov rax,rdx` of the ok branch.
+
+`case e` requires a fallible subject and exactly two arms in either order:
+`when ok [x]` and `when fail [e]`, where the second may be `else`. The subject
+is followed by `test rax,rax` and a `jz`/`jnz` to the second arm; each arm's
+optional name becomes a new frame slot (`x : T`, `e : E`) stored from `rdx`
+before the arm's block; the first arm ends with `jmp` past the second. A
+binding in a `when fail` arm is rejected when `E` is `none`; the same arm
+twice, a missing arm, or `when` outside `case` reject.
+
+Proven by `fallible.oli` (defaults, both arm orders, 157), `propagate.oli`
+(two-level `else fail`, `else v` in a non-fallible caller, `case` writing
+`ok`/`short`/`bad`, 51), `optional.oli` (`or none`, bare `fail`, `when fail`
+without a binding, `else` arm, `else ret 0`, a `ref Pair or none` payload,
+140), `else ret 7` in the entry procedure, `none` propagation with a bare
+`else ret`, fallible `if` conditions, a call as the default value, `case`
+inside `while` with `break` in an arm, and twenty-three rejection programs in
+the harness. Every earlier fixture passes unchanged.
+
+Known deviations from V0, to be closed by G4: `T or E` values cannot be bound
+or passed; `E` is untyped (any integer type name is one word); `fail` in an
+`else` handler propagates only from a call (there is no other fallible
+expression); `case` on integers, `choice` types and payload field patterns are
+not in oli-core.
 
 ## Diagnostics
 
