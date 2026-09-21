@@ -1,0 +1,21 @@
+[package]
+name = "olic"
+description = "The Oli-- compiler driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "olic"
+path = "src/main.rs"
+
+[dependencies]
+oli_diag = { path = "../oli_diag" }
+oli_lexer = { path = "../oli_lexer" }
+oli_ast = { path = "../oli_ast" }
+oli_parser = { path = "../oli_parser" }
+oli_sema = { path = "../oli_sema" }
+
+[lints]
+workspace = true

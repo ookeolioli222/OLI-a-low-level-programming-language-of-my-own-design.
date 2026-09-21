@@ -1,0 +1,7 @@
+; format.hex - every lexical feature of a listing
+00 01 AB cd  Ef 10
+# a hash comment ff ff
+-- an Oli-- style comment 11 22
+ff;inline comment 33
+	 7f  
+a5

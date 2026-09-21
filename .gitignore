@@ -1,0 +1,4 @@
+/reference/target
+/genesis/build
+**/*.rs.bk
+*.oli.out

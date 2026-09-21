@@ -1,0 +1,33 @@
+module genesis.signed
+proc main
+    calls none
+    entry
+    machine x64
+        mov rax, -84
+        cqo
+        mov r8, 2
+        idiv r8
+        neg rax
+        imul r9, rax, 2
+        shr r9, 1
+        mov rcx, 2
+        shl r9, cl
+        sar r9, cl
+        mov r10, 0
+        not r10
+        and r9, r10
+        xor r9, -1
+        not r9
+        add r9, 10
+        sub r9, 10
+        inc r9
+        dec r9
+        push -1
+        pop r11
+        imul r11, r9
+        neg r11
+        mov rdi, r11
+        mov rax, 60
+        syscall
+    end
+end

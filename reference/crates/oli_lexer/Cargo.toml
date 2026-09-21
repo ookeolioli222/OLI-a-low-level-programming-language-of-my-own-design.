@@ -1,0 +1,13 @@
+[package]
+name = "oli_lexer"
+description = "Lexer for Oli-- V0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oli_diag = { path = "../oli_diag" }
+
+[lints]
+workspace = true

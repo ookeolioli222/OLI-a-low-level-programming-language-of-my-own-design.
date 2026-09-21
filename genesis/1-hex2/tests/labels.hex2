@@ -1,0 +1,26 @@
+; labels.hex2 - exercises every hex2 form; exits with 42.
+7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+02 00 3e 00 01 00 00 00
+&start 00 00 00 00                  ; e_entry from a label
+40 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00
+40 00 38 00 01 00 00 00 00 00 00 00
+01 00 00 00 05 00 00 00
+00 00 00 00 00 00 00 00
+00 00 40 00 00 00 00 00
+00 00 40 00 00 00 00 00
+99 00 00 00 00 00 00 00
+99 00 00 00 00 00 00 00
+00 10 00 00 00 00 00 00
+:start
+e8 %f1              ; call f1 (rel32 forward)
+b8 3c 00 00 00      ; mov eax, 60
+0f 05               ; syscall
+:f1
+eb !f2              ; jmp f2 (rel8 forward)
+bf 01 00 00 00      ; mov edi, 1 (skipped)
+:f2
+bf 2a 00 00 00      ; mov edi, 42
+c3                  ; ret
+@f1                 ; a 64-bit absolute address as data

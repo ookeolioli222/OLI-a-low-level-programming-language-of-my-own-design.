@@ -1,0 +1,122 @@
+(module kernel
+  (import core.mem)
+  (layout Multiboot2Header align 8
+    (field magic u32)
+    (field architecture u32)
+    (field header_length u32)
+    (field checksum u32)
+    (field end_tag_type u16)
+    (field end_tag_flags u16)
+    (field end_tag_size u32))
+  (layout GdtPointer packed
+    (field limit u16)
+    (field base addr u64))
+  (const mb_header : Multiboot2Header (lit (name Multiboot2Header) (magic: (int 3897708758)) (architecture: (int 0)) (header_length: (field (name Multiboot2Header) size)) (checksum: (wrap (- (int 0) (+ (+ (int 3897708758) (int 0)) (convert u32 (field (name Multiboot2Header) size)))))) (end_tag_type: (int 0)) (end_tag_flags: (int 0)) (end_tag_size: (int 8)))
+    (section ".text.boot"))
+  (static boot_stack : [16384]u8
+    (section ".bss.boot")
+    (align 16))
+  (const gdt : [3]u64 (array (int 0) (int 49427445715107839) (int 58425848876826623))
+    (align 16))
+  (static heap_region : [4194304]u8
+    (section ".bss")
+    (align 4096))
+  (const COM1 : port u8 (int 1016))
+  (const HHDM : uword (int 18446603336221196288))
+  (static ticks : u64 (int 0))
+  (pub proc start () -> never
+    (entry)
+    (calls none)
+    (section ".text.boot")
+    (permit cpu.asm)
+    (body
+      (machine x64
+        (instr lea rsp (mem +boot_stack +16384))
+        (instr xor ebp ebp)
+        (instr call kernel.main)
+        (instr hlt))))
+  (proc virt_of ((p physaddr)) -> addr u8
+    (body
+      (ret (convert addr u8 (+ (convert uword (name p)) (name HHDM))))))
+  (proc vga_put ((col uword) (row uword) (ch u8) (attr u8))
+    (permit memory.mmio)
+    (body
+      (bind vga (call (field (name mem) mmio) (type u16) (int 753664) (* (int 80) (int 25))))
+      (store (index (name vga) (+ (* (name row) (int 80)) (name col))) (| (<< (convert u16 (name attr)) (int 8)) (convert u16 (name ch))))))
+  (proc serial_put ((b u8))
+    (permit io.port)
+    (body
+      (while (== (& (call (field (convert port u8 (int 1021)) in)) (int 32)) (int 0))
+        (body
+          (expr (call (field (name cpu) pause)))))
+      (expr (call (field (name COM1) out) (name b)))))
+  (proc load_gdt ()
+    (permit cpu.control cpu.asm)
+    (body
+      (place p : GdtPointer (lit (name GdtPointer) (limit: (- (* (int 3) (int 8)) (int 1))) (base: (addr-of (name gdt)))))
+      (expr (call (field (name cpu) lgdt) (ref-of (name p))))
+      (machine x64
+        (instr mov ax 16)
+        (instr mov ds ax)
+        (instr mov es ax)
+        (instr mov ss ax)
+        (instr push 8)
+        (instr lea rax (mem +.next))
+        (instr push rax)
+        (instr retfq)
+        (label next)
+        (instr mov (mem qword +rbp -8) rax)
+        (instr mov rcx (mem +rax +rcx*8 +16))
+        (instr in al dx)
+        (instr out dx al)
+        (instr and rax -1)
+        (clobber rax memory))))
+  (proc on_timer ((frame ref core.x64.InterruptFrame))
+    (calls interrupt)
+    (permit memory.mmio cpu.interrupt)
+    (body
+      (store (name ticks) (wrap (+ (name ticks) (int 1))))
+      (expr (call (field (name pic) end_of_interrupt) (int 0)))))
+  (proc on_trap ((kind core.TrapKind) (site core.Site)) -> never
+    (traps)
+    (permit cpu.halt memory.mmio)
+    (body
+      (expr (call (name serial_put) (char "!")))
+      (loop
+        (body
+          (expr (call (field (name cpu) halt)))))))
+  (proc main () -> never
+    (permit cpu.halt memory.raw)
+    (body
+      (zone boot (int 1048576) at (convert addr u8 (int 2097152))
+        (body
+          (bind tables (call (field (name boot) make) (name Multiboot2Header)))
+          (store (field (name tables) magic) (int 1))))
+      (zone kheap (int 4194304) from (name heap_region)
+        (body
+          (bind buf (call (field (name kheap) bytes) (int 256)))
+          (each i (range (int 0) (field (name buf) len))
+            (body
+              (store (index (name buf) (name i)) (convert u8 wrap (name i)))))
+          (bind v (index (name buf) (range (int 8) end)))))
+      (expr (call (name load_gdt)))
+      (place x : s64 (neg (int 5)))
+      (if (< (name x) (neg (int 1)))
+        (then
+          (store (name x) (bitnot (name x))))
+        (elif (or (== (name x) (int 0)) (not (and (> (name x) (int 3)) (< (name x) (int 9)))))
+          (store (name x) (+ (* (name x) (int 2)) (int 1))))
+        (else
+          (store (name x) (sat (- (name x) (int 1))))))
+      (bind r (else (checked (+ (name x) (int 1))) (default (int 0))))
+      (bind q (else (convert u8 checked (name x)) (fail)))
+      (case (name x)
+        (when (int 0)
+          (expr (call (name serial_put) (char "0"))))
+        (when (int -1)
+          (expr (call (name serial_put) (char "-"))))
+        (else
+          (expr (call (name serial_put) (char "?")))))
+      (loop
+        (body
+          (expr (call (field (name cpu) halt))))))))

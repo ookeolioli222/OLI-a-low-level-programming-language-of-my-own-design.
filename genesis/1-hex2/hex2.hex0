@@ -1,0 +1,302 @@
+; hex2 - hex listings with labels. Written in hex0 notation (plain bytes,
+; jumps computed by hand for the last time). 882 bytes, Linux x86-64 ELF.
+;
+; Input (stdin) is a listing like hex0's, plus:
+;   :name    define a label at the current output offset
+;   %name    emit a 32-bit little-endian displacement, relative to the end of the field
+;   !name    emit an 8-bit displacement, relative to the end of the field (exit 3 if out of range)
+;   &name    emit the 32-bit absolute address 0x400000 + offset
+;   @name    emit the same as a 64-bit absolute address
+; Names end at whitespace and use at most 31 characters. Two passes over the
+; input (kept in memory); an undefined label prints its name on stderr and exits 2.
+;
+; Registers: rbx = input cursor, r10 = end of input, r8d = pending nibble,
+;            r13 = label count, r14 = pass (0/1), r15 = output offset.
+; Memory:  0x400f00 name buffer (32 bytes)   0x401000 input (1 MiB)
+;          0x501000 output (1 MiB)           0x601000 label table (40 bytes each: name[32], offset u64)
+
+; ---- ELF64 header ----
+7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+02 00 3e 00 01 00 00 00
+78 00 40 00 00 00 00 00                           ; e_entry = 0x400078
+40 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00
+40 00 38 00 01 00 00 00 00 00 00 00
+; ---- program header ----
+01 00 00 00 07 00 00 00                           ; PT_LOAD, R+W+X
+00 00 00 00 00 00 00 00
+00 00 40 00 00 00 00 00
+00 00 40 00 00 00 00 00
+72 03 00 00 00 00 00 00                           ; p_filesz = 0x372
+00 00 30 00 00 00 00 00                           ; p_memsz = 3 MiB (buffers and the label table)
+00 10 00 00 00 00 00 00
+
+; ---- main (0x078) ----
+bb 00 10 40 00              ; 078  mov ebx, 0x401000        ; input cursor
+; rd:
+31 ff                       ; 07d  xor edi, edi
+48 89 de                    ; 07f  mov rsi, rbx
+ba 00 00 01 00              ; 082  mov edx, 0x10000
+31 c0                       ; 087  xor eax, eax             ; read
+0f 05                       ; 089  syscall
+48 85 c0                    ; 08b  test rax, rax
+7e 05                       ; 08e  jle rd_done
+48 01 c3                    ; 090  add rbx, rax
+eb e8                       ; 093  jmp rd
+; rd_done:
+49 89 da                    ; 095  mov r10, rbx             ; end of input
+45 31 ed                    ; 098  xor r13d, r13d           ; no labels yet
+45 31 f6                    ; 09b  xor r14d, r14d           ; pass 0
+e8 28 00 00 00              ; 09e  call scan
+41 be 01 00 00 00           ; 0a3  mov r14d, 1              ; pass 1
+e8 1d 00 00 00              ; 0a9  call scan
+bf 01 00 00 00              ; 0ae  mov edi, 1
+be 00 10 50 00              ; 0b3  mov esi, 0x501000        ; output buffer
+4c 89 fa                    ; 0b8  mov rdx, r15
+b8 01 00 00 00              ; 0bb  mov eax, 1               ; write
+0f 05                       ; 0c0  syscall
+31 ff                       ; 0c2  xor edi, edi
+; exit:
+b8 3c 00 00 00              ; 0c4  mov eax, 60
+0f 05                       ; 0c9  syscall
+
+; ---- scan (0x0cb): one pass over the input ----
+45 31 ff                    ; 0cb  xor r15d, r15d           ; offset 0
+bb 00 10 40 00              ; 0ce  mov ebx, 0x401000
+41 b8 ff ff ff ff           ; 0d3  mov r8d, -1              ; no pending nibble
+; sc_loop:
+4c 39 d3                    ; 0d9  cmp rbx, r10
+72 01                       ; 0dc  jb sc_body
+c3                          ; 0de  ret                      ; sc_done
+; sc_body:
+0f b6 03                    ; 0df  movzx eax, byte [rbx]
+48 ff c3                    ; 0e2  inc rbx
+3c 3b                       ; 0e5  cmp al, ';'
+74 52                       ; 0e7  je skl
+3c 23                       ; 0e9  cmp al, '#'
+74 4e                       ; 0eb  je skl
+3c 2d                       ; 0ed  cmp al, '-'
+74 4a                       ; 0ef  je skl
+3c 3a                       ; 0f1  cmp al, ':'
+74 57                       ; 0f3  je def_label
+3c 25                       ; 0f5  cmp al, '%'
+74 67                       ; 0f7  je do_rel32
+3c 21                       ; 0f9  cmp al, '!'
+0f 84 88 00 00 00           ; 0fb  je do_rel8
+3c 26                       ; 101  cmp al, '&'
+0f 84 b0 00 00 00           ; 103  je do_abs32
+3c 40                       ; 109  cmp al, '@'
+0f 84 c7 00 00 00           ; 10b  je do_abs64
+e8 0a 01 00 00              ; 111  call hexval
+85 c0                       ; 116  test eax, eax
+78 bf                       ; 118  js sc_loop               ; not a hex digit
+45 85 c0                    ; 11a  test r8d, r8d
+78 17                       ; 11d  js first_nib
+41 c1 e0 04                 ; 11f  shl r8d, 4
+41 09 c0                    ; 123  or r8d, eax
+44 89 c0                    ; 126  mov eax, r8d
+e8 0d 01 00 00              ; 129  call emit
+41 b8 ff ff ff ff           ; 12e  mov r8d, -1
+eb a3                       ; 134  jmp sc_loop
+; first_nib:
+41 89 c0                    ; 136  mov r8d, eax
+eb 9e                       ; 139  jmp sc_loop
+; skl: skip to the end of the line
+4c 39 d3                    ; 13b  cmp rbx, r10
+73 9e                       ; 13e  jae sc_done
+0f b6 03                    ; 140  movzx eax, byte [rbx]
+48 ff c3                    ; 143  inc rbx
+3c 0a                       ; 146  cmp al, 10
+75 f1                       ; 148  jne skl
+eb 8d                       ; 14a  jmp sc_loop
+; def_label:
+e8 18 01 00 00              ; 14c  call read_name
+45 85 f6                    ; 151  test r14d, r14d
+75 83                       ; 154  jnz sc_loop              ; pass 1: already defined
+e8 4d 01 00 00              ; 156  call add_label
+e9 79 ff ff ff              ; 15b  jmp sc_loop
+; do_rel32:
+e8 04 01 00 00              ; 160  call read_name
+45 85 f6                    ; 165  test r14d, r14d
+74 16                       ; 168  jz adv4
+e8 57 01 00 00              ; 16a  call lookup
+4c 29 f8                    ; 16f  sub rax, r15
+48 83 e8 04                 ; 172  sub rax, 4
+e8 d0 00 00 00              ; 176  call emit32
+e9 59 ff ff ff              ; 17b  jmp sc_loop
+; adv4:
+49 83 c7 04                 ; 180  add r15, 4
+e9 50 ff ff ff              ; 184  jmp sc_loop
+; do_rel8:
+e8 db 00 00 00              ; 189  call read_name
+45 85 f6                    ; 18e  test r14d, r14d
+74 1e                       ; 191  jz adv1
+e8 2e 01 00 00              ; 193  call lookup
+4c 29 f8                    ; 198  sub rax, r15
+48 ff c8                    ; 19b  dec rax
+48 0f be c8                 ; 19e  movsx rcx, al
+48 39 c1                    ; 1a2  cmp rcx, rax
+75 59                       ; 1a5  jne err_range
+e8 8f 00 00 00              ; 1a7  call emit
+e9 28 ff ff ff              ; 1ac  jmp sc_loop
+; adv1:
+49 ff c7                    ; 1b1  inc r15
+e9 20 ff ff ff              ; 1b4  jmp sc_loop
+; do_abs32:
+e8 ab 00 00 00              ; 1b9  call read_name
+45 85 f6                    ; 1be  test r14d, r14d
+74 bd                       ; 1c1  jz adv4
+e8 fe 00 00 00              ; 1c3  call lookup
+48 05 00 00 40 00           ; 1c8  add rax, 0x400000
+e8 78 00 00 00              ; 1ce  call emit32
+e9 01 ff ff ff              ; 1d3  jmp sc_loop
+; do_abs64:
+e8 8c 00 00 00              ; 1d8  call read_name
+45 85 f6                    ; 1dd  test r14d, r14d
+74 15                       ; 1e0  jz adv8
+e8 df 00 00 00              ; 1e2  call lookup
+48 05 00 00 40 00           ; 1e7  add rax, 0x400000
+e8 60 00 00 00              ; 1ed  call emit64
+e9 e2 fe ff ff              ; 1f2  jmp sc_loop
+; adv8:
+49 83 c7 08                 ; 1f7  add r15, 8
+e9 d9 fe ff ff              ; 1fb  jmp sc_loop
+
+; ---- err_range (0x200): "hex2: rel8 out of range", exit 3 ----
+bf 02 00 00 00              ; 200  mov edi, 2
+be 59 03 40 00              ; 205  mov esi, msg_range
+ba 18 00 00 00              ; 20a  mov edx, 24
+b8 01 00 00 00              ; 20f  mov eax, 1
+0f 05                       ; 214  syscall
+bf 03 00 00 00              ; 216  mov edi, 3
+e9 a4 fe ff ff              ; 21b  jmp exit
+
+; ---- hexval (0x220): al = char -> eax = 0..15, or -1 ----
+2c 30                       ; 220  sub al, '0'
+3c 09                       ; 222  cmp al, 9
+76 0e                       ; 224  jbe hv_ok
+2c 11                       ; 226  sub al, 0x11
+3c 05                       ; 228  cmp al, 5
+76 06                       ; 22a  jbe hv_up
+2c 20                       ; 22c  sub al, 0x20
+3c 05                       ; 22e  cmp al, 5
+77 03                       ; 230  ja hv_bad
+; hv_up:
+04 0a                       ; 232  add al, 10
+; hv_ok:
+c3                          ; 234  ret
+; hv_bad:
+b8 ff ff ff ff              ; 235  mov eax, -1
+c3                          ; 23a  ret
+
+; ---- emit (0x23b): al -> output (pass 1 only), offset++ ----
+45 85 f6                    ; 23b  test r14d, r14d
+74 07                       ; 23e  jz em_skip
+41 88 87 00 10 50 00        ; 240  mov [r15 + 0x501000], al
+; em_skip:
+49 ff c7                    ; 247  inc r15
+c3                          ; 24a  ret
+
+; ---- emit32 (0x24b) / emit64 (0x252): rax -> little-endian bytes ----
+b9 04 00 00 00              ; 24b  mov ecx, 4
+eb 05                       ; 250  jmp e_loop
+b9 08 00 00 00              ; 252  mov ecx, 8
+; e_loop:
+50                          ; 257  push rax
+51                          ; 258  push rcx
+e8 dd ff ff ff              ; 259  call emit
+59                          ; 25e  pop rcx
+58                          ; 25f  pop rax
+48 c1 e8 08                 ; 260  shr rax, 8
+ff c9                       ; 264  dec ecx
+75 ef                       ; 266  jnz e_loop
+c3                          ; 268  ret
+
+; ---- read_name (0x269): copy a label name into the name buffer ----
+bf 00 0f 40 00              ; 269  mov edi, 0x400f00        ; name buffer
+31 c0                       ; 26e  xor eax, eax
+b9 20 00 00 00              ; 270  mov ecx, 32
+f3 aa                       ; 275  rep stosb                ; clear it
+bf 00 0f 40 00              ; 277  mov edi, 0x400f00
+31 d2                       ; 27c  xor edx, edx             ; length so far
+; rn_loop:
+4c 39 d3                    ; 27e  cmp rbx, r10
+73 24                       ; 281  jae rn_done
+0f b6 03                    ; 283  movzx eax, byte [rbx]
+3c 20                       ; 286  cmp al, ' '
+74 1d                       ; 288  je rn_done
+3c 09                       ; 28a  cmp al, 9
+74 19                       ; 28c  je rn_done
+3c 0a                       ; 28e  cmp al, 10
+74 15                       ; 290  je rn_done
+3c 0d                       ; 292  cmp al, 13
+74 11                       ; 294  je rn_done
+48 ff c3                    ; 296  inc rbx
+83 fa 1f                    ; 299  cmp edx, 31
+73 e0                       ; 29c  jae rn_loop              ; longer names are cut
+88 07                       ; 29e  mov [rdi], al
+48 ff c7                    ; 2a0  inc rdi
+ff c2                       ; 2a3  inc edx
+eb d7                       ; 2a5  jmp rn_loop
+; rn_done:
+c3                          ; 2a7  ret
+
+; ---- add_label (0x2a8): name buffer + current offset -> table ----
+49 6b fd 28                 ; 2a8  imul rdi, r13, 40
+48 81 c7 00 10 60 00        ; 2ac  add rdi, 0x601000        ; label table
+be 00 0f 40 00              ; 2b3  mov esi, 0x400f00
+b9 20 00 00 00              ; 2b8  mov ecx, 32
+f3 a4                       ; 2bd  rep movsb
+4c 89 3f                    ; 2bf  mov [rdi], r15
+49 ff c5                    ; 2c2  inc r13
+c3                          ; 2c5  ret
+
+; ---- lookup (0x2c6): name buffer -> rax = offset, or exit 2 ----
+45 31 c9                    ; 2c6  xor r9d, r9d
+; lk_loop:
+4d 39 e9                    ; 2c9  cmp r9, r13
+73 22                       ; 2cc  jae lk_missing
+49 6b f9 28                 ; 2ce  imul rdi, r9, 40
+48 81 c7 00 10 60 00        ; 2d2  add rdi, 0x601000
+be 00 0f 40 00              ; 2d9  mov esi, 0x400f00
+b9 20 00 00 00              ; 2de  mov ecx, 32
+f3 a6                       ; 2e3  repe cmpsb
+75 04                       ; 2e5  jne lk_next
+48 8b 07                    ; 2e7  mov rax, [rdi]           ; the offset after the name
+c3                          ; 2ea  ret
+; lk_next:
+49 ff c1                    ; 2eb  inc r9
+eb d9                       ; 2ee  jmp lk_loop
+; lk_missing: "hex2: undefined label NAME", exit 2
+bf 02 00 00 00              ; 2f0  mov edi, 2
+be 43 03 40 00              ; 2f5  mov esi, msg_undef
+ba 16 00 00 00              ; 2fa  mov edx, 22
+b8 01 00 00 00              ; 2ff  mov eax, 1
+0f 05                       ; 304  syscall
+be 00 0f 40 00              ; 306  mov esi, 0x400f00
+31 d2                       ; 30b  xor edx, edx
+; sl:
+80 3c 16 00                 ; 30d  cmp byte [rsi + rdx], 0
+74 04                       ; 311  je sl_done
+ff c2                       ; 313  inc edx
+eb f6                       ; 315  jmp sl
+; sl_done:
+bf 02 00 00 00              ; 317  mov edi, 2
+b8 01 00 00 00              ; 31c  mov eax, 1
+0f 05                       ; 321  syscall
+bf 02 00 00 00              ; 323  mov edi, 2
+be 71 03 40 00              ; 328  mov esi, msg_nl
+ba 01 00 00 00              ; 32d  mov edx, 1
+b8 01 00 00 00              ; 332  mov eax, 1
+0f 05                       ; 337  syscall
+bf 02 00 00 00              ; 339  mov edi, 2
+e9 81 fd ff ff              ; 33e  jmp exit
+
+; ---- data ----
+; msg_undef (0x343): "hex2: undefined label "
+68 65 78 32 3a 20 75 6e 64 65 66 69 6e 65 64 20 6c 61 62 65 6c 20
+; msg_range (0x359): "hex2: rel8 out of range\n"
+68 65 78 32 3a 20 72 65 6c 38 20 6f 75 74 20 6f 66 20 72 61 6e 67 65 0a
+; msg_nl (0x371)
+0a

@@ -1,0 +1,4 @@
+proc f
+    if a then g() else 0
+end
+-- expect: E0016 @ 2:19

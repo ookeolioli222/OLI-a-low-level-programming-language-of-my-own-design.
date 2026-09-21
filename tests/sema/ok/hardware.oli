@@ -1,0 +1,27 @@
+-- target: freestanding
+-- reference: skip
+-- Design 0015 (V0 subset): hardware places and commands instead of mnemonics.
+module hw
+
+boot_stack : [16K]u8
+    section ".bss.boot"
+    align 16
+
+pub proc start -> never
+    entry
+    calls none
+    permit cpu.control
+    cpu.stack <- addr boot_stack + 16K
+    cpu.frame <- 0
+    cpu.call(main)
+    cpu.halt()
+end
+
+proc main -> never
+permit cpu.halt
+    id := cpu.id(0)
+    if id.b == 0x756E6547 then cpu.pause()
+    loop
+        cpu.halt()
+    end
+end

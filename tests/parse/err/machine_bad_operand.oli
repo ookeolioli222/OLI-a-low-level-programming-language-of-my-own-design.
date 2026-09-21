@@ -1,0 +1,11 @@
+proc f
+permit cpu.asm
+    machine x64
+        mov rax, [a.b*8]
+        out ebx -> g()
+        lea rax, ]
+    end
+end
+-- expect: E0019 @ 4:19
+-- expect: E0017 @ 5:20
+-- expect: E0019 @ 6:18

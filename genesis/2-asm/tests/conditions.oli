@@ -1,0 +1,35 @@
+module genesis.conditions
+proc main
+    calls none
+    entry
+    machine x64
+    .a:
+        je .a
+    .b:
+        jz .b
+    .c:
+        jne .c
+    .d:
+        jnz .d
+    .e:
+        jl .e
+    .f:
+        jle .f
+    .g:
+        jg .g
+    .h:
+        jge .h
+    .i:
+        jb .i
+    .j:
+        jbe .j
+    .k:
+        ja .k
+    .l:
+        jae .l
+    .m:
+        js .m
+    .n:
+        jns .n
+    end
+end

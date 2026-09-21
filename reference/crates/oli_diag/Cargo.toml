@@ -1,0 +1,10 @@
+[package]
+name = "oli_diag"
+description = "Source files, spans and diagnostics for the Oli-- compiler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

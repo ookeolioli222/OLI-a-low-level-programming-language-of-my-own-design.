@@ -1,0 +1,22 @@
+module genesis.branches
+proc main
+    calls none
+    entry
+    machine x64
+    .start:
+        jmp .later
+        call helper
+        je .start
+        jnz .later
+    .later:
+        mov rax, helper
+        ret
+    end
+end
+proc helper
+    calls none
+    machine x64
+    .start:
+        ret
+    end
+end

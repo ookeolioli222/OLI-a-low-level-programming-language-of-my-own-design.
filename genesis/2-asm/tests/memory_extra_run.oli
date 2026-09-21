@@ -1,0 +1,26 @@
+module genesis.memory_extra_run
+proc main
+    calls none
+    entry
+    machine x64
+        sub rsp, 64
+        mov r12, rsp
+        mov [r12], 6
+        imul rax, [r12], 7
+        mov [r12+8], rax
+        push [r12+8]
+        pop [r12+16]
+        mov rdi, [r12+16]
+        mov rax, 7
+        imul rax, [r12]
+        cmp rdi, rax
+        jne .bad
+        add rsp, 64
+        mov eax, 60
+        syscall
+    .bad:
+        mov edi, 99
+        mov eax, 60
+        syscall
+    end
+end

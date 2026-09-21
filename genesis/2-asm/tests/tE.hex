@@ -1,0 +1,7 @@
+48 c7 c0 01 00 00 00   ; mov rax, 1
+48 c1 e0 05            ; shl rax, 5       -> 32
+48 83 c0 09            ; add rax, 9       -> 41
+48 ff c0               ; inc rax          -> 42
+48 89 c7               ; mov rdi, rax
+b8 3c 00 00 00         ; mov eax, 60
+0f 05                  ; syscall

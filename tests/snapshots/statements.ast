@@ -1,0 +1,50 @@
+(module statements
+  (layout Point
+    (field x s32)
+    (field y s32))
+  (choice Shape
+    (variant dot)
+    (variant line
+      (field a Point)
+      (field b Point)))
+  (const ORIGIN : Point (lit (name Point) (x: (int 0)) (y: (int 0))))
+  (const LIMIT (int 100))
+  (proc area ((s ref Shape)) -> u64 or none
+    (body
+      (case (name s)
+        (when dot
+          (ret (int 0)))
+        (when line {a b}
+          (bind dx (wrap (convert u64 bits (- (convert s64 (field (name b) x)) (convert s64 (field (name a) x))))))
+          (ret (name dx)))
+        (else
+          (fail)))))
+  (proc demo ((v rw view u8) (n uword)) -> u8
+    (body
+      (place i : uword (int 0))
+      (place acc : u8 (int 0))
+      (while (< (name i) (name n))
+        (body
+          (store (name acc) (wrap (+ (name acc) (index (name v) (name i)))))
+          (store (name i) (+ (name i) (int 1)))))
+      (each b (index (name v) (range (int 1) (name n)))
+        (body
+          (if-then (== (name b) (int 0))
+            (continue))
+          (if-then (== (name b) (int 255))
+            (break))
+          (store (name acc) (sat (+ (name acc) (name b))))))
+      (each k (range (int 0) (name LIMIT))
+        (body
+          (store (name acc) (^ (name acc) (convert u8 wrap (name k))))))
+      (loop
+        (body
+          (if (> (name acc) (int 200))
+            (then
+              (store (name acc) (- (name acc) (int 100))))
+            (elif (> (name acc) (int 100))
+              (store (name acc) (- (name acc) (int 50))))
+            (else
+              (break)))))
+      (bind total (else (checked (* (name acc) (int 2))) (default (int 0))))
+      (ret (name total)))))

@@ -1,0 +1,4 @@
+proc f
+end
+import std.os
+-- expect: E0023 @ 3:1

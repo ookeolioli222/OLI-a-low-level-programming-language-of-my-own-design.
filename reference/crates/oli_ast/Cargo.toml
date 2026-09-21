@@ -1,0 +1,14 @@
+[package]
+name = "oli_ast"
+description = "Abstract syntax tree and printer for Oli-- V0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oli_diag = { path = "../oli_diag" }
+oli_lexer = { path = "../oli_lexer" }
+
+[lints]
+workspace = true

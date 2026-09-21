@@ -1,0 +1,15 @@
+[package]
+name = "oli_parser"
+description = "Recursive-descent parser for Oli-- V0"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oli_diag = { path = "../oli_diag" }
+oli_lexer = { path = "../oli_lexer" }
+oli_ast = { path = "../oli_ast" }
+
+[lints]
+workspace = true

@@ -1,0 +1,4 @@
+proc f
+    x := a < b < c
+end
+-- expect: E0031 @ 2:16

@@ -1,0 +1,11 @@
+proc main -> s32
+    entry
+    x := 10
+    _y := x
+    _z : u8 := 300
+    _w : u8 := u32(5)
+    ret 0
+end
+-- expect: E0201 @ 3:10
+-- expect: E0202 @ 5:16
+-- expect: E0202 @ 6:16

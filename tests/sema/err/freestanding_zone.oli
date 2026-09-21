@@ -1,0 +1,11 @@
+-- target: freestanding
+proc start -> never
+    entry
+    zone z 4K
+    end
+    os.syscall(60, 0)
+    loop
+    end
+end
+-- expect: E0330 @ 4:10
+-- expect: E0401 @ 6:5
