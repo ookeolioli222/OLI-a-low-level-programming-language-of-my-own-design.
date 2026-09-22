@@ -1,5 +1,13 @@
 # OIR — Oli Intermediate Representation
 
+> **Status (2026-09-22).** A design for the back end of G4. No OIR exists yet:
+> `olic` ends at the semantic graph, which `--show-sema` prints
+> (`compiler/SPEC.md`). Everything below — the instruction set, the passes, the
+> verifier and the `--show-oir` / `--show-machine-ir` / `--show-asm` flags — is
+> the plan for the next stage, not the state of the repository. The only code
+> generator that exists is `oli1`, which lowers oli-core straight to machine
+> bytes with no intermediate representation at all (`genesis/3-oli1/SPEC.md`).
+
 OIR is the compiler's central data structure between the semantic graph and
 machine lowering. It is designed for Oli-- semantics — zones, views, memory
 spaces, capabilities, checks — not borrowed from LLVM. Nothing an optimizer

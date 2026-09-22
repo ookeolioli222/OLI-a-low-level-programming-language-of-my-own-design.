@@ -1,5 +1,13 @@
 # Oli-- ABI (x86-64)
 
+> **Status (2026-09-22).** Partly implemented. The value layout rules of §3 are
+> enforced today by `olic`'s item stage — every size, alignment and field
+> offset in `tests/snapshots/*.sema` comes from them — and the argument
+> registers of §1, the syscall convention of §5 and the ELF64 output of §7 are
+> what `oli1` already emits for oli-core. What no program in the repository
+> does yet is emit V0 code: the full type classification of §2, symbol naming
+> (§4) and interrupt procedures (§8) are design until G4's back end lands.
+
 Oli-- has one stable low-level ABI per target. On x86-64 it is the System V
 AMD64 convention, chosen because it is the machine's own convention on Linux
 and gives C interoperability at zero cost. Oli-- adds precise rules for its

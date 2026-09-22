@@ -671,18 +671,33 @@ Implemented today **[runs]**:
 | E0024 | `module` line is not first |
 | E0031 | chained comparison |
 | E0032 | `{` at the end of a line used as a block opener |
+| E0101 | a name already in scope is shadowed |
 | E0106 | constant depends on itself |
+| E0110 | store into an immutable binding |
+| E0111 | store into a read-only place |
+| E0200 | type mismatch |
+| E0201 | integer literal needs a type |
+| E0202 | lossy conversion needs `wrap`, `sat` or `checked` |
+| E0203 | mixed address spaces |
 | E0204 | layout contains itself by value |
 | E0212 | value does not fit its type |
+| E0220 | read of an uninitialized place |
+| E0230 | missing `ret` |
+| E0231 | unreachable statement |
+| E0300 | value does not outlive its region |
+| E0310 | unhandled failure |
+| E0311 | `case` is not exhaustive |
+| E0330 | a freestanding zone needs `at` or `from` |
 | E0401 | capability not permitted here |
 | E0900 | feature not implemented |
 | W0001 | doc comment documents nothing |
 
-Specified and **[planned]**: E0013, E0015, E0021, E0030 (syntax) and the
-semantic families E01xx (items and names), E02xx (types and layouts), E03xx
-(flow, regions, failures), E04xx (capabilities), E0900 (feature not
-implemented). The rule is absolute: an unimplemented feature reports `E0900`
-— no silent fallback, and the compiler never crashes on user input.
+Specified and **[planned]**: E0013, E0015, E0021, E0030 (syntax); the E02xx
+codes for arguments and literals (E0205–E0209); E0602/E0603 and the rest of
+the program rules; and implicit narrowing of a computed value (E0202), which
+is written but gated until oli-core has conversions. The rule is absolute: an
+unimplemented feature reports `E0900` — no silent fallback, and the compiler
+never crashes on user input.
 
 ---
 

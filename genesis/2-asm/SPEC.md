@@ -424,4 +424,5 @@ instructions; memory-source two/three-operand `imul`; memory push/pop;
 symbol-only memory operands; writable `data`, file-free `bss`, separate ELF
 segment permissions; `pub`/`export` clauses. The optional symbol table and
 source-line diagnostics are not emitted. The module name is validated but
-no qualified ELF symbol table is generated. G3/G4 have not started.
+no qualified ELF symbol table is generated. G3 (`oli1`) is green through step
+6e and G4's front end is complete; neither needs the missing forms above yet.

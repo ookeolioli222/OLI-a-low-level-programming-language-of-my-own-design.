@@ -3,9 +3,12 @@
 Every construct a programmer can write, grouped by what it does to the machine,
 each with what it does, its cost class, an example, and its status.
 
-**Status:** `impl` = accepted by the reference front end and its fixtures ·
-`spec` = accepted design, specification written · `V1`/`V2` = planned language
-version · `genesis` = a bootstrap tool, not language syntax.
+**Status:** `impl` = parsed and analysed by `olic` (`compiler/`, written in
+Oli--) and pinned by the fixture corpus; code generation is G4's next stage, so
+nothing below runs as a native binary yet outside oli-core (`docs/LANGUAGE.md`
+marks what runs) · `spec` = accepted design, specification written ·
+`V1`/`V2` = planned language version · `genesis` = a bootstrap tool, not
+language syntax.
 
 **Cost classes** (from `docs/LANGUAGE_VISION.md` §7; `--explain-cost` prints them):
 `ZERO` no instructions or only register moves · `CHECK` a compare-and-branch the
@@ -313,7 +316,7 @@ compiler never reorders fields. **Status:** impl (V1/V2 items reserved).
 | Command | What it does |
 |---------|--------------|
 | `olic file.oli` | build a native ELF — own x86-64 encoder, own ELF writer, no linker |
-| `--show-tokens / --show-ast / --show-sema` | inspect the front end (implemented in the reference) |
+| `--show-tokens / --show-ast / --show-sema` | inspect the front end (all three exist today as the `genesis/build/show_*` drivers, one per stage, reading stdin) |
 | `--show-oir / --show-machine-ir / --show-asm / --show-bytes` | inspect the back end (planned) |
 | `--explain` | per procedure: frame size, register assignment, allocations, copies, views, checks (and which were removed), syscalls, capabilities |
 | `--explain-cost` | the cost class of every line |

@@ -1,5 +1,11 @@
 # Oli-- Machine Model
 
+> **Status (2026-09-22).** The model is what the language is defined against,
+> not a description of running code. Where a trap is concerned, what exists
+> today is `oli1`'s: a trapping oli-core program writes `oli: trap` on fd 2 and
+> exits 3. The `trap: <kind> at <module>:<line>` routine and exit status 134
+> described below belong to V0's `core.trap`, which arrives with the back end.
+
 The abstract machine that Oli-- semantics are defined against. It is
 deliberately close to a real x86-64 (or any modern register machine) so that
 every language construct has an obvious lowering and an honest cost.
