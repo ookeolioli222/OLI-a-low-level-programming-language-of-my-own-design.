@@ -730,16 +730,17 @@ accepted by `oli1` today and by `olic` tomorrow — no porting step at
 self-hosting. Its stages: `io.oli`, `lex.oli` (the V0 lexer), `diag.oli` (the
 §8 renderer), `ast.oli` (the node arena and the S-expression printer),
 `parse.oli` (the recursive-descent parser with recovery), `load.oli` (imports),
-`items.oli` (modules, layouts, choices, constants, signatures), plus one driver
-per stage.
+`items.oli` (modules, layouts, choices, constants, signatures), `sema.oli`
+(local tables with inferred types), plus one driver per stage.
 
 What is verified today: the four AST snapshots are reproduced byte for byte;
 every negative parse fixture reports exactly its expected diagnostics; the
-layouts, choices, constants, statics, procedure signatures and parameter
-locals of every semantic snapshot are reproduced exactly. What remains for G4:
-procedure bodies (types, regions, capabilities, flow), then OIR, x86-64
-lowering, the ELF writer, and the fixpoint `stage2 == stage3` that makes the
-language self-hosted.
+layouts, choices, constants, statics, procedure signatures and complete local
+tables — every parameter, place, binding, zone handle and `case` pattern with
+its inferred type — of every semantic snapshot are reproduced exactly. What
+remains for G4: typed statements and expressions with their regions and
+capability checks, then OIR, x86-64 lowering, the ELF writer, and the fixpoint
+`stage2 == stage3` that makes the language self-hosted.
 
 ---
 

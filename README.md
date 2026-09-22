@@ -25,11 +25,12 @@ fallible results (`T or E`, `fail`, `else` handlers, `case`) —
 `genesis/3-oli1/tests/hello.oli` prints `Hello Oli--`, `fib.oli` computes
 fib(10), `slurp.oli` reads stdin into a zone and upper-cases it in place and
 `propagate.oli` propagates parse failures through two procedures, all from
-oli-core source. G4 has begun: the V0 lexer, parser and
-item collection (`compiler/`), written in oli-core and built by `oli1`,
+oli-core source. G4 has begun: the V0 lexer, parser and the
+first semantic passes (`compiler/`), written in oli-core and built by `oli1`,
 tokenize every fixture, reproduce every `tests/snapshots/*.ast` byte for byte
-with the exact diagnostics of the negative fixtures, and lay out the layouts,
-choices and constants of every `tests/snapshots/*.sema` (`docs/design/0022`).**
+with the exact diagnostics of the negative fixtures, and reproduce the layouts,
+choices, constants, procedure signatures and local tables of every
+`tests/snapshots/*.sema` (`docs/design/0022`).**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -39,7 +40,7 @@ choices and constants of every `tests/snapshots/*.sema` (`docs/design/0022`).**
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
 | G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6d done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`) and module constants; next: `oli1` compiles the first `olic` modules (G4) |
-| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader and item collection; `--show-tokens`, `--show-ast` and `--show-items` reproduce every AST snapshot and the item section of every semantic snapshot; the rest of semantic analysis and the back end next; fixpoint `stage2 == stage3` | **in progress** |
+| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures and local tables; `--show-tokens`, `--show-ast` and `--show-items` reproduce every AST snapshot and the items, signatures and locals of every semantic snapshot; typed bodies and the back end next; fixpoint `stage2 == stage3` | **in progress** |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |
 | M3 | Freestanding binary with own entry point and own stack | not started |
