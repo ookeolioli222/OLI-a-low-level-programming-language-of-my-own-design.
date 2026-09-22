@@ -1,7 +1,7 @@
 # 0022 — Genesis layer 4: `olic` written in oli-core
 
-Status: in progress. Lexer, parser, diagnostic renderer, module loader and
-item collection implemented and tested 2026-09-22.
+Status: in progress. Lexer, parser, diagnostic renderer, module loader, item
+collection, signatures and local tables implemented and tested 2026-09-22.
 
 ## Problem
 Layer 3 (`oli1`) compiles oli-core. The self-hosted compiler `olic` must be
@@ -49,7 +49,11 @@ Semantic analysis is built in the pass order of
 `docs/COMPILER_ARCHITECTURE.md`, and each pass is accepted against the part of
 `tests/snapshots/*.sema` it produces, so the snapshot is reached in verified
 increments instead of one unverifiable jump. Stage 1 (modules, items, layout,
-constants) prints exactly the head of each snapshot. Because a genesis driver
+constants) prints exactly the head of each snapshot; stage 2 adds every
+procedure signature and every local with its inferred type. Types are carried
+as text in one buffer rather than as a type graph: the printer is this stage's
+consumer, and text made the increment verifiable against the snapshot without
+inventing a representation the body pass may have to replace. Because a genesis driver
 cannot read its command line, the root module is stdin and imports are read
 from `lib/`, which is what `--lib DIR` will select later; the loader uses
 `openat`/`read`/`close` directly, with no libc and no buffering.
