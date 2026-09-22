@@ -1,0 +1,539 @@
+module olic.sema
+-- Semantic analysis, stage 2: the local table of every procedure. Parameters,
+-- places, bindings, zone handles and `case` pattern names are collected in
+-- source order and given the type the snapshot printer records, which means
+-- inferring the type of every initialiser. Types are materialised as text in
+-- one shared buffer, so a type is a view and the printer is a copy.
+
+-- Local kinds.
+L_PARAM := 0
+L_PLACE := 1
+L_BIND := 2
+L_ZONE := 3
+L_PATTERN := 4
+
+proc loc_at(pg: ref Prog, i: u64) -> rw ref Loc
+    t := pg.locs
+    off := i * Loc.size
+    ret Loc.at(t[off..off + Loc.size])
+end
+
+-- The type-text buffer ----------------------------------------------------------
+
+proc sbeg(pg: ref Prog) -> u64
+    ret pg.soff
+end
+
+proc sput(pg: ref Prog, s: view u8)
+    b := pg.sbuf
+    n := pg.soff
+    i := 0
+    while i < s.len
+        b[n + i] <- s[i]
+        i <- i + 1
+    end
+    pg.soff <- n + s.len
+end
+
+proc sdone(pg: ref Prog, start: u64) -> view u8
+    b := pg.sbuf
+    ret b[start..pg.soff]
+end
+
+proc sput_toks(pg: ref Prog, mi: u64, a: u64, b: u64)
+    -- A type from the source, with paths reduced to the item they name.
+    cx := mod_ctx(pg, mi)
+    tmp := pg.tmp
+    prev := 0
+    i := a
+    while i < b
+        t := ctok(cx, i)
+        if t.kind == TK_IDENT
+            -- A path is reduced to its last component, but only when the dot
+            -- is inside this type: `u64` before `.bits` is the whole type.
+            if i + 1 < b
+                nx := ctok(cx, i + 1)
+                if nx.kind == TK_OP
+                    if nx.sub == OP_DOT
+                        i <- i + 2
+                        continue
+                    end
+                end
+            end
+        end
+        w := is_word_tok(cx, i)
+        if prev == 1
+            if w == 1
+                sput(pg, " ")
+            end
+        end
+        if t.kind == TK_INT
+            n := t.val
+            d := 1
+            m := n
+            while m >= 10
+                m <- m / 10
+                d <- d * 10
+            end
+            while d > 0
+                tmp[0] <- 48 + n / d % 10
+                sput(pg, tmp[..1])
+                d <- d / 10
+            end
+        else
+            sput(pg, tok_text(cx, i))
+        end
+        prev <- w
+        i <- i + 1
+    end
+end
+
+proc sput_type_node(pg: ref Prog, mi: u64, ty: u64)
+    cx := mod_ctx(pg, mi)
+    tn := node_at(cx, ty)
+    sput_toks(pg, mi, tn.t0, tn.t1)
+end
+
+-- Text helpers -------------------------------------------------------------------
+
+proc starts_with(s: view u8, p: view u8) -> word
+    if s.len < p.len
+        ret 0
+    end
+    ret view_eq(s[..p.len], p)
+end
+
+proc elem_of(v: view u8) -> view u8
+    -- `rw view u8` and `view u8` both have element type `u8`.
+    s := v
+    if starts_with(s, "rw ")
+        s <- s[3..]
+    end
+    if starts_with(s, "view ")
+        ret s[5..]
+    end
+    ret s
+end
+
+proc ok_of(v: view u8) -> view u8
+    -- The `T` of `T or E`.
+    i := 0
+    while i + 4 <= v.len
+        if view_eq(v[i..i + 4], " or ")
+            ret v[..i]
+        end
+        i <- i + 1
+    end
+    ret v
+end
+
+-- Local table --------------------------------------------------------------------
+
+proc add_loc(pg: ref Prog, name: u64, kind: u64, idx: u64, start: u64)
+    i := pg.nloc
+    l := loc_at(pg, i)
+    l.mod <- pg.curmod
+    l.name <- name
+    l.kind <- kind
+    l.idx <- idx
+    l.t0 <- start
+    l.t1 <- pg.soff
+    pg.nloc <- i + 1
+end
+
+proc loc_type(pg: ref Prog, name: view u8) -> view u8
+    -- The type of a local of the procedure being analysed.
+    b := pg.sbuf
+    i := pg.nloc
+    while i > pg.locbase
+        i <- i - 1
+        l := loc_at(pg, i)
+        cx := mod_ctx(pg, l.mod)
+        if view_eq(tok_text(cx, l.name), name)
+            ret b[l.t0..l.t1]
+        end
+    end
+    ret b[0..0]
+end
+
+proc proc_result(pg: ref Prog, name: view u8) -> view u8
+    -- The declared result type of a procedure, by its unqualified name.
+    q := 0
+    while q < pg.nproc
+        v := proc_at(pg, q)
+        cx := mod_ctx(pg, v.mod)
+        nd := node_at(cx, v.node)
+        if view_eq(tok_text(cx, nd.t0), name)
+            if nd.val == 1
+                params := kid1(cx, v.node)
+                st := sbeg(pg)
+                sput_type_node(pg, v.mod, sibling(cx, params))
+                ret sdone(pg, st)
+            end
+            b := pg.sbuf
+            ret b[0..0]
+        end
+        q <- q + 1
+    end
+    b2 := pg.sbuf
+    ret b2[0..0]
+end
+
+proc field_type_text(pg: ref Prog, base: view u8, fname: view u8) -> view u8
+    -- The type of a field of the layout or choice variant `base` names.
+    nm := base
+    if starts_with(nm, "rw ")
+        nm <- nm[3..]
+    end
+    if starts_with(nm, "ref ")
+        nm <- nm[4..]
+    end
+    idx := item_find(pg, nm)
+    b := pg.sbuf
+    if idx < 0
+        ret b[0..0]
+    end
+    it := item_at(pg, idx)
+    cx := mod_ctx(pg, it.mod)
+    f := 0
+    while f < it.nfld
+        fr := fld_at(pg, it.first + f)
+        fn := node_at(cx, fr.node)
+        if view_eq(tok_text(cx, fn.t0), fname)
+            st := sbeg(pg)
+            sput_type_node(pg, it.mod, kid1(cx, fr.node))
+            ret sdone(pg, st)
+        end
+        f <- f + 1
+    end
+    ret b[0..0]
+end
+
+proc infer(pg: ref Prog, mi: u64, n: u64) -> view u8
+    -- The type of an expression, as text; an empty view means "unknown".
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    if n == 0
+        ret b[0..0]
+    end
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_STR
+        ret "view u8"
+    end
+    if k == N_CHAR
+        ret "u8"
+    end
+    if k == N_NAME
+        ret loc_type(pg, tok_text(cx, nd.t0))
+    end
+    if k == N_FALLBACK
+        ret ok_of(infer(pg, mi, kid1(cx, n)))
+    end
+    if k == N_UNOP
+        if nd.sub == U_ADDROF
+            ret "addr u8"
+        end
+        ret infer(pg, mi, kid1(cx, n))
+    end
+    if k == N_INDEX
+        base := infer(pg, mi, kid1(cx, n))
+        ix := node_at(cx, kid2(cx, n))
+        if ix.kind == N_RANGE
+            ret base
+        end
+        ret elem_of(base)
+    end
+    if k == N_FIELD
+        m := tok_text(cx, nd.t0)
+        if view_eq(m, "addr")
+            ret "addr u8"
+        end
+        if view_eq(m, "len")
+            ret "uword"
+        end
+        ret field_type_text(pg, infer(pg, mi, kid1(cx, n)), m)
+    end
+    if k == N_CONVERT
+        st := sbeg(pg)
+        sput_toks(pg, mi, nd.t0, nd.t1)
+        ret sdone(pg, st)
+    end
+    if k != N_CALL
+        ret b[0..0]
+    end
+    callee := node_at(cx, kid1(cx, n))
+    if callee.kind == N_NAME
+        ret proc_result(pg, tok_text(cx, callee.t0))
+    end
+    if callee.kind != N_FIELD
+        ret b[0..0]
+    end
+    m2 := tok_text(cx, callee.t0)
+    basenode := kid1(cx, kid1(cx, n))
+    if view_eq(m2, "syscall")
+        ret "word"
+    end
+    if view_eq(m2, "bytes")
+        ret "rw view u8"
+    end
+    if view_eq(m2, "try_bytes")
+        ret "rw view u8 or none"
+    end
+    if view_eq(m2, "make")
+        arg := node_at(cx, kid2(cx, n))
+        st2 := sbeg(pg)
+        sput(pg, "rw ref ")
+        sput(pg, tok_text(cx, arg.t0))
+        ret sdone(pg, st2)
+    end
+    if view_eq(m2, "at")
+        bn := node_at(cx, basenode)
+        st3 := sbeg(pg)
+        sput(pg, "ref ")
+        sput(pg, tok_text(cx, bn.t0))
+        ret sdone(pg, st3)
+    end
+    ret proc_result(pg, m2)
+end
+
+proc variant_field_type(pg: ref Prog, vname: view u8, fname: view u8) -> view u8
+    -- `when fail bad_magic {found}` binds the field of that variant.
+    i := 0
+    while i < pg.nitem
+        it := item_at(pg, i)
+        if it.kind == 1
+            cx := mod_ctx(pg, it.mod)
+            f := 0
+            while f < it.nfld
+                fr := fld_at(pg, it.first + f)
+                vn := node_at(cx, fr.variant)
+                fn := node_at(cx, fr.node)
+                if view_eq(tok_text(cx, vn.t0), vname)
+                    if view_eq(tok_text(cx, fn.t0), fname)
+                        st := sbeg(pg)
+                        sput_type_node(pg, it.mod, kid1(cx, fr.node))
+                        ret sdone(pg, st)
+                    end
+                end
+                f <- f + 1
+            end
+        end
+        i <- i + 1
+    end
+    b := pg.sbuf
+    ret b[0..0]
+end
+
+proc collect_pattern(pg: ref Prog, mi: u64, subject: view u8, pat: u64)
+    cx := mod_ctx(pg, mi)
+    pn := node_at(cx, pat)
+    k := pn.kind
+    if k == N_PATOK
+        if pn.t1 > pn.t0
+            st := sbeg(pg)
+            sput(pg, ok_of(subject))
+            add_loc(pg, pn.t0, L_PATTERN, 0, st)
+        end
+        ret
+    end
+    if k != N_PATFAIL
+        ret
+    end
+    sub := kid1(cx, pat)
+    if sub == 0
+        ret
+    end
+    sn := node_at(cx, sub)
+    if sn.kind != N_PAT
+        ret
+    end
+    f := kid1(cx, sub)
+    while f != 0
+        fn := node_at(cx, f)
+        ft := variant_field_type(pg, tok_text(cx, sn.t0), tok_text(cx, fn.t0))
+        st2 := sbeg(pg)
+        sput(pg, ft)
+        add_loc(pg, fn.t0, L_PATTERN, 0, st2)
+        f <- sibling(cx, f)
+    end
+end
+
+proc walk_stmt(pg: ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_PLACE
+        st := sbeg(pg)
+        sput_type_node(pg, mi, kid1(cx, n))
+        add_loc(pg, nd.t0, L_PLACE, 0, st)
+        ret
+    end
+    if k == N_BIND
+        v := kid1(cx, n)
+        if nd.val >= 2
+            st1 := sbeg(pg)
+            sput_type_node(pg, mi, v)
+            add_loc(pg, nd.t0, L_BIND, 0, st1)
+            ret
+        end
+        -- The inferred type may already have been written into the buffer, so
+        -- it is produced before the local's own text begins.
+        t := infer(pg, mi, v)
+        st2 := sbeg(pg)
+        sput(pg, t)
+        add_loc(pg, nd.t0, L_BIND, 0, st2)
+        ret
+    end
+    if k == N_ZONE
+        st3 := sbeg(pg)
+        sput(pg, "zone")
+        add_loc(pg, nd.t0, L_ZONE, 0, st3)
+        body := kid1(cx, n)
+        while body != 0
+            bn := node_at(cx, body)
+            if bn.kind == N_BODY
+                walk_body(pg, mi, body)
+            end
+            body <- sibling(cx, body)
+        end
+        ret
+    end
+    if k == N_EACH
+        it := kid1(cx, n)
+        et := elem_of(infer(pg, mi, it))
+        st4 := sbeg(pg)
+        sput(pg, et)
+        add_loc(pg, nd.t0, L_BIND, 0, st4)
+        walk_body(pg, mi, kid2(cx, n))
+        ret
+    end
+    if k == N_CASE
+        subj := infer(pg, mi, kid1(cx, n))
+        arm := kid2(cx, n)
+        while arm != 0
+            an := node_at(cx, arm)
+            if an.kind == N_WHEN
+                collect_pattern(pg, mi, subj, kid1(cx, arm))
+                walk_kids(pg, mi, kid2(cx, arm))
+            end
+            if an.kind == N_ELSE
+                walk_kids(pg, mi, kid1(cx, arm))
+            end
+            arm <- sibling(cx, arm)
+        end
+        ret
+    end
+    if k == N_IF
+        br := kid2(cx, n)
+        while br != 0
+            bn2 := node_at(cx, br)
+            if bn2.kind == N_ELIF
+                walk_kids(pg, mi, kid2(cx, br))
+            else
+                walk_kids(pg, mi, kid1(cx, br))
+            end
+            br <- sibling(cx, br)
+        end
+        ret
+    end
+    if k == N_IFTHEN
+        walk_stmt(pg, mi, kid2(cx, n))
+        ret
+    end
+    if k == N_WHILE
+        walk_body(pg, mi, kid2(cx, n))
+        ret
+    end
+    if k == N_LOOP
+        walk_body(pg, mi, kid1(cx, n))
+        ret
+    end
+    if k == N_BODY
+        walk_body(pg, mi, n)
+    end
+end
+
+proc walk_kids(pg: ref Prog, mi: u64, first: u64)
+    cx := mod_ctx(pg, mi)
+    k := first
+    while k != 0
+        walk_stmt(pg, mi, k)
+        k <- sibling(cx, k)
+    end
+end
+
+proc walk_body(pg: ref Prog, mi: u64, body: u64)
+    walk_kids(pg, mi, kid1(pg_ctx(pg, mi), body))
+end
+
+proc pg_ctx(pg: ref Prog, mi: u64) -> rw ref Ctx
+    ret mod_ctx(pg, mi)
+end
+
+proc collect_locals(pg: ref Prog, mi: u64, node: u64)
+    cx := mod_ctx(pg, mi)
+    pg.curmod <- mi
+    pg.locbase <- pg.nloc
+    params := kid1(cx, node)
+    p := kid1(cx, params)
+    i := 0
+    while p != 0
+        pn := node_at(cx, p)
+        st := sbeg(pg)
+        sput_type_node(pg, mi, kid1(cx, p))
+        add_loc(pg, pn.t0, L_PARAM, i, st)
+        i <- i + 1
+        p <- sibling(cx, p)
+    end
+    k := sibling(cx, params)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_BODY
+            walk_body(pg, mi, k)
+        end
+        k <- sibling(cx, k)
+    end
+end
+
+proc print_locals(pg: ref Prog)
+    tmp := pg.tmp
+    b := pg.sbuf
+    i := pg.locbase
+    n := 0
+    while i < pg.nloc
+        l := loc_at(pg, i)
+        cx := mod_ctx(pg, l.mod)
+        put(1, "    (local ")
+        put_uint(1, tmp, n)
+        put(1, " ")
+        put(1, tok_text(cx, l.name))
+        put(1, " ")
+        if l.kind == L_PARAM
+            put(1, "param")
+            put_uint(1, tmp, l.idx)
+        end
+        if l.kind == L_PLACE
+            put(1, "place")
+        end
+        if l.kind == L_BIND
+            put(1, "bind")
+        end
+        if l.kind == L_ZONE
+            put(1, "zone")
+        end
+        if l.kind == L_PATTERN
+            put(1, "pattern")
+        end
+        put(1, " ")
+        if l.t1 > l.t0
+            put(1, b[l.t0..l.t1])
+        else
+            -- An initialiser whose type this stage cannot infer yet.
+            put(1, "?")
+        end
+        put(1, ")\n")
+        n <- n + 1
+        i <- i + 1
+    end
+end

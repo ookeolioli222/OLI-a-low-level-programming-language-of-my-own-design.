@@ -6,10 +6,21 @@ module olic.items
 -- tests/snapshots/*.sema records it.
 
 MOD_MAX := 8
+LOC_MAX := 4096
+SBUF_MAX := 131072
 ITEM_MAX := 256
 FLD_MAX := 1024
 VAL_MAX := 256
 SRC_MAX := 262144
+
+layout Loc
+    mod : u64
+    name : u64
+    kind : u64
+    idx : u64
+    t0 : u64
+    t1 : u64
+end
 
 layout Item
     mod : u64
@@ -44,9 +55,15 @@ layout Prog
     flds : view u8
     vals : view u8
     procs : view u8
+    locs : view u8
+    sbuf : view u8
     tmp : view u8
     nmod : u64
     nproc : u64
+    nloc : u64
+    soff : u64
+    locbase : u64
+    curmod : u64
     nitem : u64
     nfld : u64
     nval : u64
@@ -63,8 +80,14 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.flds <- z.bytes(FLD_MAX * Fld.size)
     pg.vals <- z.bytes(VAL_MAX * Val.size)
     pg.procs <- z.bytes(VAL_MAX * Val.size)
+    pg.locs <- z.bytes(LOC_MAX * Loc.size)
+    pg.sbuf <- z.bytes(SBUF_MAX)
     pg.tmp <- z.bytes(32)
     pg.nproc <- 0
+    pg.nloc <- 0
+    pg.soff <- 0
+    pg.locbase <- 0
+    pg.curmod <- 0
     pg.nmod <- 0
     pg.nitem <- 0
     pg.nfld <- 0
@@ -690,11 +713,13 @@ proc put_type_canon(pg: ref Prog, mi: u64, a: u64, b: u64)
     while i < b
         t := ctok(cx, i)
         if t.kind == TK_IDENT
-            nx := ctok(cx, i + 1)
-            if nx.kind == TK_OP
-                if nx.sub == OP_DOT
-                    i <- i + 2
-                    continue
+            if i + 1 < b
+                nx := ctok(cx, i + 1)
+                if nx.kind == TK_OP
+                    if nx.sub == OP_DOT
+                        i <- i + 2
+                        continue
+                    end
                 end
             end
         end
@@ -954,22 +979,8 @@ proc print_proc(pg: ref Prog, pi: u64)
     print_permits(pg, mi, v.node)
     print_proc_clauses(pg, mi, v.node)
     put(1, "\n")
-    tmp := pg.tmp
-    p := kid1(cx, params)
-    i := 0
-    while p != 0
-        put(1, "    (local ")
-        put_uint(1, tmp, i)
-        put(1, " ")
-        put_name(pg, mi, p)
-        put(1, " param")
-        put_uint(1, tmp, i)
-        put(1, " ")
-        put_type_node(pg, mi, kid1(cx, p))
-        put(1, ")\n")
-        i <- i + 1
-        p <- sibling(cx, p)
-    end
+    collect_locals(pg, mi, v.node)
+    print_locals(pg)
 end
 
 proc print_program(pg: ref Prog)

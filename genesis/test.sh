@@ -973,7 +973,7 @@ for f in ../tests/parse/err/*.oli; do
     head -c 8 build/ast.out | grep -q '^(module' || fail "parser: $f produced no module after recovery"
 done
 echo "ok: olic parser reports exactly the E0001-E0032/W0001 diagnostics the parse/err fixtures expect, and recovers"
-cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/show_items.oli > build/show_items.oli
+cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli ../compiler/show_items.oli > build/show_items.oli
 ./build/oli1.bin < build/show_items.oli > build/show_items || fail "oli1 could not compile compiler/ (show_items)"
 chmod +x build/show_items
 ./build/oli1.bin < build/show_items.oli > build/show_items.again
@@ -1004,10 +1004,10 @@ echo "ok: olic resolves packed/aligned layouts, nested payloads and every librar
 # the semantic snapshot (bodies and inferred locals are the next stage).
 for pair in "hello examples/hello.oli" "packet_demo examples/packet_demo.oli" "freestanding tests/sema/ok/freestanding.oli"; do
     set -- $pair
-    ( cd .. && genesis/build/show_items < "$2" 2>/dev/null ) | grep -E '^  \(proc |^    \(local [0-9]+ .* param[0-9]+ ' > build/$1.sig
-    grep -E '^  \(proc |^    \(local [0-9]+ .* param[0-9]+ ' ../tests/snapshots/$1.sema > build/$1.sigwant
+    ( cd .. && genesis/build/show_items < "$2" 2>/dev/null ) | grep -E '^  \(proc |^    \(local ' > build/$1.sig
+    grep -E '^  \(proc |^    \(local ' ../tests/snapshots/$1.sema > build/$1.sigwant
     cmp build/$1.sigwant build/$1.sig || fail "signatures: $1 differs from tests/snapshots/$1.sema"
     [ -s build/$1.sig ] || fail "signatures: $1 produced nothing"
 done
-echo "ok: olic prints every procedure signature and parameter local exactly as tests/snapshots/*.sema"
+echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic lexer, parser and item collection) passed"

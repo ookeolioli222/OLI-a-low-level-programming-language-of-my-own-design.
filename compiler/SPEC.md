@@ -47,8 +47,9 @@ deterministic and runs the acceptance tests below.
 | `olic.diag` | `diag.oli` | the §8 renderer: header, `--> file:line:col`, the source line and a caret | done |
 | `olic.load` | `load.oli` | reading files (`openat`/`read`/`close`) and resolving imports under `lib/` | done |
 | `olic.items` | `items.oli` | modules, item collection, layout/choice layout (ABI §3), constant evaluation, the item section of `--show-sema` | done |
-| `olic.show_items` | `show_items.oli` | driver for the item section | done |
-| `olic.sema` | — | signatures, bodies, types, regions, capabilities, flow — the rest of `--show-sema` | planned |
+| `olic.sema` | `sema.oli` | the local table of every procedure: parameters, places, bindings, zone handles and `case` patterns, with inferred types | done |
+| `olic.show_items` | `show_items.oli` | driver for the item, signature and local sections | done |
+| `olic.bodies` | — | typed statements and expressions, regions, capabilities, flow — the rest of `--show-sema` | planned |
 | `olic.sema` | — | items, layouts, signatures, constants, bodies, program rules, `--show-sema` | planned |
 | `olic.oir`, `olic.x64`, `olic.elf` | — | back end | planned |
 
@@ -143,6 +144,29 @@ items before the imported ones.
   layout or choice name resolves that item first (a cycle reports E0204).
 - Constants are evaluated as integers: literals, `+ - * / %`, unary minus,
   `Name.size`, `Name.align` and other constants.
+
+## Signatures and locals (`items.oli`, `sema.oli`)
+
+After the items, every procedure prints its signature — qualified name, result
+type, `permits=[…]`, `calls=`, `entry`, `section=`, `traps` — and its local
+table in source order: parameters, then places, bindings, zone handles and
+`case` pattern names as the body introduces them.
+
+A local's type is materialised as text in one shared buffer, so the printer is
+a copy and a type is a view. Inference covers what the corpus needs: an
+annotation, a string literal (`view u8`), `z.bytes(n)` (`rw view u8`),
+`z.make(T)` (`rw ref T`), `T.at(v)` (`ref T`), `os.syscall(…)` (`word`), a call
+(the callee's declared result), a subview (the base's type), an index (the
+element type), `.addr`/`.len`, a conversion (`u64.bits(x)` → `u64`), an `each`
+binding (the element type of the iterable), `ok x` in a `case` (the `T` of
+`T or E`) and `fail V {f}` (the field of that variant). A type a path names is
+reduced to the item: `core.TrapKind` prints as `TrapKind`. An initialiser this
+stage cannot type yet — an arithmetic expression, a `checked(…)` fallback, an
+integer range in `each`, a compiler intrinsic such as `cpu.id` — prints `?`.
+
+Acceptance (`genesis/test.sh`, layer 4): every `(proc …)` and `(local …)` line
+of all three `tests/snapshots/*.sema` is reproduced exactly — 46 lines across
+the three programs, covering every local kind and every inference rule above.
 
 Acceptance (`genesis/test.sh`, layer 4): the item section of
 `tests/snapshots/hello.sema`, `packet_demo.sema` and `freestanding.sema` is
