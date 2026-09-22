@@ -46,9 +46,9 @@
 -- slots below it), 4 ref local (1 slot, extra = layout index).
 -- A parameter type is `[rw] view ...` (1), `zone` (2), `[rw] ref Name` (3+i),
 -- anything else an integer; the same words after `->` give the result type.
--- Scratch is a 4 MiB mmap: input [base,+1M), output [base+1M,+1.375M),
--- string pool [base+1.375M,+64K), code temp [base+2M,+2M),
--- call fixups [base+1.6875M,+64K), procedure table [base+1.75M,+64K),
+-- Scratch is a 16 MiB mmap: input [base,+1M), output [base+1M,+384K),
+-- string pool [base+4M,+1M), code temp [base+2M,+2M),
+-- call fixups [base+5M,+1M), procedure table [base+6M,+512K),
 -- break-fixup stack [base+1.8125M,+64K), if-fixup stack [base+1.875M,+64K),
 -- field table [base+1.5625M,+64K), layout table [base+1.625M,+64K),
 -- state [base+1.9375M): +0 nslots, +8 loop start, +16 if-fixup top, +24 frame
@@ -87,7 +87,7 @@ proc start
     entry
     machine x64
         mov rdi, 0
-        mov rsi, 0x400000
+        mov rsi, 0x1000000
         mov rdx, 3
         mov r10, 0x22
         mov r8, -1
@@ -100,7 +100,7 @@ proc start
         mov rbx, r14
         add rbx, 0x180000
         mov rbp, r14
-        add rbp, 0x160000
+        add rbp, 0x400000
         mov r15, 0
         mov rax, 0
         mov [r14+0x1F0000], rax
@@ -966,7 +966,7 @@ proc start
         mov r11, r9
         shl r11, 6
         add r11, r14
-        add r11, 0x1C0000
+        add r11, 0x600000
         mov rdx, [r11+8]
         cmp rdx, rcx
         jne .pf_loop
@@ -987,17 +987,19 @@ proc start
         mov r11, r9
         shl r11, 6
         add r11, r14
-        add r11, 0x1C0000
+        add r11, 0x600000
         ret
 .pf_none:
         mov r11, 0
         ret
 .proc_add:
         mov r9, [r14+0x1F0040]
+        cmp r9, 8000
+        jae .err
         mov r11, r9
         shl r11, 6
         add r11, r14
-        add r11, 0x1C0000
+        add r11, 0x600000
         mov [r11], r8
         mov [r11+8], rcx
         mov rax, 0
@@ -1214,7 +1216,7 @@ proc start
         jne .bind_expr
         mov rax, rbp
         sub rax, r14
-        sub rax, 0x160000
+        sub rax, 0x400000
         add rax, 0x400078
         push rax
         push rbp
@@ -2300,7 +2302,7 @@ proc start
 .pr_strlit:
         mov rax, rbp
         sub rax, r14
-        sub rax, 0x160000
+        sub rax, 0x400000
         add rax, 0x400078
         push rax
         push rbp
@@ -2696,14 +2698,16 @@ proc start
         mov rax, [r9+56]
         mov [r14+0x1F0050], rax
         sub r9, r14
-        sub r9, 0x1C0000
+        sub r9, 0x600000
         shr r9, 6
         mov rax, [r14+0x1F0048]
+        cmp rax, 40000
+        jae .err
         mov r11, rax
         lea r11, [r11+r11*2]
         shl r11, 3
         add r11, r14
-        add r11, 0x1B0000
+        add r11, 0x500000
         add rax, 1
         mov [r14+0x1F0048], rax
         mov [r11], rdi
@@ -3062,6 +3066,12 @@ proc start
         jne .ebytes
         ret
 .emit:
+        push r10
+        mov r10, rdi
+        sub r10, r12
+        cmp r10, 0x5FFF0
+        jae .err
+        pop r10
         mov [rdi], rax
         add rdi, 1
         ret
@@ -3287,11 +3297,11 @@ proc start
         lea r11, [r11+r11*2]
         shl r11, 3
         add r11, r14
-        add r11, 0x1B0000
+        add r11, 0x500000
         mov r10, [r11+8]
         shl r10, 6
         add r10, r14
-        add r10, 0x1C0000
+        add r10, 0x600000
         mov rax, [r10+16]
         cmp rax, 0
         je .err
@@ -3305,7 +3315,7 @@ proc start
         sub r8, 120
         mov r9, rbp
         sub r9, r14
-        sub r9, 0x160000
+        sub r9, 0x400000
         mov rsi, r12
         add rsi, 120
         mov rdi, r14
@@ -3313,7 +3323,7 @@ proc start
         mov rcx, r8
         call .copy8
         mov rsi, r14
-        add rsi, 0x160000
+        add rsi, 0x400000
         mov rdi, r12
         add rdi, 120
         mov rcx, r9
@@ -3416,6 +3426,10 @@ proc start
         call .hexd
         add rax, rdx
 .ps_put:
+        mov r10, rbp
+        sub r10, r14
+        cmp r10, 0x4FFFF0
+        jae .err
         mov [rbp], rax
         add rbp, 1
         jmp .ps_l

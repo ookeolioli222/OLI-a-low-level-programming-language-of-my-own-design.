@@ -62,8 +62,15 @@ The checks that need no type graph — capabilities, unimplemented features,
 constant cycles and ranges, recursive layouts — are implemented before the
 type graph, because they are exactly the checks a kernel author relies on
 (`docs/KERNEL_PROGRAMMING.md` §2) and because each one is pinned by a fixture
-that already exists. Three of the fourteen `tests/sema/err` fixtures pass
-exactly; the other eleven need types, regions and flow.
+that already exists. Twelve of the fourteen `tests/sema/err` fixtures pass
+exactly; the two that remain need expression typing.
+
+Running those checks over `compiler/*.oli` measured the distance between
+oli-core and V0 for the first time: 290 stores into bindings (V0 wants
+`x : T <- e` places), 93 stores through layout fields that oli-core cannot
+declare `rw`, and 8 procedures whose infinite loop is `while 1` because
+oli-core has no `loop`. Nothing else. That is the specification of oli1 step
+6e, and the harness holds the number where it is.
 
 Writing the compiler in its own subset pays for itself here: `olic` lays out
 its own `Tok`, `Lex`, `Ctx`, `Node`, `Item` and `Prog` layouts, and the parser

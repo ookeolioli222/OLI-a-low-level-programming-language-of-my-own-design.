@@ -204,6 +204,7 @@ proc tok_text(cx: ref Ctx, i: u64) -> view u8
 end
 
 proc new_node(cx: ref Ctx, kind: u64, t0: u64) -> rw ref Node
+    permit os.syscall
     n := cx.nnode
     if n >= NODE_MAX
         put(2, "olic: node arena exhausted\n")

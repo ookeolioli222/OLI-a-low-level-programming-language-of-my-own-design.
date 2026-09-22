@@ -13,6 +13,17 @@ FLD_MAX := 1024
 VAL_MAX := 256
 SRC_MAX := 262144
 
+layout Chk
+    mod : u64
+    name : u64
+    kind : u64
+    assigned : u64
+    adepth : u64
+    b1 : u64
+    zd : u64
+    vzd : u64
+end
+
 layout Loc
     mod : u64
     name : u64
@@ -65,6 +76,14 @@ layout Prog
     locbase : u64
     curmod : u64
     curproc : u64
+    chks : view u8
+    nchk : u64
+    cdepth : u64
+    zdepth : u64
+    fstanding : u64
+    curhasres : u64
+    curnever : u64
+    curfallible : u64
     nitem : u64
     nfld : u64
     nval : u64
@@ -90,6 +109,14 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.locbase <- 0
     pg.curmod <- 0
     pg.curproc <- 0
+    pg.chks <- z.bytes(LOC_MAX * Chk.size)
+    pg.nchk <- 0
+    pg.cdepth <- 0
+    pg.zdepth <- 0
+    pg.fstanding <- 0
+    pg.curhasres <- 0
+    pg.curnever <- 0
+    pg.curfallible <- 0
     pg.nmod <- 0
     pg.nitem <- 0
     pg.nfld <- 0
@@ -1105,8 +1132,28 @@ proc print_program(pg: ref Prog)
     end
 end
 
+proc target_freestanding(src: view u8) -> word
+    -- A fixture selects the target with a `-- target: freestanding` line.
+    mark := "-- target: freestanding"
+    if src.len < mark.len
+        ret 0
+    end
+    i := 0
+    while i + mark.len <= src.len
+        if i > 256
+            ret 0
+        end
+        if view_eq(src[i..i + mark.len], mark)
+            ret 1
+        end
+        i <- i + 1
+    end
+    ret 0
+end
+
 proc analyze(pg: ref Prog, z: zone, src: view u8)
     -- The root module is stdin; `core` is always available, then its imports.
+    pg.fstanding <- target_freestanding(src)
     root := add_module(pg, z, src, "stdin")
     load_named(pg, z, "core")
     load_imports(pg, z, root)

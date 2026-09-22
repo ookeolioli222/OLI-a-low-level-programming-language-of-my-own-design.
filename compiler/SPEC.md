@@ -183,13 +183,53 @@ layout field, procedure signature and body:
   annotated unsigned type is reported at the start of its expression.
 - **E0204, recursive layouts.** Resolving a layout that is already being
   resolved reports at its declaration.
+- **E0101, scopes.** A binding, parameter, place, zone handle or pattern name
+  that shadows something already in scope — including a module-level constant,
+  static, layout or choice — is reported at the declaration. Names starting
+  with `_` are exempt.
+- **E0220, definite assignment.** A place must be stored before it is read.
+  An assignment inside a branch or a loop does not survive it, except when
+  every arm of an `if … else` makes it; an array place is storage and counts as
+  initialised; `out REG -> p` in a `machine` block assigns `p`.
+- **E0230 / E0231, reachability.** Control may not reach the end of a
+  procedure with a result, and a statement after one that cannot fall through
+  is unreachable. `ret`, `fail`, `break`, `continue`, a `loop` without a
+  `break` and an `if … else` whose every branch diverges do not fall through;
+  a `while` may always run zero times.
+- **E0110 / E0111, writability.** A store into a binding, a parameter or a
+  zone handle, and a store through a view or reference that is not `rw` or
+  into a module constant, are refused.
+- **E0300, regions.** Zone memory may not be returned, nor stored into a place
+  that was declared outside that zone (a module static counts as outside); a
+  view of a frame array and a reference to a frame local may not be returned.
+- **E0310 / E0311, failures and `case`.** A fallible call used as a statement
+  is an unhandled failure; `else fail` needs a procedure that can fail; a
+  `case` must cover every variant, both channels of `T or E`, `true` and
+  `false`, or end in `else` — for integers only `else` is exhaustive.
 
-Acceptance (`genesis/test.sh`, layer 4): `tests/sema/err/items.oli`,
-`permits.oli` and `not_implemented.oli` report exactly their expected codes and
-positions (twelve diagnostics), every `tests/sema/ok` fixture, library module
-and compiler source stays clean, and `tests/parse/ok/kernel_sketch.oli` — a
-file whose own header says it is rejected later — reports the missing
-`memory.raw` permit and the three V1 constructs it uses.
+Acceptance (`genesis/test.sh`, layer 4): twelve of the fourteen
+`tests/sema/err` fixtures report exactly their expected codes and positions —
+`items`, `permits`, `not_implemented`, `flow`, `shadow`, `unassigned`,
+`unhandled`, `not_exhaustive`, `readonly`, `freestanding_zone`, `escape_frame`
+and `escape_zone`; every `tests/sema/ok` fixture, example and library module
+stays clean; and `tests/parse/ok/kernel_sketch.oli` — a file whose own header
+says it is rejected later — reports the missing `memory.raw` permit and the
+three V1 constructs it uses. The two fixtures that remain, `literals.oli` and
+`mixed_addr.oli`, need expression typing (E0201, E0202, E0203).
+
+### What the checks say about the compiler's own source
+
+Running the checks over `compiler/*.oli` is the first real measurement of how
+far oli-core is from V0. It reports three kinds of gap, and nothing else:
+
+| Code | Count | Why | Closes with |
+|------|-------|-----|-------------|
+| E0110 | ~290 | oli-core has no `x : T <- e` place, so a counter is written as a binding and then stored into | oli1 step 6e: typed places |
+| E0111 | ~93 | an oli-core layout field cannot say `rw view u8`, so writing through it looks like a store into a read-only view | oli1 step 6e: `rw` in field types |
+| E0230 | 8 | oli-core has no `loop`, so an infinite loop is `while 1`, which V0 says may run zero times | oli1 step 6e: `loop` |
+
+The harness asserts that these three codes are the *only* semantic diagnostics
+the compiler's own source earns, so the gap cannot silently widen.
 
 Acceptance (`genesis/test.sh`, layer 4): every `(proc …)` and `(local …)` line
 of all three `tests/snapshots/*.sema` is reproduced exactly — 46 lines across
