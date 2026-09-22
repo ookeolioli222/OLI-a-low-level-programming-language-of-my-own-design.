@@ -1,6 +1,7 @@
 # 0022 — Genesis layer 4: `olic` written in oli-core
 
-Status: in progress. Lexer and parser implemented and tested 2026-09-22.
+Status: in progress. Lexer, parser, diagnostic renderer, module loader and
+item collection implemented and tested 2026-09-22.
 
 ## Problem
 Layer 3 (`oli1`) compiles oli-core. The self-hosted compiler `olic` must be
@@ -43,6 +44,19 @@ an integer token's value, not its text.
 
 Recovery follows one rule: an error path never consumes a block closer, so a
 bad line costs one diagnostic instead of cascading to the end of the file.
+
+Semantic analysis is built in the pass order of
+`docs/COMPILER_ARCHITECTURE.md`, and each pass is accepted against the part of
+`tests/snapshots/*.sema` it produces, so the snapshot is reached in verified
+increments instead of one unverifiable jump. Stage 1 (modules, items, layout,
+constants) prints exactly the head of each snapshot. Because a genesis driver
+cannot read its command line, the root module is stdin and imports are read
+from `lib/`, which is what `--lib DIR` will select later; the loader uses
+`openat`/`read`/`close` directly, with no libc and no buffering.
+
+Writing the compiler in its own subset pays for itself here: `olic` lays out
+its own `Tok`, `Lex`, `Ctx`, `Node`, `Item` and `Prog` layouts, and the parser
+found every reserved word the compiler's own source used as a name.
 
 ## Advantages
 - No port step at self-hosting; `stage2 == stage3` is a byte comparison.

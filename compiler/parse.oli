@@ -1132,11 +1132,8 @@ proc diag_at(cx: ref Ctx, code: u64, i: u64)
     put_uint(2, tmp, code)
     put(2, "]: ")
     put(2, pmsg(code))
-    put(2, "\n --> stdin:")
-    put_uint(2, tmp, t.line)
-    put(2, ":")
-    put_uint(2, tmp, t.col)
-    put(2, "\n")
+    diag_head(cx.file, tmp, t.line, t.col)
+    excerpt(cx.src, tmp, t.line, t.col)
     cx.nerr <- cx.nerr + 1
 end
 
@@ -1145,11 +1142,9 @@ proc warn_at(cx: ref Ctx, code: u64, i: u64)
     tmp := cx.tmp
     put(2, "warning[W000")
     put_uint(2, tmp, code)
-    put(2, "]: doc comment documents nothing\n --> stdin:")
-    put_uint(2, tmp, t.line)
-    put(2, ":")
-    put_uint(2, tmp, t.col)
-    put(2, "\n")
+    put(2, "]: doc comment documents nothing")
+    diag_head(cx.file, tmp, t.line, t.col)
+    excerpt(cx.src, tmp, t.line, t.col)
     cx.nwarn <- cx.nwarn + 1
 end
 

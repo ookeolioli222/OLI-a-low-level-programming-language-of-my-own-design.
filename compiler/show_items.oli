@@ -1,0 +1,18 @@
+module olic.show_items
+-- `olic --show-items`: the item section of `--show-sema` (layouts, choices,
+-- constants and statics of the root module and everything it imports).
+
+proc start
+    entry
+    permit os.syscall
+    zone z 201326592
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        print_program(pg)
+        if pg.nerr > 0
+            ret 1
+        end
+        ret 0
+    end
+end

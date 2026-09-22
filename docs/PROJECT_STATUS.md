@@ -24,11 +24,15 @@ is complete. The working directory has no `.git` metadata.
   exists and passes layer 3 of `genesis/test.sh` for steps 0–6d: locals,
   expressions, strings, control flow, syscalls, procedures, zones, views, raw
   memory, layouts, refs, fallible results and module constants. `compiler/`
-  has begun (design 0022): the V0 lexer and parser in oli-core, built by
-  `oli1`, pass the fixture corpus at layer 4 — all four `tests/snapshots/*.ast`
-  are reproduced byte for byte and all fifteen `tests/parse/err` fixtures give
-  exactly their expected diagnostics. Semantic analysis, OIR, the native
-  backend, the standard-library implementation and the kernel do not exist.
+  has begun (design 0022): the V0 lexer, parser, §8 diagnostic renderer, module
+  loader and item collection in oli-core, built by `oli1`, pass the fixture
+  corpus at layer 4 — all four `tests/snapshots/*.ast` are reproduced byte for
+  byte, all fifteen `tests/parse/err` fixtures give exactly their expected
+  diagnostics, and the layouts, choices, constants and statics of all three
+  `tests/snapshots/*.sema` are reproduced line for line. The rest of semantic
+  analysis (signatures, bodies, types, regions, capabilities, flow), OIR, the
+  native backend, the standard-library implementation and the kernel do not
+  exist.
 - README and ROADMAP originally disagreed with each other and with G2's code.
 
 ## Completion gates

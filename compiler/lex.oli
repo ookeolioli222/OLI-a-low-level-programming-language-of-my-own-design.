@@ -48,6 +48,7 @@ layout Tok
 end
 
 layout Lex
+    file : view u8
     src : view u8
     toks : view u8
     tmp : view u8
@@ -62,6 +63,7 @@ end
 
 proc lex_new(z: zone, src: view u8, max_tokens: u64) -> rw ref Lex
     lx := z.make(Lex)
+    lx.file <- "stdin"
     lx.src <- src
     lx.toks <- z.bytes(max_tokens * Tok.size)
     lx.tmp <- z.bytes(32)
@@ -139,17 +141,13 @@ proc diag_msg(code: u64) -> view u8
 end
 
 proc diag(lx: ref Lex, code: u64, line: u64, col: u64)
-    -- spec §8 header lines; the source excerpt arrives with the diag module.
     tmp := lx.tmp
     put(2, "error[E000")
     put_uint(2, tmp, code)
     put(2, "]: ")
     put(2, diag_msg(code))
-    put(2, "\n --> stdin:")
-    put_uint(2, tmp, line)
-    put(2, ":")
-    put_uint(2, tmp, col)
-    put(2, "\n")
+    diag_head(lx.file, tmp, line, col)
+    excerpt(lx.src, tmp, line, col)
     lx.nerr <- lx.nerr + 1
 end
 

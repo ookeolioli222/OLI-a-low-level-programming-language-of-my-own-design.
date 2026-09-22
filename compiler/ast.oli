@@ -115,6 +115,7 @@ layout Node
 end
 
 layout Ctx
+    file : view u8
     src : view u8
     toks : view u8
     nodes : view u8
@@ -133,13 +134,14 @@ layout Ctx
     contnl : u64
     errmark : u64
     nwarn : u64
+    root : u64
 end
 
-proc ctx_new(z: zone, src: view u8, toks: view u8, ntok: u64) -> rw ref Ctx
-    cx := z.make(Ctx)
+proc ctx_init(cx: rw ref Ctx, z: zone, src: view u8, lx: ref Lex)
+    cx.file <- "stdin"
     cx.src <- src
-    cx.toks <- toks
-    cx.ntok <- ntok
+    cx.toks <- lx.toks
+    cx.ntok <- lx.ntok
     cx.nodes <- z.bytes(NODE_MAX * Node.size)
     cx.out <- z.bytes(OUT_MAX)
     cx.tmp <- z.bytes(32)
@@ -155,7 +157,27 @@ proc ctx_new(z: zone, src: view u8, toks: view u8, ntok: u64) -> rw ref Ctx
     cx.contnl <- 0
     cx.errmark <- 0
     cx.nwarn <- 0
+    cx.root <- 0
+end
+
+proc ctx_new(z: zone, src: view u8, lx: ref Lex) -> rw ref Ctx
+    cx := z.make(Ctx)
+    ctx_init(cx, z, src, lx)
     ret cx
+end
+
+proc mod_text(cx: ref Ctx, a: u64, b: u64) -> view u8
+    -- The source text spanned by tokens a..b, used for module and import paths.
+    if b <= a
+        src0 := cx.src
+        ret src0[0..0]
+    end
+    ta := ctok(cx, a)
+    tb := ctok(cx, b - 1)
+    src := cx.src
+    s := ta.start
+    e := tb.start + tb.len
+    ret src[s..e]
 end
 
 proc node_at(cx: ref Ctx, n: u64) -> rw ref Node

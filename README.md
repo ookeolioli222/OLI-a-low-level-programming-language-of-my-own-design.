@@ -25,10 +25,11 @@ fallible results (`T or E`, `fail`, `else` handlers, `case`) —
 `genesis/3-oli1/tests/hello.oli` prints `Hello Oli--`, `fib.oli` computes
 fib(10), `slurp.oli` reads stdin into a zone and upper-cases it in place and
 `propagate.oli` propagates parse failures through two procedures, all from
-oli-core source. G4 has begun: the V0 lexer and parser
-(`compiler/`), written in oli-core and built by `oli1`, tokenize every fixture
-and reproduce every `tests/snapshots/*.ast` byte for byte, with the exact
-diagnostics of the negative fixtures (`docs/design/0022`).**
+oli-core source. G4 has begun: the V0 lexer, parser and
+item collection (`compiler/`), written in oli-core and built by `oli1`,
+tokenize every fixture, reproduce every `tests/snapshots/*.ast` byte for byte
+with the exact diagnostics of the negative fixtures, and lay out the layouts,
+choices and constants of every `tests/snapshots/*.sema` (`docs/design/0022`).**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -38,7 +39,7 @@ diagnostics of the negative fixtures (`docs/design/0022`).**
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
 | G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6d done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`) and module constants; next: `oli1` compiles the first `olic` modules (G4) |
-| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser and the `--show-tokens`/`--show-ast` drivers pass the corpus and reproduce every AST snapshot; semantic analysis and back end next; fixpoint `stage2 == stage3` | **in progress** |
+| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader and item collection; `--show-tokens`, `--show-ast` and `--show-items` reproduce every AST snapshot and the item section of every semantic snapshot; the rest of semantic analysis and the back end next; fixpoint `stage2 == stage3` | **in progress** |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |
 | M3 | Freestanding binary with own entry point and own stack | not started |
@@ -56,6 +57,14 @@ After the genesis tests, run this from the repository root in Linux/WSL:
 genesis/build/asm.bin < examples/genesis/hello.oli > genesis/build/hello.elf
 chmod +x genesis/build/hello.elf
 genesis/build/hello.elf                  # Hello Oli--
+
+genesis/build/oli1.bin < genesis/3-oli1/tests/fib.oli > genesis/build/fib.elf
+chmod +x genesis/build/fib.elf
+genesis/build/fib.elf; echo $?           # 55 - an oli-core program compiled by oli1
+
+genesis/build/show_tokens < examples/hello.oli    # the front end of olic, built by oli1
+genesis/build/show_ast    < examples/hello.oli
+genesis/build/show_items  < examples/hello.oli
 ```
 
 This example uses the genesis machine sub-language. The high-level
@@ -106,7 +115,8 @@ Normative V0 specification (`spec/`):
 
 ```
 genesis/             the bootstrap chain: hex0 (bytes) → hex2 → asm → oli1 → olic
-compiler/            olic written in oli-core (G4): io, lexer, AST, parser, drivers
+compiler/            olic written in oli-core (G4): io, lexer, diagnostics, AST,
+                     parser, module loader, item collection, one driver per stage
 genesis/hexbin.sh    the only non-Oli-- build step: materializes hex0.bin once (POSIX sh)
 genesis/test.sh      verifies every layer (POSIX sh + coreutils)
 lib/                 core and std library modules written in Oli-- (V0 subset)

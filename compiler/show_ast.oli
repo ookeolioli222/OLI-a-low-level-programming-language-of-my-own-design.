@@ -10,7 +10,7 @@ proc start
         src := read_all(z, 1048576)
         lx := lex_new(z, src, TOK_MAX)
         lex_all(lx)
-        cx := ctx_new(z, src, lx.toks, lx.ntok)
+        cx := ctx_new(z, src, lx)
         cx.nerr <- lx.nerr
         m := p_module(cx)
         print_module(cx, m)

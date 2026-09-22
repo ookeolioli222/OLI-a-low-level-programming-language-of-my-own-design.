@@ -1,0 +1,68 @@
+module olic.load
+-- Reading source files and resolving imports. Genesis drivers have no access
+-- to argv, so the root module is read from stdin and imported modules are
+-- looked up under `lib/` relative to the working directory, which is what
+-- `--lib DIR` will select once the driver can read its command line.
+
+proc cstr(z: zone, path: view u8) -> view u8
+    b := z.bytes(path.len + 1)
+    i := 0
+    while i < path.len
+        b[i] <- path[i]
+        i <- i + 1
+    end
+    b[i] <- 0
+    ret b
+end
+
+proc read_file(z: zone, path: view u8, cap: u64) -> view u8
+    -- openat(AT_FDCWD, path, O_RDONLY) then read to end; an empty view means
+    -- the file could not be opened.
+    permit os.syscall
+    p := cstr(z, path)
+    fd := os.syscall(257, -100, p.addr, 0, 0)
+    if fd < 0
+        empty := z.bytes(1)
+        ret empty[..0]
+    end
+    buf := z.bytes(cap)
+    n := 0
+    while n < cap
+        r := os.syscall(0, fd, buf.addr + n, cap - n)
+        if r <= 0
+            break
+        end
+        n <- n + r
+    end
+    os.syscall(3, fd)
+    ret buf[..n]
+end
+
+proc module_file(z: zone, name: view u8) -> view u8
+    -- `std.os` -> `lib/std/os.oli`
+    pre := "lib/"
+    suf := ".oli"
+    b := z.bytes(pre.len + name.len + suf.len)
+    i := 0
+    while i < pre.len
+        b[i] <- pre[i]
+        i <- i + 1
+    end
+    j := 0
+    while j < name.len
+        c := name[j]
+        if c == 46
+            c <- 47
+        end
+        b[i] <- c
+        i <- i + 1
+        j <- j + 1
+    end
+    k := 0
+    while k < suf.len
+        b[i] <- suf[k]
+        i <- i + 1
+        k <- k + 1
+    end
+    ret b
+end

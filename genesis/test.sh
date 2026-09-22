@@ -917,7 +917,7 @@ echo "ok: oli1 compiles module-level constants; rejects duplicates, non-literal 
 echo "genesis: layer 3 (oli-core compiler, steps 0-6d) passed"
 
 # --- layer 4: olic (G4), written in oli-core and compiled by oli1 ---
-cat ../compiler/io.oli ../compiler/lex.oli ../compiler/show_tokens.oli > build/show_tokens.oli
+cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/show_tokens.oli > build/show_tokens.oli
 ./build/oli1.bin < build/show_tokens.oli > build/show_tokens || fail "oli1 could not compile compiler/ (show_tokens)"
 chmod +x build/show_tokens
 ./build/oli1.bin < build/show_tokens.oli > build/show_tokens.again
@@ -948,7 +948,7 @@ got=$(grep ' int \| char ' build/tok.out | awk '{print $3}' | tr '\n' ' ')
 [ "$got" = "18446603336221196288 18446744073709551615 0 65536 2097152 1073741824 170 15 97 65 " ] || fail "lexer: literal values [$got]"
 echo "ok: olic lexer scales K/M/G, reads hex/binary/octal, u64 boundaries, char and escape values"
 
-cat ../compiler/io.oli ../compiler/lex.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/show_ast.oli > build/show_ast.oli
+cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/show_ast.oli > build/show_ast.oli
 ./build/oli1.bin < build/show_ast.oli > build/show_ast || fail "oli1 could not compile compiler/ (show_ast)"
 chmod +x build/show_ast
 ./build/oli1.bin < build/show_ast.oli > build/show_ast.again
@@ -973,4 +973,30 @@ for f in ../tests/parse/err/*.oli; do
     head -c 8 build/ast.out | grep -q '^(module' || fail "parser: $f produced no module after recovery"
 done
 echo "ok: olic parser reports exactly the E0001-E0032/W0001 diagnostics the parse/err fixtures expect, and recovers"
-echo "genesis: layer 4 (olic lexer and parser) passed"
+cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/show_items.oli > build/show_items.oli
+./build/oli1.bin < build/show_items.oli > build/show_items || fail "oli1 could not compile compiler/ (show_items)"
+chmod +x build/show_items
+./build/oli1.bin < build/show_items.oli > build/show_items.again
+cmp build/show_items build/show_items.again || fail "show_items build is not deterministic"
+# The item section must equal the head of the semantic snapshot, and it is read
+# from the repository root because imports are resolved under lib/.
+for pair in "hello examples/hello.oli" "packet_demo examples/packet_demo.oli" "freestanding tests/sema/ok/freestanding.oli"; do
+    set -- $pair
+    ( cd .. && genesis/build/show_items < "$2" > genesis/build/$1.items 2> genesis/build/items.err ) || fail "items: diagnostics for $2: $(cat build/items.err)"
+    n=$(wc -l < build/$1.items)
+    head -n "$n" ../tests/snapshots/$1.sema > build/$1.want
+    cmp build/$1.want build/$1.items || fail "items: $1 differs from the head of tests/snapshots/$1.sema"
+    [ "$n" -ge 5 ] || fail "items: $1 produced only $n lines"
+done
+echo "ok: olic item collection matches the layouts, choices, constants and statics of every tests/snapshots/*.sema"
+( cd .. && genesis/build/show_items < tests/parse/ok/kernel_sketch.oli > genesis/build/ks.items 2>/dev/null )
+grep -q '(layout GdtPointer#1 size=10 align=1 (limit u16 @0) (base addr u64 @2))' build/ks.items || fail "items: packed layout"
+grep -q '(layout Multiboot2Header#0 size=24 align=8 ' build/ks.items || fail "items: explicit layout alignment"
+( cd .. && genesis/build/show_items < tests/parse/ok/statements.oli > genesis/build/st.items 2>/dev/null )
+grep -q '(choice Shape#0 size=20 align=4 tag=1 payload@4 (dot) (line (a Point @4) (b Point @12)))' build/st.items || fail "items: choice with a layout payload"
+for f in ../tests/sema/ok/*.oli ../lib/*.oli ../lib/*/*.oli ../compiler/*.oli; do
+    ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: diagnostics for $f: $(cat build/items.err)"
+    head -c 9 build/items.out | grep -q '^(program' || fail "items: $f produced no program"
+done
+echo "ok: olic resolves packed/aligned layouts, nested payloads and every library module it imports"
+echo "genesis: layer 4 (olic lexer, parser and item collection) passed"

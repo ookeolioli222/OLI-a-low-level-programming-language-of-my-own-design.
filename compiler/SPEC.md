@@ -9,13 +9,27 @@ valid oli-core program (so `oli1` builds it today) and a valid V0 program (so
 ## Build
 
 `oli1` reads one source on stdin, so a program is the concatenation of its
-modules; `module` lines are accepted anywhere and module-level constants must
-precede the procedures that use them:
+modules, in dependency order (a module-level constant must precede its use):
 
 ```sh
-cat compiler/io.oli compiler/lex.oli compiler/show_tokens.oli | genesis/build/oli1.bin > show_tokens
-./show_tokens < examples/hello.oli          # one token per line, diagnostics on stderr
+sh genesis/test.sh                       # builds every driver and runs the acceptance tests
+B=genesis/build
+cat compiler/io.oli compiler/lex.oli compiler/diag.oli compiler/show_tokens.oli | $B/oli1.bin > $B/show_tokens
+cat compiler/io.oli compiler/lex.oli compiler/diag.oli compiler/ast.oli compiler/parse.oli \
+    compiler/show_ast.oli | $B/oli1.bin > $B/show_ast
+cat compiler/io.oli compiler/lex.oli compiler/diag.oli compiler/ast.oli compiler/parse.oli \
+    compiler/load.oli compiler/items.oli compiler/show_items.oli | $B/oli1.bin > $B/show_items
+chmod +x $B/show_tokens $B/show_ast $B/show_items
+
+$B/show_tokens < examples/hello.oli      # one token per line
+$B/show_ast    < examples/hello.oli      # the tree of tests/snapshots/hello.ast
+$B/show_items  < examples/hello.oli      # layouts, choices and constants (run from the repo root:
+                                         # imports are resolved under lib/)
 ```
+
+Each driver writes its result on stdout and its diagnostics on stderr, and
+exits 1 when it reported any. `show_items` resolves `import` by reading
+`lib/<path>.oli`, so run it from the repository root.
 
 `sh genesis/test.sh` (layer 4) builds every driver, checks the build is
 deterministic and runs the acceptance tests below.
@@ -30,7 +44,11 @@ deterministic and runs the acceptance tests below.
 | `olic.parse` | `parse.oli` | recursive descent over §3–§7 with recovery; E0010–E0032, W0001 | done |
 | `olic.show_tokens` | `show_tokens.oli` | driver for `--show-tokens`: stdin → token lines on stdout | done |
 | `olic.show_ast` | `show_ast.oli` | driver for `--show-ast`: stdin → the tree on stdout | done |
-| `olic.diag` | — | §8 renderer with source excerpts, sorted diagnostics, file names | planned |
+| `olic.diag` | `diag.oli` | the §8 renderer: header, `--> file:line:col`, the source line and a caret | done |
+| `olic.load` | `load.oli` | reading files (`openat`/`read`/`close`) and resolving imports under `lib/` | done |
+| `olic.items` | `items.oli` | modules, item collection, layout/choice layout (ABI §3), constant evaluation, the item section of `--show-sema` | done |
+| `olic.show_items` | `show_items.oli` | driver for the item section | done |
+| `olic.sema` | — | signatures, bodies, types, regions, capabilities, flow — the rest of `--show-sema` | planned |
 | `olic.sema` | — | items, layouts, signatures, constants, bodies, program rules, `--show-sema` | planned |
 | `olic.oir`, `olic.x64`, `olic.elf` | — | back end | planned |
 
@@ -104,6 +122,40 @@ reproduced byte for byte; every fixture, library module and the compiler's own
 source parses without a diagnostic; each `tests/parse/err` fixture reports
 exactly its expected `E0001`–`E0032`/`W0001` set at the expected positions and
 still prints a module after recovery.
+
+## Items (`load.oli`, `items.oli`)
+
+Stage 1 of semantic analysis: the root module is read from stdin, `core` is
+loaded because it is always available, then every `import` of the root, each
+into its own `Ctx`. Items are collected per module in declaration order and
+printed in the order the snapshots use — all layouts, then all choices, then
+constants and statics, numbered from zero within each group, the root module's
+items before the imported ones.
+
+- Layout (`docs/ABI.md` §3): a field's alignment is `min(size, 8)`, raised by
+  `align N` on the field and dropped to 1 by `packed` on the layout; the
+  layout's alignment is the largest field alignment or its own `align N`, and
+  its size is rounded up to it. A choice is a one-byte tag followed by the
+  payload at the first offset with the payload's alignment; every variant is
+  laid out from there and the size is the largest variant, rounded up.
+- Type sizes come from the token range of the type: primitives from a table,
+  `view T` = 16, `ref`/`addr`/`zone`/`physaddr` = 8, `[N]T` = `N × T`, and a
+  layout or choice name resolves that item first (a cycle reports E0204).
+- Constants are evaluated as integers: literals, `+ - * / %`, unary minus,
+  `Name.size`, `Name.align` and other constants.
+
+Acceptance (`genesis/test.sh`, layer 4): the item section of
+`tests/snapshots/hello.sema`, `packet_demo.sema` and `freestanding.sema` is
+reproduced line for line (the head of each snapshot, down to the first
+procedure); `kernel_sketch` exercises `packed`, `align N` on a layout and on a
+field; `statements` exercises a choice whose variant carries two layouts by
+value; every fixture, library module and compiler source produces a program.
+
+Deviations to close in later stages: an aggregate constant (a layout literal or
+an array) prints as `0` because only integer constants are evaluated; a
+constant without a type annotation prints `word`; `(program entry=none)` is
+printed for a module without an entry procedure instead of checking the
+one-entry rule (that belongs to the program pass).
 
 Deviations to close in later stages: named call arguments parse and are
 checked for mixing (E0022) but the tree keeps only the value; `import ... as`

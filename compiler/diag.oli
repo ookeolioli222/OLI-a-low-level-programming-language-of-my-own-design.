@@ -1,0 +1,99 @@
+module olic.diag
+-- The diagnostic renderer of spec/OLI_SYNTAX_V0.md §8:
+--
+--   error[E0012]: expected expression
+--    --> test.oli:12:15
+--      |
+--   12 | total <-
+--      |         ^
+--
+-- Callers print the header line and then call `excerpt`, which needs only the
+-- source, a scratch buffer and the position, so it serves the lexer (which has
+-- no tree yet) and the parser alike.
+
+proc digits(n: u64) -> u64
+    d := 1
+    m := n
+    while m >= 10
+        m <- m / 10
+        d <- d + 1
+    end
+    ret d
+end
+
+proc line_start(src: view u8, line: u64) -> u64
+    -- The offset of the first byte of `line` (1-based).
+    l := 1
+    i := 0
+    while i < src.len
+        if l == line
+            ret i
+        end
+        if src[i] == B_NL
+            l <- l + 1
+        end
+        i <- i + 1
+    end
+    ret src.len
+end
+
+proc line_end(src: view u8, begin: u64) -> u64
+    i := begin
+    while i < src.len
+        c := src[i]
+        if c == B_NL
+            ret i
+        end
+        if c == B_CR
+            ret i
+        end
+        i <- i + 1
+    end
+    ret src.len
+end
+
+proc spaces(n: u64)
+    i := 0
+    while i < n
+        put(2, " ")
+        i <- i + 1
+    end
+end
+
+proc excerpt(src: view u8, tmp: view u8, line: u64, col: u64)
+    -- The gutter is as wide as the line number, as in §8.
+    w := digits(line)
+    s := line_start(src, line)
+    e := line_end(src, s)
+    spaces(w + 1)
+    put(2, "|\n")
+    put_uint(2, tmp, line)
+    put(2, " | ")
+    put(2, src[s..e])
+    put(2, "\n")
+    spaces(w + 1)
+    put(2, "| ")
+    i := 0
+    while i + 1 < col
+        c := 32
+        if s + i < e
+            if src[s + i] == B_TAB
+                c <- B_TAB
+            end
+        end
+        tmp[0] <- c
+        put(2, tmp[..1])
+        i <- i + 1
+    end
+    put(2, "^\n")
+end
+
+proc diag_head(file: view u8, tmp: view u8, line: u64, col: u64)
+    put(2, "\n --> ")
+    put(2, file)
+    put(2, ":")
+    put_uint(2, tmp, line)
+    put(2, ":")
+    put_uint(2, tmp, col)
+    put(2, "\n")
+end
