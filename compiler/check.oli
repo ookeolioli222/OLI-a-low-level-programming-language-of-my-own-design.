@@ -5,13 +5,13 @@ module olic.check
 -- whose `permit` clauses are in force, which is what makes `grep permit` over a
 -- kernel tree an honest list of everything that touches hardware.
 
-proc sdiag(pg: ref Prog, mi: u64, code: u64, tok: u64)
+proc sdiag(pg: rw ref Prog, mi: u64, code: u64, tok: u64)
     -- A semantic diagnostic in the format of spec/OLI_SYNTAX_V0.md §8.
     cx := mod_ctx(pg, mi)
     t := ctok(cx, tok)
     tmp := pg.tmp
     put(2, "error[E")
-    d := 1000
+    d : u64 <- 1000
     while d > 0
         tmp[0] <- 48 + code / d % 10
         put(2, tmp[..1])
@@ -78,8 +78,8 @@ proc first_tok(pg: ref Prog, mi: u64, n: u64) -> u64
     -- so the position of a diagnostic comes from the subtree.
     cx := mod_ctx(pg, mi)
     nd := node_at(cx, n)
-    best := nd.t0
-    k := kid1(cx, n)
+    best : u64 <- nd.t0
+    k : u64 <- kid1(cx, n)
     while k != 0
         t := first_tok(pg, mi, k)
         if t < best
@@ -98,12 +98,12 @@ proc permitted(pg: ref Prog, mi: u64, name: view u8) -> word
     if p == 0
         ret 1
     end
-    k := kid1(cx, p)
+    k : u64 <- kid1(cx, p)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_CLAUSE
             if kn.sub == C_PERMIT
-                c := kid1(cx, k)
+                c : u64 <- kid1(cx, k)
                 while c != 0
                     cn := node_at(cx, c)
                     if view_eq(mod_text(cx, cn.t0, cn.t1), name)
@@ -134,7 +134,7 @@ proc check_type(pg: ref Prog, mi: u64, ty: u64)
     end
     cx := mod_ctx(pg, mi)
     tn := node_at(cx, ty)
-    i := tn.t0
+    i : u64 <- tn.t0
     while i < tn.t1
         t := ctok(cx, i)
         if t.kind == TK_KW
@@ -178,7 +178,7 @@ end
 
 proc module_name_exists(pg: ref Prog, name: view u8) -> word
     -- A module-level constant, static, layout or choice of this name.
-    i := 0
+    i : u64 <- 0
     while i < pg.nval
         v := val_at(pg, i)
         cx := mod_ctx(pg, v.mod)
@@ -188,7 +188,7 @@ proc module_name_exists(pg: ref Prog, name: view u8) -> word
         end
         i <- i + 1
     end
-    j := 0
+    j : u64 <- 0
     while j < pg.nitem
         it := item_at(pg, j)
         cx2 := mod_ctx(pg, it.mod)
@@ -202,7 +202,7 @@ proc module_name_exists(pg: ref Prog, name: view u8) -> word
 end
 
 proc chk_find(pg: ref Prog, name: view u8) -> word
-    i := pg.nchk
+    i : u64 <- pg.nchk
     while i > 0
         i <- i - 1
         c := chk_at(pg, i)
@@ -214,7 +214,7 @@ proc chk_find(pg: ref Prog, name: view u8) -> word
     ret -1
 end
 
-proc chk_push(pg: ref Prog, mi: u64, nametok: u64, kind: u64, assigned: u64)
+proc chk_push(pg: rw ref Prog, mi: u64, nametok: u64, kind: u64, assigned: u64)
     -- A new name in the current scope; shadowing anything visible is E0101.
     cx := mod_ctx(pg, mi)
     name := tok_text(cx, nametok)
@@ -288,7 +288,7 @@ proc region_of(pg: ref Prog, mi: u64, n: u64) -> u64
         ret 0
     end
     m := tok_text(cx, callee.t0)
-    zoneish := 0
+    zoneish : u64 <- 0
     if view_eq(m, "bytes")
         zoneish <- 1
     end
@@ -336,13 +336,13 @@ proc frame_escape(pg: ref Prog, mi: u64, n: u64) -> word
     ret 0
 end
 
-proc scope_drop(pg: ref Prog, mark: u64)
+proc scope_drop(pg: rw ref Prog, mark: u64)
     pg.nchk <- mark
 end
 
 proc undo_assigns(pg: ref Prog, depth: u64)
     -- Assignments made inside a branch or a loop do not survive it.
-    i := 0
+    i : u64 <- 0
     while i < pg.nchk
         c := chk_at(pg, i)
         if c.assigned == 1
@@ -357,7 +357,7 @@ end
 
 proc mark_branch(pg: ref Prog, depth: u64)
     -- Remember which places this branch assigned, then undo them.
-    i := 0
+    i : u64 <- 0
     while i < pg.nchk
         c := chk_at(pg, i)
         if c.assigned == 1
@@ -372,7 +372,7 @@ end
 
 proc keep_common(pg: ref Prog, nbranch: u64)
     -- A place assigned by every branch of an `if … else` is assigned after it.
-    i := 0
+    i : u64 <- 0
     while i < pg.nchk
         c := chk_at(pg, i)
         if c.b1 >= nbranch
@@ -385,7 +385,7 @@ proc keep_common(pg: ref Prog, nbranch: u64)
 end
 
 proc clear_marks(pg: ref Prog)
-    i := 0
+    i : u64 <- 0
     while i < pg.nchk
         c := chk_at(pg, i)
         c.b1 <- 0
@@ -493,7 +493,7 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
             end
         end
     end
-    c := kid1(cx, n)
+    c : u64 <- kid1(cx, n)
     while c != 0
         check_expr(pg, mi, c)
         c <- sibling(cx, c)
@@ -512,7 +512,7 @@ proc call_is_fallible(pg: ref Prog, mi: u64, n: u64) -> word
         ret 0
     end
     t := proc_result(pg, tok_text(cx, callee.t0))
-    i := 0
+    i : u64 <- 0
     while i + 4 <= t.len
         if view_eq(t[i..i + 4], " or ")
             ret 1
@@ -525,7 +525,7 @@ end
 proc base_name(pg: ref Prog, mi: u64, n: u64) -> u64
     -- The name an element or field expression is rooted at, or 0.
     cx := mod_ctx(pg, mi)
-    e := n
+    e : u64 <- n
     while e != 0
         en := node_at(cx, e)
         if en.kind == N_NAME
@@ -545,7 +545,7 @@ proc base_name(pg: ref Prog, mi: u64, n: u64) -> u64
 end
 
 proc is_module_const(pg: ref Prog, name: view u8) -> word
-    i := 0
+    i : u64 <- 0
     while i < pg.nval
         v := val_at(pg, i)
         if v.kind == 0
@@ -611,7 +611,7 @@ proc has_break(pg: ref Prog, mi: u64, n: u64) -> word
     if k == N_EACH
         ret 0
     end
-    c := kid1(cx, n)
+    c : u64 <- kid1(cx, n)
     while c != 0
         if has_break(pg, mi, c)
             ret 1
@@ -645,13 +645,13 @@ proc variants_covered(pg: ref Prog, mi: u64, n: u64, idx: u64, fail_side: u64) -
     cx := mod_ctx(pg, mi)
     it := item_at(pg, idx)
     cxi := mod_ctx(pg, it.mod)
-    v := kid1(cxi, it.node)
+    v : u64 <- kid1(cxi, it.node)
     while v != 0
         vn := node_at(cxi, v)
         if vn.kind == N_VARIANT
             name := tok_text(cxi, vn.t0)
-            found := 0
-            arm := kid2(cx, n)
+            found : u64 <- 0
+            arm : u64 <- kid2(cx, n)
             while arm != 0
                 an := node_at(cx, arm)
                 if an.kind == N_WHEN
@@ -689,7 +689,7 @@ end
 
 proc has_arm_kind(pg: ref Prog, mi: u64, n: u64, kind: u64) -> word
     cx := mod_ctx(pg, mi)
-    arm := kid2(cx, n)
+    arm : u64 <- kid2(cx, n)
     while arm != 0
         an := node_at(cx, arm)
         if an.kind == kind
@@ -707,10 +707,10 @@ proc has_arm_kind(pg: ref Prog, mi: u64, n: u64, kind: u64) -> word
 end
 
 proc has_bool_arms(pg: ref Prog, mi: u64, n: u64) -> word
-    t := 0
-    f := 0
+    t : u64 <- 0
+    f : u64 <- 0
     cx := mod_ctx(pg, mi)
-    arm := kid2(cx, n)
+    arm : u64 <- kid2(cx, n)
     while arm != 0
         an := node_at(cx, arm)
         if an.kind == N_WHEN
@@ -795,8 +795,8 @@ end
 proc check_kids(pg: ref Prog, mi: u64, first: u64) -> word
     -- A statement after one that cannot fall through is unreachable (E0231).
     cx := mod_ctx(pg, mi)
-    k := first
-    gone := 0
+    k : u64 <- first
+    gone : u64 <- 0
     while k != 0
         if gone == 1
             sdiag(pg, mi, 231, first_tok(pg, mi, k))
@@ -816,7 +816,7 @@ proc check_body(pg: ref Prog, mi: u64, body: u64) -> word
     ret d
 end
 
-proc check_branch(pg: ref Prog, mi: u64, first: u64) -> word
+proc check_branch(pg: rw ref Prog, mi: u64, first: u64) -> word
     cx := mod_ctx(pg, mi)
     mark := pg.nchk
     pg.cdepth <- pg.cdepth + 1
@@ -826,7 +826,7 @@ proc check_branch(pg: ref Prog, mi: u64, first: u64) -> word
     ret d
 end
 
-proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
+proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
     cx := mod_ctx(pg, mi)
     nd := node_at(cx, n)
     k := nd.kind
@@ -868,7 +868,7 @@ proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
     if k == N_MACHINE
         need(pg, mi, "cpu.asm", nd.val)
         -- `out REG -> place` writes its target, `in REG <- e` reads its source.
-        m := kid1(cx, n)
+        m : u64 <- kid1(cx, n)
         while m != 0
             mn := node_at(cx, m)
             if mn.kind == N_MOUT
@@ -894,7 +894,7 @@ proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
         check_type(pg, mi, kid1(cx, n))
         v := kid2(cx, n)
         check_expr(pg, mi, v)
-        a := 0
+        a : u64 <- 0
         if v != 0
             a <- 1
         end
@@ -912,7 +912,7 @@ proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
         ret 0
     end
     if k == N_BIND
-        v2 := kid1(cx, n)
+        v2 : u64 <- kid1(cx, n)
         if nd.val >= 2
             check_type(pg, mi, v2)
             v2 <- sibling(cx, v2)
@@ -929,7 +929,7 @@ proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
         rhs := kid2(cx, n)
         if ln.kind == N_NAME
             idx := chk_find(pg, tok_text(cx, ln.t0))
-            tzd := 0
+            tzd : u64 <- 0
             if idx >= 0
                 c := chk_at(pg, idx)
                 if c.kind != 1
@@ -960,8 +960,8 @@ proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
                 sdiag(pg, mi, 330, nd.t0)
             end
         end
-        b := kid1(cx, n)
-        body := 0
+        b : u64 <- kid1(cx, n)
+        body : u64 <- 0
         while b != 0
             bn := node_at(cx, b)
             if bn.kind == N_BODY
@@ -984,10 +984,10 @@ proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
         check_expr(pg, mi, kid1(cx, n))
         depth := pg.cdepth + 1
         clear_marks(pg)
-        nbr := 0
-        alldiv := 1
-        haselse := 0
-        br := kid2(cx, n)
+        nbr : u64 <- 0
+        alldiv : u64 <- 1
+        haselse : u64 <- 0
+        br : u64 <- kid2(cx, n)
         while br != 0
             bn2 := node_at(cx, br)
             if bn2.kind == N_ELIF
@@ -1057,9 +1057,9 @@ proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
     if k == N_CASE
         check_expr(pg, mi, kid1(cx, n))
         check_case_exhaustive(pg, mi, n)
-        alldiv2 := 1
-        narm := 0
-        arm := kid2(cx, n)
+        alldiv2 : u64 <- 1
+        narm : u64 <- 0
+        arm : u64 <- kid2(cx, n)
         while arm != 0
             an := node_at(cx, arm)
             mark3 := pg.nchk
@@ -1085,7 +1085,7 @@ proc check_stmt(pg: ref Prog, mi: u64, n: u64) -> word
     if k == N_BODY
         ret check_body(pg, mi, n)
     end
-    c := kid1(cx, n)
+    c : u64 <- kid1(cx, n)
     while c != 0
         check_expr(pg, mi, c)
         c <- sibling(cx, c)
@@ -1114,7 +1114,7 @@ proc bind_pattern_names(pg: ref Prog, mi: u64, pat: u64)
     if sn.kind != N_PAT
         ret
     end
-    f := kid1(cx, sub)
+    f : u64 <- kid1(cx, sub)
     while f != 0
         fn := node_at(cx, f)
         chk_push(pg, mi, fn.t0, 2, 1)
@@ -1126,8 +1126,8 @@ proc ends_in_machine(pg: ref Prog, mi: u64, body: u64) -> word
     -- The compiler cannot see through a `machine` block, so a body that ends
     -- in one is not reported as falling off the end (boot code, design 0009).
     cx := mod_ctx(pg, mi)
-    k := kid1(cx, body)
-    last := 0
+    k : u64 <- kid1(cx, body)
+    last : u64 <- 0
     while k != 0
         last <- k
         k <- sibling(cx, k)
@@ -1142,7 +1142,7 @@ proc ends_in_machine(pg: ref Prog, mi: u64, body: u64) -> word
     ret 0
 end
 
-proc check_proc(pg: ref Prog, mi: u64, node: u64)
+proc check_proc(pg: rw ref Prog, mi: u64, node: u64)
     cx := mod_ctx(pg, mi)
     pg.curproc <- node
     pg.nchk <- 0
@@ -1151,14 +1151,14 @@ proc check_proc(pg: ref Prog, mi: u64, node: u64)
     collect_locals(pg, mi, node)
     nd := node_at(cx, node)
     params := kid1(cx, node)
-    p := kid1(cx, params)
+    p : u64 <- kid1(cx, params)
     while p != 0
         pn := node_at(cx, p)
         check_type(pg, mi, kid1(cx, p))
         chk_push(pg, mi, pn.t0, 2, 1)
         p <- sibling(cx, p)
     end
-    k := sibling(cx, params)
+    k : u64 <- sibling(cx, params)
     pg.curhasres <- 0
     pg.curnever <- 0
     pg.curfallible <- 0
@@ -1171,7 +1171,7 @@ proc check_proc(pg: ref Prog, mi: u64, node: u64)
                 pg.curnever <- 1
             end
         end
-        i := rt.t0
+        i : u64 <- rt.t0
         while i < rt.t1
             if name_is(cx, i, "or")
                 pg.curfallible <- 1
@@ -1180,7 +1180,7 @@ proc check_proc(pg: ref Prog, mi: u64, node: u64)
         end
         k <- sibling(cx, k)
     end
-    body := 0
+    body : u64 <- 0
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_CLAUSE
@@ -1214,11 +1214,11 @@ end
 
 proc check_items(pg: ref Prog)
     -- Field types of every layout and choice, then every procedure.
-    i := 0
+    i : u64 <- 0
     while i < pg.nitem
         it := item_at(pg, i)
         cx := mod_ctx(pg, it.mod)
-        f := 0
+        f : u64 <- 0
         while f < it.nfld
             fr := fld_at(pg, it.first + f)
             check_type(pg, fr.mod, kid1(cx, fr.node))
@@ -1226,7 +1226,7 @@ proc check_items(pg: ref Prog)
         end
         i <- i + 1
     end
-    q := 0
+    q : u64 <- 0
     while q < pg.nproc
         v := proc_at(pg, q)
         check_proc(pg, v.mod, v.node)

@@ -10,7 +10,8 @@ LOC_MAX := 4096
 SBUF_MAX := 131072
 ITEM_MAX := 256
 FLD_MAX := 1024
-VAL_MAX := 256
+VAL_MAX := 1024
+PROC_MAX := 2048
 SRC_MAX := 262144
 
 layout Chk
@@ -61,14 +62,14 @@ layout Val
 end
 
 layout Prog
-    ctxs : view u8
-    items : view u8
-    flds : view u8
-    vals : view u8
-    procs : view u8
-    locs : view u8
-    sbuf : view u8
-    tmp : view u8
+    ctxs : rw view u8
+    items : rw view u8
+    flds : rw view u8
+    vals : rw view u8
+    procs : rw view u8
+    locs : rw view u8
+    sbuf : rw view u8
+    tmp : rw view u8
     nmod : u64
     nproc : u64
     nloc : u64
@@ -76,7 +77,7 @@ layout Prog
     locbase : u64
     curmod : u64
     curproc : u64
-    chks : view u8
+    chks : rw view u8
     nchk : u64
     cdepth : u64
     zdepth : u64
@@ -99,7 +100,7 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.items <- z.bytes(ITEM_MAX * Item.size)
     pg.flds <- z.bytes(FLD_MAX * Fld.size)
     pg.vals <- z.bytes(VAL_MAX * Val.size)
-    pg.procs <- z.bytes(VAL_MAX * Val.size)
+    pg.procs <- z.bytes(PROC_MAX * Val.size)
     pg.locs <- z.bytes(LOC_MAX * Loc.size)
     pg.sbuf <- z.bytes(SBUF_MAX)
     pg.tmp <- z.bytes(32)
@@ -157,7 +158,7 @@ proc proc_at(pg: ref Prog, i: u64) -> rw ref Val
     ret Val.at(t[off..off + Val.size])
 end
 
-proc add_proc(pg: ref Prog, mi: u64, node: u64)
+proc add_proc(pg: rw ref Prog, mi: u64, node: u64)
     i := pg.nproc
     v := proc_at(pg, i)
     v.mod <- mi
@@ -170,7 +171,7 @@ end
 
 -- Loading ---------------------------------------------------------------------
 
-proc add_module(pg: ref Prog, z: zone, src: view u8, file: view u8) -> u64
+proc add_module(pg: rw ref Prog, z: zone, src: view u8, file: view u8) -> u64
     -- Lex and parse one module into its own context; returns its index.
     i := pg.nmod
     cx := mod_ctx(pg, i)
@@ -187,7 +188,7 @@ proc add_module(pg: ref Prog, z: zone, src: view u8, file: view u8) -> u64
 end
 
 proc module_named(pg: ref Prog, name: view u8) -> word
-    i := 0
+    i : u64 <- 0
     while i < pg.nmod
         cx := mod_ctx(pg, i)
         nd := node_at(cx, cx.root)
@@ -199,7 +200,7 @@ proc module_named(pg: ref Prog, name: view u8) -> word
     ret 0
 end
 
-proc load_named(pg: ref Prog, z: zone, name: view u8)
+proc load_named(pg: rw ref Prog, z: zone, name: view u8)
     if module_named(pg, name)
         ret
     end
@@ -221,7 +222,7 @@ end
 
 proc load_imports(pg: ref Prog, z: zone, mi: u64)
     cx := mod_ctx(pg, mi)
-    k := kid1(cx, cx.root)
+    k : u64 <- kid1(cx, cx.root)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_IMPORT
@@ -236,13 +237,13 @@ end
 proc prim_size(name: view u8) -> word
     -- The size of a primitive type, or 0 if the name is not one.
     tab := "u8:1 s8:1 byte:1 bool:1 u16:2 s16:2 u32:4 s32:4 u64:8 s64:8 word:8 uword:8 addr:8 physaddr:8 zone:8 "
-    i := 0
+    i : u64 <- 0
     while i < tab.len
-        c := i
+        c : u64 <- i
         while tab[c] != 58
             c <- c + 1
         end
-        e := c + 1
+        e : u64 <- c + 1
         while tab[e] != B_SPACE
             e <- e + 1
         end
@@ -256,7 +257,7 @@ end
 
 proc item_find(pg: ref Prog, name: view u8) -> word
     -- The index of the layout or choice with this name, or -1.
-    i := 0
+    i : u64 <- 0
     while i < pg.nitem
         it := item_at(pg, i)
         cx := mod_ctx(pg, it.mod)
@@ -271,7 +272,7 @@ end
 
 proc last_component(cx: ref Ctx, a: u64, b: u64) -> view u8
     -- `core.x64.InterruptFrame` names the item `InterruptFrame`.
-    i := b
+    i : u64 <- b
     while i > a
         i <- i - 1
         t := ctok(cx, i)
@@ -282,11 +283,11 @@ proc last_component(cx: ref Ctx, a: u64, b: u64) -> view u8
     ret tok_text(cx, a)
 end
 
-proc type_size(pg: ref Prog, mi: u64, a: u64, b: u64) -> u64
+proc type_size(pg: rw ref Prog, mi: u64, a: u64, b: u64) -> u64
     -- The size in bytes of the type in tokens a..b of module mi; its alignment
     -- is left in pg.lastalign (docs/ABI.md §2-§3).
     cx := mod_ctx(pg, mi)
-    i := a
+    i : u64 <- a
     while i < b
         t := ctok(cx, i)
         if t.kind == TK_OP
@@ -356,7 +357,7 @@ proc round_up(v: u64, a: u64) -> u64
 end
 
 proc field_align(pg: ref Prog, size: u64, explicit: u64, ispacked: u64) -> u64
-    a := pg.lastalign
+    a : u64 <- pg.lastalign
     if a > 8
         a <- 8
     end
@@ -374,9 +375,9 @@ proc resolve_layout(pg: ref Prog, idx: u64)
     cx := mod_ctx(pg, it.mod)
     nd := node_at(cx, it.node)
     ispacked := nd.sub
-    cursor := 0
-    maxalign := 1
-    f := 0
+    cursor : u64 <- 0
+    maxalign : u64 <- 1
+    f : u64 <- 0
     while f < it.nfld
         fr := fld_at(pg, it.first + f)
         fn := node_at(cx, fr.node)
@@ -404,13 +405,13 @@ end
 proc resolve_choice(pg: ref Prog, idx: u64)
     it := item_at(pg, idx)
     cx := mod_ctx(pg, it.mod)
-    palign := 1
-    f := 0
+    palign : u64 <- 1
+    f : u64 <- 0
     while f < it.nfld
         fr := fld_at(pg, it.first + f)
         ty := node_at(cx, kid1(cx, fr.node))
         type_size(pg, it.mod, ty.t0, ty.t1)
-        a := pg.lastalign
+        a : u64 <- pg.lastalign
         if a > 8
             a <- 8
         end
@@ -420,11 +421,11 @@ proc resolve_choice(pg: ref Prog, idx: u64)
         f <- f + 1
     end
     payload := round_up(1, palign)
-    size := payload
+    size : u64 <- payload
     v := 0
-    cursor := payload
-    last := 0
-    g := 0
+    cursor : u64 <- payload
+    last : u64 <- 0
+    g : u64 <- 0
     while g < it.nfld
         fr3 := fld_at(pg, it.first + g)
         if fr3.variant != last
@@ -433,7 +434,7 @@ proc resolve_choice(pg: ref Prog, idx: u64)
         end
         ty2 := node_at(cx, kid1(cx, fr3.node))
         sz := type_size(pg, it.mod, ty2.t0, ty2.t1)
-        a2 := pg.lastalign
+        a2 : u64 <- pg.lastalign
         if a2 > 8
             a2 <- 8
         end
@@ -479,7 +480,7 @@ end
 
 -- Collection -------------------------------------------------------------------
 
-proc add_fld(pg: ref Prog, mi: u64, node: u64, variant: u64)
+proc add_fld(pg: rw ref Prog, mi: u64, node: u64, variant: u64)
     i := pg.nfld
     fr := fld_at(pg, i)
     fr.mod <- mi
@@ -489,7 +490,7 @@ proc add_fld(pg: ref Prog, mi: u64, node: u64, variant: u64)
     pg.nfld <- i + 1
 end
 
-proc add_item(pg: ref Prog, mi: u64, node: u64, kind: u64) -> u64
+proc add_item(pg: rw ref Prog, mi: u64, node: u64, kind: u64) -> u64
     i := pg.nitem
     it := item_at(pg, i)
     it.mod <- mi
@@ -505,7 +506,7 @@ proc add_item(pg: ref Prog, mi: u64, node: u64, kind: u64) -> u64
     ret i
 end
 
-proc add_val(pg: ref Prog, mi: u64, node: u64, kind: u64)
+proc add_val(pg: rw ref Prog, mi: u64, node: u64, kind: u64)
     i := pg.nval
     v := val_at(pg, i)
     v.mod <- mi
@@ -517,7 +518,7 @@ proc add_val(pg: ref Prog, mi: u64, node: u64, kind: u64)
 end
 
 proc has_entry(cx: ref Ctx, n: u64) -> word
-    k := kid1(cx, n)
+    k : u64 <- kid1(cx, n)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_CLAUSE
@@ -533,7 +534,7 @@ end
 proc collect_layout(pg: ref Prog, mi: u64, n: u64)
     cx := mod_ctx(pg, mi)
     idx := add_item(pg, mi, n, 0)
-    k := kid1(cx, n)
+    k : u64 <- kid1(cx, n)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_FIELDDECL
@@ -548,11 +549,11 @@ end
 proc collect_choice(pg: ref Prog, mi: u64, n: u64)
     cx := mod_ctx(pg, mi)
     idx := add_item(pg, mi, n, 1)
-    v := kid1(cx, n)
+    v : u64 <- kid1(cx, n)
     while v != 0
         vn := node_at(cx, v)
         if vn.kind == N_VARIANT
-            f := kid1(cx, v)
+            f : u64 <- kid1(cx, v)
             while f != 0
                 fn := node_at(cx, f)
                 if fn.kind == N_FIELDDECL
@@ -567,9 +568,9 @@ proc collect_choice(pg: ref Prog, mi: u64, n: u64)
     end
 end
 
-proc collect(pg: ref Prog, mi: u64)
+proc collect(pg: rw ref Prog, mi: u64)
     cx := mod_ctx(pg, mi)
-    k := kid1(cx, cx.root)
+    k : u64 <- kid1(cx, cx.root)
     while k != 0
         kn := node_at(cx, k)
         kk := kn.kind
@@ -663,7 +664,7 @@ proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
         ret 0
     end
     if k == N_NAME
-        j := 0
+        j : u64 <- 0
         while j < pg.nval
             v2 := val_at(pg, j)
             cx2 := mod_ctx(pg, v2.mod)
@@ -743,7 +744,7 @@ proc const_of(pg: ref Prog, i: u64) -> u64
     end
     v3 := val_at(pg, i)
     v3.has <- 2
-    e := kid1(cx, v.node)
+    e : u64 <- kid1(cx, v.node)
     if vn.val >= 2
         e <- sibling(cx, e)
     end
@@ -759,7 +760,7 @@ proc const_of(pg: ref Prog, i: u64) -> u64
 end
 
 proc eval_vals(pg: ref Prog)
-    i := 0
+    i : u64 <- 0
     while i < pg.nval
         const_of(pg, i)
         i <- i + 1
@@ -767,7 +768,7 @@ proc eval_vals(pg: ref Prog)
 end
 
 proc resolve_all(pg: ref Prog)
-    i := 0
+    i : u64 <- 0
     while i < pg.nitem
         resolve_item(pg, i)
         i <- i + 1
@@ -781,7 +782,7 @@ proc put_toks(pg: ref Prog, mi: u64, a: u64, b: u64)
     -- The tokens of a type, joined as the AST printer joins them.
     cx := mod_ctx(pg, mi)
     tmp := pg.tmp
-    i := a
+    i : u64 <- a
     while i < b
         if i > a
             if is_word_tok(cx, i)
@@ -805,8 +806,8 @@ proc put_type_canon(pg: ref Prog, mi: u64, a: u64, b: u64)
     -- resolves to, so `core.TrapKind` prints as `TrapKind`.
     cx := mod_ctx(pg, mi)
     tmp := pg.tmp
-    prev := 0
-    i := a
+    prev : u64 <- 0
+    i : u64 <- a
     while i < b
         t := ctok(cx, i)
         if t.kind == TK_IDENT
@@ -880,7 +881,7 @@ proc print_layout(pg: ref Prog, idx: u64, num: u64)
     put_num(pg, it.size)
     put(1, " align=")
     put_num(pg, it.alignv)
-    f := 0
+    f : u64 <- 0
     while f < it.nfld
         print_fld(pg, it.first + f)
         f <- f + 1
@@ -901,13 +902,13 @@ proc print_choice(pg: ref Prog, idx: u64, num: u64)
     put_num(pg, it.alignv)
     put(1, " tag=1 payload@")
     put_num(pg, it.payload)
-    v := kid1(cx, it.node)
+    v : u64 <- kid1(cx, it.node)
     while v != 0
         vn := node_at(cx, v)
         if vn.kind == N_VARIANT
             put(1, " (")
             put_name(pg, it.mod, v)
-            f := 0
+            f : u64 <- 0
             while f < it.nfld
                 fr := fld_at(pg, it.first + f)
                 if fr.variant == v
@@ -924,7 +925,7 @@ end
 
 proc print_clauses(pg: ref Prog, mi: u64, node: u64)
     cx := mod_ctx(pg, mi)
-    k := kid1(cx, node)
+    k : u64 <- kid1(cx, node)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_CLAUSE
@@ -981,13 +982,13 @@ end
 
 proc print_permits(pg: ref Prog, mi: u64, node: u64)
     cx := mod_ctx(pg, mi)
-    first := 1
-    k := kid1(cx, node)
+    first : u64 <- 1
+    k : u64 <- kid1(cx, node)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_CLAUSE
             if kn.sub == C_PERMIT
-                c := kid1(cx, k)
+                c : u64 <- kid1(cx, k)
                 while c != 0
                     if first
                         put(1, " permits=[")
@@ -1012,7 +1013,7 @@ proc print_proc_clauses(pg: ref Prog, mi: u64, node: u64)
     -- The order of docs/COMPILER_ARCHITECTURE.md's printer: calls, entry,
     -- section, traps; `permit` was printed before them.
     cx := mod_ctx(pg, mi)
-    k := kid1(cx, node)
+    k : u64 <- kid1(cx, node)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_CLAUSE
@@ -1024,7 +1025,7 @@ proc print_proc_clauses(pg: ref Prog, mi: u64, node: u64)
         end
         k <- sibling(cx, k)
     end
-    k2 := kid1(cx, node)
+    k2 : u64 <- kid1(cx, node)
     while k2 != 0
         kn2 := node_at(cx, k2)
         if kn2.kind == N_CLAUSE
@@ -1034,7 +1035,7 @@ proc print_proc_clauses(pg: ref Prog, mi: u64, node: u64)
         end
         k2 <- sibling(cx, k2)
     end
-    k3 := kid1(cx, node)
+    k3 : u64 <- kid1(cx, node)
     while k3 != 0
         kn3 := node_at(cx, k3)
         if kn3.kind == N_CLAUSE
@@ -1046,7 +1047,7 @@ proc print_proc_clauses(pg: ref Prog, mi: u64, node: u64)
         end
         k3 <- sibling(cx, k3)
     end
-    k4 := kid1(cx, node)
+    k4 : u64 <- kid1(cx, node)
     while k4 != 0
         kn4 := node_at(cx, k4)
         if kn4.kind == N_CLAUSE
@@ -1093,8 +1094,8 @@ proc print_program(pg: ref Prog)
         put_name(pg, pg.entrymod, pg.entrynode)
     end
     put(1, "\n")
-    n := 0
-    i := 0
+    n : u64 <- 0
+    i : u64 <- 0
     while i < pg.nitem
         it := item_at(pg, i)
         if it.kind == 0
@@ -1103,8 +1104,8 @@ proc print_program(pg: ref Prog)
         end
         i <- i + 1
     end
-    n2 := 0
-    j := 0
+    n2 : u64 <- 0
+    j : u64 <- 0
     while j < pg.nitem
         it2 := item_at(pg, j)
         if it2.kind == 1
@@ -1113,8 +1114,8 @@ proc print_program(pg: ref Prog)
         end
         j <- j + 1
     end
-    n3 := 0
-    k := 0
+    n3 : u64 <- 0
+    k : u64 <- 0
     while k < pg.nval
         v := val_at(pg, k)
         if v.kind == 0
@@ -1125,7 +1126,7 @@ proc print_program(pg: ref Prog)
         end
         k <- k + 1
     end
-    q := 0
+    q : u64 <- 0
     while q < pg.nproc
         print_proc(pg, q)
         q <- q + 1
@@ -1138,7 +1139,7 @@ proc target_freestanding(src: view u8) -> word
     if src.len < mark.len
         ret 0
     end
-    i := 0
+    i : u64 <- 0
     while i + mark.len <= src.len
         if i > 256
             ret 0
@@ -1151,13 +1152,13 @@ proc target_freestanding(src: view u8) -> word
     ret 0
 end
 
-proc analyze(pg: ref Prog, z: zone, src: view u8)
+proc analyze(pg: rw ref Prog, z: zone, src: view u8)
     -- The root module is stdin; `core` is always available, then its imports.
     pg.fstanding <- target_freestanding(src)
     root := add_module(pg, z, src, "stdin")
     load_named(pg, z, "core")
     load_imports(pg, z, root)
-    i := 0
+    i : u64 <- 0
     while i < pg.nmod
         collect(pg, i)
         i <- i + 1

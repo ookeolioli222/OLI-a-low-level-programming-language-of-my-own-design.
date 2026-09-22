@@ -12,8 +12,8 @@ module olic.diag
 -- no tree yet) and the parser alike.
 
 proc digits(n: u64) -> u64
-    d := 1
-    m := n
+    d : u64 <- 1
+    m : u64 <- n
     while m >= 10
         m <- m / 10
         d <- d + 1
@@ -23,8 +23,8 @@ end
 
 proc line_start(src: view u8, line: u64) -> u64
     -- The offset of the first byte of `line` (1-based).
-    l := 1
-    i := 0
+    l : u64 <- 1
+    i : u64 <- 0
     while i < src.len
         if l == line
             ret i
@@ -38,7 +38,7 @@ proc line_start(src: view u8, line: u64) -> u64
 end
 
 proc line_end(src: view u8, begin: u64) -> u64
-    i := begin
+    i : u64 <- begin
     while i < src.len
         c := src[i]
         if c == B_NL
@@ -53,14 +53,14 @@ proc line_end(src: view u8, begin: u64) -> u64
 end
 
 proc spaces(n: u64)
-    i := 0
+    i : u64 <- 0
     while i < n
         put(2, " ")
         i <- i + 1
     end
 end
 
-proc excerpt(src: view u8, tmp: view u8, line: u64, col: u64)
+proc excerpt(src: view u8, tmp: rw view u8, line: u64, col: u64)
     -- The gutter is as wide as the line number, as in §8.
     w := digits(line)
     s := line_start(src, line)
@@ -73,9 +73,9 @@ proc excerpt(src: view u8, tmp: view u8, line: u64, col: u64)
     put(2, "\n")
     spaces(w + 1)
     put(2, "| ")
-    i := 0
+    i : u64 <- 0
     while i + 1 < col
-        c := 32
+        c : u64 <- 32
         if s + i < e
             if src[s + i] == B_TAB
                 c <- B_TAB

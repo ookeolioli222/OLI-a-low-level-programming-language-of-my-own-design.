@@ -873,9 +873,20 @@ proc start
 .pl_nodup:
         mov rax, 58
         call .expect
+.pl_ftype:
         call .word
         cmp rcx, 0
         je .err
+        mov rdx, kw_rw
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        je .pl_ftype
+        mov rdx, kw_mmio
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .pl_ftype
         call .type_of
         mov r11, [r14+0x1F0088]
         lea r11, [r11+r11*2]
@@ -1145,8 +1156,16 @@ proc start
         mov r9, 8
         call .iskw
         cmp rax, 1
-        jne .blk_zone
+        jne .blk_loop
         call .s_continue
+        jmp .block
+.blk_loop:
+        mov rdx, kw_loop
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_zone
+        call .s_loop
         jmp .block
 .blk_zone:
         mov rdx, kw_zone
@@ -1194,9 +1213,13 @@ proc start
         cmp rax, 58
         jne .blk_store
         cmp rdx, 61
-        jne .err
+        jne .blk_place
         add rsi, 2
         call .s_bind
+        jmp .block
+.blk_place:
+        add rsi, 1
+        call .s_place
         jmp .block
 .blk_store:
         cmp rax, 60
@@ -1206,6 +1229,93 @@ proc start
         add rsi, 2
         call .s_store
         jmp .block
+.s_place:
+        -- `name : T` reserves frame slots; `<- expr` stores an initial value.
+        push r8
+        push rcx
+        call .type_code
+        cmp r9, 2
+        je .err
+        push r9
+.place_trest:
+        call .sksp
+        cmp rsi, r13
+        jae .place_tdone
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .place_tdone
+        cmp rax, 13
+        je .place_tdone
+        cmp rax, 45
+        je .place_tdone
+        cmp rax, 60
+        je .place_tdone
+        call .word
+        cmp rcx, 0
+        je .err
+        jmp .place_trest
+.place_tdone:
+        pop r9
+        pop rcx
+        pop r8
+        push r9
+        call .sym_new
+        pop r9
+        push r11
+        push r9
+        call .kind_of_code
+        mov [r11+24], rax
+        mov [r11+32], rdx
+        pop r9
+        pop r11
+        mov rax, [r14+0x1F0000]
+        mov [r11+16], rax
+        mov rdx, 1
+        cmp r9, 1
+        jne .place_slots
+        mov rdx, 2
+.place_slots:
+        add rax, rdx
+        mov [r14+0x1F0000], rax
+        push r11
+        push r9
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 60
+        jne .place_bare
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 45
+        jne .err
+        add rsi, 2
+        call .expr
+        pop r9
+        pop r11
+        mov rax, [r14+0x1F0050]
+        cmp rax, r9
+        jne .err
+        cmp r9, 1
+        je .place_view
+        mov rdx, [r11+16]
+        call .e_store
+        call .eol
+        ret
+.place_view:
+        mov rdx, [r11+16]
+        push rdx
+        call .e_store
+        pop rdx
+        add rdx, 1
+        call .e_store_rdx
+        call .eol
+        ret
+.place_bare:
+        pop r9
+        pop r11
+        call .eol
+        ret
 .s_bind:
         push r8
         push rcx
@@ -1817,6 +1927,32 @@ proc start
         call .patch_to
         pop rdx
         call .patch_here
+        pop rax
+        mov [r14+0x1F0068], rax
+        pop r9
+        call .brk_patch_to
+        pop rax
+        mov [r14+0x1F0008], rax
+        ret
+.s_loop:
+        -- `loop` is `while` with no condition: only `break`, `ret` or `fail`
+        -- leave it.
+        mov rax, [r14+0x1F0008]
+        push rax
+        mov rax, [r14+0x1F0020]
+        push rax
+        mov rax, [r14+0x1F0068]
+        push rax
+        mov rax, [r14+0x1F0060]
+        mov [r14+0x1F0068], rax
+        mov [r14+0x1F0008], rdi
+        call .eol
+        call .block
+        cmp rax, 1
+        jne .err
+        call .e_jmp
+        mov rax, [r14+0x1F0008]
+        call .patch_to
         pop rax
         mov [r14+0x1F0068], rax
         pop r9
@@ -3557,6 +3693,12 @@ rodata kw_continue
 end
 rodata kw_zone
     ascii "zone"
+end
+rodata kw_loop
+    ascii "loop"
+end
+rodata kw_mmio
+    ascii "mmio"
 end
 rodata kw_at
     ascii "at"

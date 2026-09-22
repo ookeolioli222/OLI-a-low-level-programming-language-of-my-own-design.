@@ -217,19 +217,20 @@ says it is rejected later — reports the missing `memory.raw` permit and the
 three V1 constructs it uses. The two fixtures that remain, `literals.oli` and
 `mixed_addr.oli`, need expression typing (E0201, E0202, E0203).
 
-### What the checks say about the compiler's own source
+### The compiler analyses itself
 
-Running the checks over `compiler/*.oli` is the first real measurement of how
-far oli-core is from V0. It reports three kinds of gap, and nothing else:
+Running the checks over `compiler/` measured exactly how far oli-core was from
+V0: 290 stores into bindings, 93 stores through fields that could not be
+declared `rw`, and 8 infinite loops written as `while 1`. oli1 step 6e added
+the three constructs that were missing — typed places, `rw` in field types and
+`loop` — and the sources were converted to use them.
 
-| Code | Count | Why | Closes with |
-|------|-------|-----|-------------|
-| E0110 | ~290 | oli-core has no `x : T <- e` place, so a counter is written as a binding and then stored into | oli1 step 6e: typed places |
-| E0111 | ~93 | an oli-core layout field cannot say `rw view u8`, so writing through it looks like a store into a read-only view | oli1 step 6e: `rw` in field types |
-| E0230 | 8 | oli-core has no `loop`, so an infinite loop is `while 1`, which V0 says may run zero times | oli1 step 6e: `loop` |
-
-The harness asserts that these three codes are the *only* semantic diagnostics
-the compiler's own source earns, so the gap cannot silently widen.
+`olic` now analyses its own source, all ten modules as one program, **without
+a single diagnostic**: no shadowed name, no store into a binding or a
+read-only view, no read before assignment, no unreachable statement, no
+procedure that falls off its end, no unhandled failure, no missing permit.
+The harness runs that self-analysis on every build, so the compiler's source
+cannot drift out of V0.
 
 Acceptance (`genesis/test.sh`, layer 4): every `(proc …)` and `(local …)` line
 of all three `tests/snapshots/*.sema` is reproduced exactly — 46 lines across

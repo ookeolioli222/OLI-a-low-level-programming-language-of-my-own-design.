@@ -50,8 +50,8 @@ end
 layout Lex
     file : view u8
     src : view u8
-    toks : view u8
-    tmp : view u8
+    toks : rw view u8
+    tmp : rw view u8
     pos : u64
     line : u64
     col : u64
@@ -90,7 +90,7 @@ proc peek(lx: ref Lex, off: u64) -> word
     ret src[p]
 end
 
-proc advance(lx: ref Lex)
+proc advance(lx: rw ref Lex)
     src := lx.src
     p := lx.pos
     c := src[p]
@@ -104,7 +104,7 @@ proc advance(lx: ref Lex)
     lx.col <- lx.col + 1
 end
 
-proc push(lx: ref Lex, kind: u64, start: u64, len: u64) -> rw ref Tok
+proc push(lx: rw ref Lex, kind: u64, start: u64, len: u64) -> rw ref Tok
     n := lx.ntok
     t := tok_at(lx, n)
     t.kind <- kind
@@ -140,7 +140,7 @@ proc diag_msg(code: u64) -> view u8
     ret "lexical error"
 end
 
-proc diag(lx: ref Lex, code: u64, line: u64, col: u64)
+proc diag(lx: rw ref Lex, code: u64, line: u64, col: u64)
     tmp := lx.tmp
     put(2, "error[E000")
     put_uint(2, tmp, code)
@@ -187,7 +187,7 @@ end
 
 proc digit_value(c: word, base: word) -> word
     -- The value of c as a digit in base, or -1.
-    v := -1
+    v : u64 <- -1
     if is_digit(c)
         v <- c - 48
     end
@@ -239,7 +239,7 @@ proc view_eq(a: view u8, b: view u8) -> word
     if a.len != b.len
         ret 0
     end
-    i := 0
+    i : u64 <- 0
     while i < a.len
         if a[i] != b[i]
             ret 0
@@ -252,10 +252,10 @@ end
 proc kw_index(name: view u8) -> word
     -- 1-based index into the keyword list of spec §2.3 (reserved words last), 0 if none.
     tab := "module import pub proc permit calls section align entry export traps ret fail if then elif else end while each in loop break continue zone at from case when layout choice packed machine clobber and or not true false none never rw mmio addr ref view own port be le wrap sat checked bit bits atomic thread extern generic const static volatile "
-    i := 0
-    idx := 1
+    i : u64 <- 0
+    idx : u64 <- 1
     while i < tab.len
-        j := i
+        j : u64 <- i
         while tab[j] != B_SPACE
             j <- j + 1
         end
@@ -271,7 +271,7 @@ end
 proc op2_index(c: word, d: word) -> word
     -- 1-based index of a two-character operator (spec §2.5), 0 if none.
     tab := ":=<-<~->..==!=<=>=<<>>"
-    i := 0
+    i : u64 <- 0
     while i < tab.len
         if tab[i] == c
             if tab[i + 1] == d
@@ -285,7 +285,7 @@ end
 
 proc op1_ok(c: word) -> word
     tab := ":,.+-*/%<>&|^~()[]{}"
-    i := 0
+    i : u64 <- 0
     while i < tab.len
         if tab[i] == c
             ret 1
@@ -353,10 +353,10 @@ proc escape(lx: ref Lex) -> word
     ret v
 end
 
-proc newline(lx: ref Lex)
+proc newline(lx: rw ref Lex)
     -- Runs of newlines collapse into one NL; leading newlines are dropped.
     n := lx.ntok
-    emit := 1
+    emit : u64 <- 1
     if n == 0
         emit <- 0
     else
@@ -375,7 +375,7 @@ end
 
 proc comment(lx: ref Lex)
     -- `--` vanishes; `---` becomes a Doc token holding the text after it.
-    doc := 0
+    doc : u64 <- 0
     if peek(lx, 2) == B_MINUS
         doc <- 1
     end
@@ -395,7 +395,7 @@ proc comment(lx: ref Lex)
         end
         advance(lx)
     end
-    stop := lx.pos
+    stop : u64 <- lx.pos
     if stop > start
         if src[stop - 1] == B_CR
             stop <- stop - 1
@@ -426,7 +426,7 @@ proc lex_number(lx: ref Lex)
     start := lx.pos
     line := lx.tline
     col := lx.tcol
-    base := 10
+    base : u64 <- 10
     if peek(lx, 0) == B_ZERO
         c1 := peek(lx, 1)
         if c1 == 120
@@ -443,10 +443,10 @@ proc lex_number(lx: ref Lex)
         advance(lx)
         advance(lx)
     end
-    n := 0
-    ndig := 0
-    big := 0
-    while 1
+    n : u64 <- 0
+    ndig : u64 <- 0
+    big : u64 <- 0
+    loop
         c := peek(lx, 0)
         if c == B_UNDERSCORE
             advance(lx)
@@ -468,12 +468,12 @@ proc lex_number(lx: ref Lex)
         ndig <- ndig + 1
         advance(lx)
     end
-    bad := 0
+    bad : u64 <- 0
     if ndig == 0
         diag(lx, E_INTBAD, line, col)
         bad <- 1
     end
-    scale := 0
+    scale : u64 <- 0
     c2 := peek(lx, 0)
     if c2 == 75
         scale <- 1024
@@ -519,7 +519,7 @@ proc lex_string(lx: ref Lex)
     start := lx.pos
     advance(lx)
     src := lx.src
-    closed := 0
+    closed : u64 <- 0
     while lx.pos < src.len
         c := peek(lx, 0)
         if c == B_NL
@@ -551,9 +551,9 @@ proc lex_char(lx: ref Lex)
     start := lx.pos
     advance(lx)
     c := peek(lx, 0)
-    val := 0
-    good := 1
-    reported := 0
+    val : u64 <- 0
+    good : u64 <- 1
+    reported : u64 <- 0
     if c == B_BACKSLASH
         eline := lx.line
         ecol := lx.col
@@ -622,7 +622,7 @@ proc lex_op(lx: ref Lex)
     end
 end
 
-proc lex_one(lx: ref Lex)
+proc lex_one(lx: rw ref Lex)
     c := peek(lx, 0)
     lx.tline <- lx.line
     lx.tcol <- lx.col
@@ -667,7 +667,7 @@ proc lex_one(lx: ref Lex)
     lex_op(lx)
 end
 
-proc lex_all(lx: ref Lex)
+proc lex_all(lx: rw ref Lex)
     src := lx.src
     while lx.pos < src.len
         lex_one(lx)

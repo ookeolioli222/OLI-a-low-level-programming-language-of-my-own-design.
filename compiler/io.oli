@@ -4,7 +4,7 @@ module olic.io
 
 proc put(fd: u64, v: view u8)
     permit os.syscall
-    done := 0
+    done : u64 <- 0
     while done < v.len
         w := os.syscall(1, fd, v.addr + done, v.len - done)
         if w <= 0
@@ -17,7 +17,7 @@ end
 -- 2^63: subtracting it from a word with the top bit set gives the low 63 bits.
 HALF := 9223372036854775808
 
-proc put_uint(fd: u64, tmp: view u8, n: u64)
+proc put_uint(fd: u64, tmp: rw view u8, n: u64)
     -- Decimal digits are built from the end of tmp (at least 20 bytes).
     -- oli-core divides signed, so a value >= 2^63 is printed as 2^63 + r.
     if n < 0
@@ -28,8 +28,8 @@ proc put_uint(fd: u64, tmp: view u8, n: u64)
         put(fd, tmp[..1])
         ret
     end
-    i := tmp.len
-    m := n
+    i : uword <- tmp.len
+    m : u64 <- n
     if m == 0
         i <- i - 1
         tmp[i] <- 48
@@ -46,7 +46,7 @@ proc read_all(z: zone, cap: u64) -> view u8
     -- Reads stdin into cap bytes of the zone; the view covers what was read.
     permit os.syscall
     buf := z.bytes(cap)
-    n := 0
+    n : u64 <- 0
     while n < cap
         r := os.syscall(0, 0, buf.addr + n, cap - n)
         if r <= 0

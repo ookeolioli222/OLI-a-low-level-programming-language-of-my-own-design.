@@ -96,12 +96,12 @@ OP_RBRACE := 225
 
 -- Token cursor ---------------------------------------------------------------
 
-proc sync(cx: ref Ctx)
+proc sync(cx: rw ref Ctx)
     -- Inside unclosed brackets newlines are not significant.
     if cx.depth == 0
         ret
     end
-    while 1
+    loop
         t := ctok(cx, cx.pos)
         if t.kind != TK_NL
             ret
@@ -127,20 +127,20 @@ proc tpos(cx: ref Ctx) -> u64
     ret cx.pos
 end
 
-proc adv(cx: ref Ctx)
+proc adv(cx: rw ref Ctx)
     sync(cx)
     if cx.pos + 1 < cx.ntok
         cx.pos <- cx.pos + 1
     end
 end
 
-proc adv_cont(cx: ref Ctx)
+proc adv_cont(cx: rw ref Ctx)
     -- After a binary operator, `:=`, `<-`, `.` or `,` the line continues (§1).
     -- The newline that was skipped is where a missing operand is reported.
     adv(cx)
     cx.contnl <- 0
-    first := 1
-    while 1
+    first : u64 <- 1
+    loop
         t := ctok(cx, cx.pos)
         if t.kind != TK_NL
             ret
@@ -196,12 +196,12 @@ proc eat_op(cx: ref Ctx, code: u64) -> word
     ret 0
 end
 
-proc open_bracket(cx: ref Ctx)
+proc open_bracket(cx: rw ref Ctx)
     cx.depth <- cx.depth + 1
     adv(cx)
 end
 
-proc close_bracket(cx: ref Ctx, code: u64)
+proc close_bracket(cx: rw ref Ctx, code: u64)
     if cx.depth > 0
         cx.depth <- cx.depth - 1
     end
@@ -223,9 +223,9 @@ end
 proc is_prim_name(cx: ref Ctx, i: u64) -> word
     tab := "u8 u16 u32 u64 s8 s16 s32 s64 word uword byte bool physaddr f32 f64 "
     txt := tok_text(cx, i)
-    j := 0
+    j : u64 <- 0
     while j < tab.len
-        e := j
+        e : u64 <- j
         while tab[e] != B_SPACE
             e <- e + 1
         end
@@ -434,7 +434,7 @@ proc p_lit(cx: ref Ctx, base: u64) -> u64
     n := mk(cx, N_LIT, tpos(cx))
     add_kid(cx, n, base)
     open_bracket(cx)
-    while 1
+    loop
         if at_op(cx, OP_RBRACE)
             break
         end
@@ -458,7 +458,7 @@ end
 proc p_array(cx: ref Ctx) -> u64
     n := mk(cx, N_ARRAY, tpos(cx))
     open_bracket(cx)
-    while 1
+    loop
         if at_op(cx, OP_RBRACE)
             break
         end
@@ -596,7 +596,7 @@ proc p_primary(cx: ref Ctx) -> u64
         ret p_simple(cx, N_NAME)
     end
     n2 := mk(cx, N_NAME, tpos(cx))
-    where := tpos(cx)
+    where : u64 <- tpos(cx)
     if cx.contnl > 0
         if cx.contnl + 1 == cx.pos
             where <- cx.contnl
@@ -648,9 +648,9 @@ end
 proc p_args(cx: ref Ctx, call: u64)
     -- Arguments are all positional or all named (§4, E0022).
     open_bracket(cx)
-    npos := 0
-    nnamed := 0
-    while 1
+    npos : u64 <- 0
+    nnamed : u64 <- 0
+    loop
         if at_op(cx, OP_RPAREN)
             break
         end
@@ -679,8 +679,8 @@ proc p_args(cx: ref Ctx, call: u64)
 end
 
 proc p_postfix(cx: ref Ctx) -> u64
-    e := p_primary(cx)
-    while 1
+    e : u64 <- p_primary(cx)
+    loop
         if at_op(cx, OP_DOT)
             i := tpos(cx) + 1
             t := ctok(cx, i)
@@ -786,9 +786,9 @@ proc p_binop(cx: ref Ctx, left: u64, i: u64, right: u64) -> u64
 end
 
 proc p_mul(cx: ref Ctx) -> u64
-    e := p_unary(cx)
-    while 1
-        hit := 0
+    e : u64 <- p_unary(cx)
+    loop
+        hit : u64 <- 0
         if at_op(cx, OP_STAR)
             hit <- 1
         end
@@ -808,9 +808,9 @@ proc p_mul(cx: ref Ctx) -> u64
 end
 
 proc p_add(cx: ref Ctx) -> u64
-    e := p_mul(cx)
-    while 1
-        hit := 0
+    e : u64 <- p_mul(cx)
+    loop
+        hit : u64 <- 0
         if at_op(cx, OP_PLUS)
             hit <- 1
         end
@@ -827,9 +827,9 @@ proc p_add(cx: ref Ctx) -> u64
 end
 
 proc p_shift(cx: ref Ctx) -> u64
-    e := p_add(cx)
-    while 1
-        hit := 0
+    e : u64 <- p_add(cx)
+    loop
+        hit : u64 <- 0
         if at_op(cx, OP_SHL)
             hit <- 1
         end
@@ -846,7 +846,7 @@ proc p_shift(cx: ref Ctx) -> u64
 end
 
 proc p_band(cx: ref Ctx) -> u64
-    e := p_shift(cx)
+    e : u64 <- p_shift(cx)
     while at_op(cx, OP_AMP)
         i := tpos(cx)
         adv_cont(cx)
@@ -856,7 +856,7 @@ proc p_band(cx: ref Ctx) -> u64
 end
 
 proc p_bxor(cx: ref Ctx) -> u64
-    e := p_band(cx)
+    e : u64 <- p_band(cx)
     while at_op(cx, OP_CARET)
         i := tpos(cx)
         adv_cont(cx)
@@ -866,7 +866,7 @@ proc p_bxor(cx: ref Ctx) -> u64
 end
 
 proc p_bor(cx: ref Ctx) -> u64
-    e := p_bxor(cx)
+    e : u64 <- p_bxor(cx)
     while at_op(cx, OP_BAR)
         i := tpos(cx)
         adv_cont(cx)
@@ -902,7 +902,7 @@ proc at_cmp(cx: ref Ctx) -> word
 end
 
 proc p_cmp(cx: ref Ctx) -> u64
-    e := p_bor(cx)
+    e : u64 <- p_bor(cx)
     if at_cmp(cx) == 0
         ret e
     end
@@ -920,7 +920,7 @@ proc p_cmp(cx: ref Ctx) -> u64
 end
 
 proc p_and(cx: ref Ctx) -> u64
-    e := p_cmp(cx)
+    e : u64 <- p_cmp(cx)
     while at_kw(cx, KW_AND)
         i := tpos(cx)
         adv_cont(cx)
@@ -930,7 +930,7 @@ proc p_and(cx: ref Ctx) -> u64
 end
 
 proc p_or(cx: ref Ctx) -> u64
-    e := p_and(cx)
+    e : u64 <- p_and(cx)
     while at_kw(cx, KW_OR)
         i := tpos(cx)
         adv_cont(cx)
@@ -1007,7 +1007,7 @@ proc starts_expr(cx: ref Ctx) -> word
 end
 
 proc p_range(cx: ref Ctx) -> u64
-    lo := 0
+    lo : u64 <- 0
     if at_op(cx, OP_DOTDOT) == 0
         lo <- p_or(cx)
     end
@@ -1060,7 +1060,7 @@ proc p_expr(cx: ref Ctx) -> u64
     ret n
 end
 
-proc p_cond(cx: ref Ctx) -> u64
+proc p_cond(cx: rw ref Ctx) -> u64
     -- A condition may not be followed by a `{` block opener (§7.1, E0032).
     cx.nolit <- 1
     e := p_expr(cx)
@@ -1122,7 +1122,7 @@ proc pmsg(code: u64) -> view u8
     ret "syntax error"
 end
 
-proc diag_at(cx: ref Ctx, code: u64, i: u64)
+proc diag_at(cx: rw ref Ctx, code: u64, i: u64)
     t := ctok(cx, i)
     tmp := cx.tmp
     put(2, "error[E00")
@@ -1137,7 +1137,7 @@ proc diag_at(cx: ref Ctx, code: u64, i: u64)
     cx.nerr <- cx.nerr + 1
 end
 
-proc warn_at(cx: ref Ctx, code: u64, i: u64)
+proc warn_at(cx: rw ref Ctx, code: u64, i: u64)
     t := ctok(cx, i)
     tmp := cx.tmp
     put(2, "warning[W000")
@@ -1148,9 +1148,9 @@ proc warn_at(cx: ref Ctx, code: u64, i: u64)
     cx.nwarn <- cx.nwarn + 1
 end
 
-proc skip_raw_line(cx: ref Ctx)
+proc skip_raw_line(cx: rw ref Ctx)
     -- Advance past the next newline token, ignoring bracket depth.
-    while 1
+    loop
         t := ctok(cx, cx.pos)
         if t.kind == TK_EOF
             ret
@@ -1163,8 +1163,8 @@ proc skip_raw_line(cx: ref Ctx)
 end
 
 proc pow10(n: u64) -> u64
-    r := 1
-    i := 0
+    r : u64 <- 1
+    i : u64 <- 0
     while i < n
         r <- r * 10
         i <- i + 1
@@ -1184,7 +1184,7 @@ proc is_pow2(v: u64) -> word
     if v == 0
         ret 0
     end
-    p := 1
+    p : u64 <- 1
     while p < v
         p <- p * 2
     end
@@ -1235,7 +1235,7 @@ proc recover_brace(cx: ref Ctx)
     -- looks like, so the diagnostics inside it are reported once and the
     -- closing `}` is not mistaken for a statement.
     open_bracket(cx)
-    while 1
+    loop
         if at_op(cx, OP_RBRACE)
             break
         end
@@ -1277,7 +1277,7 @@ proc end_line(cx: ref Ctx)
         ret
     end
     i := tpos(cx)
-    code := 20
+    code : u64 <- 20
     if at_op(cx, OP_LBRACE)
         nxt := ctok(cx, i + 1)
         if nxt.kind == TK_NL
@@ -1288,7 +1288,7 @@ proc end_line(cx: ref Ctx)
     if code == 32
         recover_brace(cx)
     end
-    while 1
+    loop
         k2 := tkind(cx)
         if k2 == TK_EOF
             ret
@@ -1322,7 +1322,7 @@ proc pm_word(cx: ref Ctx) -> u64
 end
 
 proc pm_int(cx: ref Ctx) -> u64
-    neg := 0
+    neg : u64 <- 0
     if at_op(cx, OP_MINUS)
         neg <- 1
         adv(cx)
@@ -1367,8 +1367,8 @@ proc pm_mem(cx: ref Ctx, size: u64, has_size: u64) -> u64
     nd := node_at(cx, n)
     nd.val <- has_size
     open_bracket(cx)
-    sign := 0
-    while 1
+    sign : u64 <- 0
+    loop
         if at_op(cx, OP_RBRACK)
             break
         end
@@ -1425,7 +1425,7 @@ proc pm_directive_kind(cx: ref Ctx) -> word
     -- `in REG <- e` and `out REG -> lv` are directives; `in REG, REG` is the
     -- instruction (§7.6): the token after the register decides. 1 = in, 2 = out.
     i := tpos(cx)
-    dir := 0
+    dir : u64 <- 0
     if at_kw(cx, KW_IN)
         dir <- 1
     end
@@ -1463,7 +1463,7 @@ proc pm_line(cx: ref Ctx, parent: u64)
         reg := tpos(cx)
         adv(cx)
         adv(cx)
-        kind := N_MIN
+        kind : u64 <- N_MIN
         if d == 2
             kind <- N_MOUT
         end
@@ -1474,7 +1474,7 @@ proc pm_line(cx: ref Ctx, parent: u64)
         if d == 2
             en := node_at(cx, e)
             k := en.kind
-            ok := 0
+            ok : u64 <- 0
             if k == N_NAME
                 ok <- 1
             end
@@ -1498,7 +1498,7 @@ proc pm_line(cx: ref Ctx, parent: u64)
     if at_kw(cx, KW_CLOBBER)
         adv(cx)
         n2 := mk(cx, N_CLOBBER, tpos(cx))
-        while 1
+        loop
             add_kid(cx, n2, pm_word(cx))
             if eat_op(cx, OP_COMMA) == 0
                 break
@@ -1522,7 +1522,7 @@ proc pm_line(cx: ref Ctx, parent: u64)
             end
         end
     end
-    mn := 0
+    mn : u64 <- 0
     if at_ident(cx)
         mn <- 1
     end
@@ -1536,7 +1536,7 @@ proc pm_line(cx: ref Ctx, parent: u64)
     end
     n4 := mk(cx, N_INSTR, tpos(cx))
     adv(cx)
-    while 1
+    loop
         if tkind(cx) == TK_NL
             break
         end
@@ -1562,7 +1562,7 @@ proc p_machine(cx: ref Ctx) -> u64
         adv(cx)
     end
     end_line(cx)
-    while 1
+    loop
         skip_nl(cx)
         if tkind(cx) == TK_EOF
             diag_at(cx, 14, tpos(cx) - 1)
@@ -1600,7 +1600,7 @@ proc block_closes(cx: ref Ctx) -> word
 end
 
 proc p_block(cx: ref Ctx, parent: u64)
-    while 1
+    loop
         skip_nl(cx)
         if block_closes(cx)
             ret
@@ -1643,7 +1643,7 @@ proc is_place_expr(cx: ref Ctx, e: u64) -> word
     ret 0
 end
 
-proc p_if(cx: ref Ctx) -> u64
+proc p_if(cx: rw ref Ctx) -> u64
     i := tpos(cx)
     adv(cx)
     cond := p_cond(cx)
@@ -1712,7 +1712,7 @@ proc pat_parse(cx: ref Ctx) -> u64
         n3 := mk(cx, N_PAT, i3)
         if at_op(cx, OP_LBRACE)
             open_bracket(cx)
-            while 1
+            loop
                 if at_op(cx, OP_RBRACE)
                     break
                 end
@@ -1839,7 +1839,7 @@ proc p_loopish(cx: ref Ctx) -> u64
     ret n3
 end
 
-proc p_stmt(cx: ref Ctx) -> u64
+proc p_stmt(cx: rw ref Ctx) -> u64
     cx.errmark <- cx.nerr
     if tkind(cx) == TK_KW
         if tsub(cx) > KW_CHECKED
@@ -2046,7 +2046,7 @@ proc p_clause_decl(cx: ref Ctx, code: u64) -> u64
     nd := node_at(cx, n)
     nd.sub <- code
     if code == C_PERMIT
-        while 1
+        loop
             add_kid(cx, n, p_word_node(cx))
             if eat_op(cx, OP_COMMA) == 0
                 break
@@ -2055,7 +2055,7 @@ proc p_clause_decl(cx: ref Ctx, code: u64) -> u64
     end
     if code == C_CALLS
         w := tpos(cx)
-        ok := 0
+        ok : u64 <- 0
         if name_is(cx, w, "sysv")
             ok <- 1
         end
@@ -2102,9 +2102,9 @@ end
 
 proc p_place_clauses(cx: ref Ctx, parent: u64)
     -- `section "name"` and `align N` lines after a constant or static.
-    while 1
+    loop
         skip_nl(cx)
-        code := 0
+        code : u64 <- 0
         if at_kw(cx, KW_SECTION)
             code <- C_SECTION
         end
@@ -2126,12 +2126,12 @@ proc p_place_clauses(cx: ref Ctx, parent: u64)
     end
 end
 
-proc take_docs(cx: ref Ctx, target: u64)
+proc take_docs(cx: rw ref Ctx, target: u64)
     d := cx.docs
     if d == 0
         ret
     end
-    k := kid1(cx, d)
+    k : u64 <- kid1(cx, d)
     while k != 0
         kn := node_at(cx, k)
         nx := kn.next
@@ -2148,7 +2148,7 @@ proc p_params(cx: ref Ctx) -> u64
         ret n
     end
     open_bracket(cx)
-    while 1
+    loop
         if at_op(cx, OP_RPAREN)
             break
         end
@@ -2185,8 +2185,8 @@ proc p_proc(cx: ref Ctx, ispub: u64) -> u64
     end
     end_line(cx)
     take_docs(cx, n)
-    seen := 0
-    while 1
+    seen : u64 <- 0
+    loop
         skip_nl(cx)
         code := clause_code(cx)
         if code == 0
@@ -2247,7 +2247,7 @@ proc p_layout(cx: ref Ctx) -> u64
     end
     end_line(cx)
     take_docs(cx, n)
-    while 1
+    loop
         skip_nl(cx)
         if tkind(cx) == TK_EOF
             diag_at(cx, 14, tpos(cx) - 1)
@@ -2270,7 +2270,7 @@ proc p_variant(cx: ref Ctx) -> u64
         ret n
     end
     open_bracket(cx)
-    while 1
+    loop
         if at_op(cx, OP_RBRACE)
             break
         end
@@ -2292,7 +2292,7 @@ proc p_choice(cx: ref Ctx) -> u64
     n := mk(cx, N_CHOICE, nm)
     end_line(cx)
     take_docs(cx, n)
-    while 1
+    loop
         skip_nl(cx)
         if tkind(cx) == TK_EOF
             diag_at(cx, 14, tpos(cx) - 1)
@@ -2311,13 +2311,13 @@ end
 proc p_const(cx: ref Ctx) -> u64
     nm := tpos(cx)
     adv(cx)
-    ty := 0
+    ty : u64 <- 0
     if at_op(cx, OP_COLON)
         adv(cx)
         ty <- p_type(cx)
     end
-    kind := N_STATIC
-    val := 0
+    kind : u64 <- N_STATIC
+    val : u64 <- 0
     if at_op(cx, OP_BIND)
         kind <- N_CONST
         adv_cont(cx)
@@ -2344,7 +2344,7 @@ proc p_const(cx: ref Ctx) -> u64
     ret n
 end
 
-proc p_decl(cx: ref Ctx, mod: u64)
+proc p_decl(cx: rw ref Ctx, mod: u64)
     if at_kw(cx, KW_PUB)
         adv(cx)
         if at_kw(cx, KW_PROC)
@@ -2425,7 +2425,7 @@ proc p_decl(cx: ref Ctx, mod: u64)
     end_line(cx)
 end
 
-proc p_docs(cx: ref Ctx)
+proc p_docs(cx: rw ref Ctx)
     while tkind(cx) == TK_DOC
         if cx.docs == 0
             cx.docs <- mk(cx, N_BODY, tpos(cx))
@@ -2443,7 +2443,7 @@ proc kid_tok(cx: ref Ctx, n: u64) -> u64
     ret kn.t0
 end
 
-proc p_module(cx: ref Ctx) -> u64
+proc p_module(cx: rw ref Ctx) -> u64
     skip_nl(cx)
     p_docs(cx)
     n := mk(cx, N_MODULE, tpos(cx))
@@ -2460,7 +2460,7 @@ proc p_module(cx: ref Ctx) -> u64
         nd3.t1 <- tpos(cx)
         end_line(cx)
     end
-    while 1
+    loop
         skip_nl(cx)
         p_docs(cx)
         if tkind(cx) == TK_EOF

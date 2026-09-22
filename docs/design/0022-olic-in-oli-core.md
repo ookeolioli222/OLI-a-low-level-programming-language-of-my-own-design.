@@ -69,8 +69,16 @@ Running those checks over `compiler/*.oli` measured the distance between
 oli-core and V0 for the first time: 290 stores into bindings (V0 wants
 `x : T <- e` places), 93 stores through layout fields that oli-core cannot
 declare `rw`, and 8 procedures whose infinite loop is `while 1` because
-oli-core has no `loop`. Nothing else. That is the specification of oli1 step
-6e, and the harness holds the number where it is.
+oli-core has no `loop`. Nothing else — so the measurement *was* the
+specification of oli1 step 6e. With those three constructs added and the
+sources converted, `olic` analyses its own source without a single
+diagnostic, and the harness re-runs that self-analysis on every build.
+
+This is the first point where the compiler is a real user of its own rules,
+and it paid immediately: converting the sources turned up a name declared
+twice with two different types in one procedure, parameters that were written
+through without being `rw`, and a procedure that read a place before assigning
+it. None of those are errors in oli-core; all of them are errors in V0.
 
 Writing the compiler in its own subset pays for itself here: `olic` lays out
 its own `Tok`, `Lex`, `Ctx`, `Node`, `Item` and `Prog` layouts, and the parser

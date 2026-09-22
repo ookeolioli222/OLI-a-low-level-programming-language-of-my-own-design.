@@ -117,10 +117,10 @@ end
 layout Ctx
     file : view u8
     src : view u8
-    toks : view u8
-    nodes : view u8
-    out : view u8
-    tmp : view u8
+    toks : rw view u8
+    nodes : rw view u8
+    out : rw view u8
+    tmp : rw view u8
     ntok : u64
     nnode : u64
     pos : u64
@@ -188,7 +188,7 @@ end
 
 proc ctok(cx: ref Ctx, i: u64) -> rw ref Tok
     toks := cx.toks
-    j := i
+    j : u64 <- i
     if j >= cx.ntok
         j <- cx.ntok - 1
     end
@@ -203,7 +203,7 @@ proc tok_text(cx: ref Ctx, i: u64) -> view u8
     ret src[s..s + t.len]
 end
 
-proc new_node(cx: ref Ctx, kind: u64, t0: u64) -> rw ref Node
+proc new_node(cx: rw ref Ctx, kind: u64, t0: u64) -> rw ref Node
     permit os.syscall
     n := cx.nnode
     if n >= NODE_MAX
@@ -263,10 +263,10 @@ end
 
 -- Output buffer ------------------------------------------------------------
 
-proc emit(cx: ref Ctx, s: view u8)
+proc emit(cx: rw ref Ctx, s: view u8)
     out := cx.out
     n := cx.nout
-    i := 0
+    i : u64 <- 0
     while i < s.len
         out[n + i] <- s[i]
         i <- i + 1
@@ -274,7 +274,7 @@ proc emit(cx: ref Ctx, s: view u8)
     cx.nout <- n + s.len
 end
 
-proc emit_byte(cx: ref Ctx, b: u64)
+proc emit_byte(cx: rw ref Ctx, b: u64)
     out := cx.out
     n := cx.nout
     out[n] <- b
@@ -297,7 +297,7 @@ proc emit_uint(cx: ref Ctx, n: u64)
 end
 
 proc emit_indent(cx: ref Ctx, ind: u64)
-    i := 0
+    i : u64 <- 0
     while i < ind
         emit(cx, " ")
         i <- i + 1
@@ -332,7 +332,7 @@ proc emit_toks(cx: ref Ctx, a: u64, b: u64)
     -- Tokens a..b joined; a space only between two word tokens, so
     -- `be u16`, `ref Shape` and `[16384]u8` all come out canonical. An
     -- integer prints its value, so `16K` in a type is `16384`.
-    i := a
+    i : u64 <- a
     while i < b
         if i > a
             if is_word_tok(cx, i)
@@ -359,7 +359,7 @@ proc emit_type(cx: ref Ctx, n: u64)
     emit_toks(cx, nd.t0, nd.t1)
 end
 
-proc flush(cx: ref Ctx)
+proc flush(cx: rw ref Ctx)
     out := cx.out
     put(1, out[..cx.nout])
     cx.nout <- 0
@@ -369,7 +369,7 @@ end
 
 proc pe_list(cx: ref Ctx, first: u64)
     -- Children printed inline, each preceded by a space.
-    n := first
+    n : u64 <- first
     while n != 0
         emit(cx, " ")
         pe(cx, n)
@@ -388,7 +388,7 @@ proc pe_convert(cx: ref Ctx, n: u64)
     nd := node_at(cx, n)
     emit(cx, "(convert ")
     emit_toks(cx, nd.t0, nd.t1)
-    m := kid1(cx, n)
+    m : u64 <- kid1(cx, n)
     mn := node_at(cx, m)
     if mn.kind == N_MODE
         emit(cx, " ")
@@ -403,7 +403,7 @@ end
 proc pe_lit(cx: ref Ctx, n: u64)
     emit(cx, "(lit ")
     pe(cx, kid1(cx, n))
-    f := kid2(cx, n)
+    f : u64 <- kid2(cx, n)
     while f != 0
         fn := node_at(cx, f)
         emit(cx, " (")
@@ -622,7 +622,7 @@ end
 
 proc pkids(cx: ref Ctx, first: u64, ind: u64)
     -- Every child on its own line, indented, as a statement or declaration.
-    k := first
+    k : u64 <- first
     while k != 0
         emit_nl(cx, ind)
         ps(cx, k, ind)
@@ -638,8 +638,8 @@ end
 
 proc pr_params(cx: ref Ctx, pnode: u64)
     emit(cx, "(")
-    k := kid1(cx, pnode)
-    sep := 0
+    k : u64 <- kid1(cx, pnode)
+    sep : u64 <- 0
     while k != 0
         if sep
             emit(cx, " ")
@@ -691,7 +691,7 @@ proc p_clause(cx: ref Ctx, n: u64)
     nd := node_at(cx, n)
     emit(cx, "(")
     emit(cx, clause_name(nd.sub))
-    k := kid1(cx, n)
+    k : u64 <- kid1(cx, n)
     while k != 0
         emit(cx, " ")
         p_clause_arg(cx, k)
@@ -722,10 +722,10 @@ proc p_pattern(cx: ref Ctx, n: u64)
     end
     if k == N_PAT
         emit_tok(cx, nd.t0)
-        f := kid1(cx, n)
+        f : u64 <- kid1(cx, n)
         if f != 0
             emit(cx, " {")
-            sep := 0
+            sep : u64 <- 0
             while f != 0
                 if sep
                     emit(cx, " ")
@@ -771,7 +771,7 @@ proc p_moperand(cx: ref Ctx, n: u64)
             emit(cx, " ")
             emit_tok(cx, nd.t0)
         end
-        t := kid1(cx, n)
+        t : u64 <- kid1(cx, n)
         while t != 0
             emit(cx, " ")
             p_mterm(cx, t)
@@ -801,7 +801,7 @@ proc p_machine_line(cx: ref Ctx, n: u64)
     end
     if k == N_CLOBBER
         emit(cx, "(clobber")
-        c := kid1(cx, n)
+        c : u64 <- kid1(cx, n)
         while c != 0
             emit(cx, " ")
             p_moperand(cx, c)
@@ -828,7 +828,7 @@ proc p_machine_line(cx: ref Ctx, n: u64)
     end
     emit(cx, "(instr ")
     emit_tok(cx, nd.t0)
-    o := kid1(cx, n)
+    o : u64 <- kid1(cx, n)
     while o != 0
         emit(cx, " ")
         p_moperand(cx, o)
@@ -848,7 +848,7 @@ end
 proc ps_if(cx: ref Ctx, n: u64, ind: u64)
     emit(cx, "(if ")
     pe(cx, kid1(cx, n))
-    k := kid2(cx, n)
+    k : u64 <- kid2(cx, n)
     while k != 0
         kn := node_at(cx, k)
         emit_nl(cx, ind + 2)
@@ -876,7 +876,7 @@ end
 proc ps_case(cx: ref Ctx, n: u64, ind: u64)
     emit(cx, "(case ")
     pe(cx, kid1(cx, n))
-    k := kid2(cx, n)
+    k : u64 <- kid2(cx, n)
     while k != 0
         kn := node_at(cx, k)
         emit_nl(cx, ind + 2)
@@ -901,7 +901,7 @@ proc ps_zone(cx: ref Ctx, n: u64, ind: u64)
     emit_tok(cx, nd.t0)
     emit(cx, " ")
     pe(cx, kid1(cx, n))
-    b := kid2(cx, n)
+    b : u64 <- kid2(cx, n)
     if nd.sub == 1
         emit(cx, " at ")
         pe(cx, b)
@@ -926,7 +926,7 @@ proc ps_proc(cx: ref Ctx, n: u64, ind: u64)
     emit(cx, "proc ")
     emit_tok(cx, nd.t0)
     emit(cx, " ")
-    k := kid1(cx, n)
+    k : u64 <- kid1(cx, n)
     pr_params(cx, k)
     k <- sibling(cx, k)
     if nd.val == 1
@@ -951,7 +951,7 @@ proc ps_const(cx: ref Ctx, n: u64, ind: u64)
         emit(cx, "static ")
     end
     emit_tok(cx, nd.t0)
-    k := kid1(cx, n)
+    k : u64 <- kid1(cx, n)
     if nd.val >= 2
         emit(cx, " : ")
         emit_type(cx, k)
@@ -1006,7 +1006,7 @@ proc ps(cx: ref Ctx, n: u64, ind: u64)
     if k == N_BIND
         emit(cx, "(bind ")
         emit_tok(cx, nd.t0)
-        v := kid1(cx, n)
+        v : u64 <- kid1(cx, n)
         if nd.val >= 2
             emit(cx, " : ")
             emit_type(cx, v)
@@ -1108,7 +1108,7 @@ proc ps(cx: ref Ctx, n: u64, ind: u64)
     if k == N_MACHINE
         emit(cx, "(machine ")
         emit_tok(cx, nd.t0)
-        m := kid1(cx, n)
+        m : u64 <- kid1(cx, n)
         while m != 0
             emit_nl(cx, ind + 2)
             p_machine_line(cx, m)

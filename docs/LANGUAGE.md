@@ -708,13 +708,18 @@ primary := int | "text" | name | name.addr | name.len | v[i] | v[a..b]
          | z.bytes(n) | z.make(Name) | Name.size | Name.align | Name.at(v) | r.f
 ```
 
-Working: run-time locals in a stack frame, 64-bit integer arithmetic and
+Working: typed places (`x : T`, `x : T <- e`) and bindings, `loop`,
+run-time locals in a stack frame, 64-bit integer arithmetic and
 comparisons, string literals in read-only data, `if`/`while`/`break`/
 `continue`, procedures with up to six argument words (SysV registers,
 recursion, forward calls), zones backed by `mmap`, bounds-checked views and
 subviews, raw word access, layouts with natural/packed/explicit alignment,
 `ref` locals, parameters and results, fallible results with `fail`, `else`
 handlers and `case`, module-level integer constants, and raw Linux syscalls.
+
+Since step 6e the compiler's own source (`compiler/`) is valid V0 as far as
+the implemented checks go: `olic` analyses all ten of its modules without a
+diagnostic.
 
 Known deviations from V0, to be closed by the self-hosted compiler: one flat
 name scope per procedure; integers are untyped 64-bit words compared signed;

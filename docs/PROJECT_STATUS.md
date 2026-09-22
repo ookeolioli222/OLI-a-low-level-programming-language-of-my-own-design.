@@ -37,10 +37,11 @@ is complete. The working directory has no `.git` metadata.
   with no diagnostic on any positive fixture. Expression typing (the two
   remaining fixtures, `literals.oli` and `mixed_addr.oli`), the typed body
   printer of `--show-sema`, OIR, the native backend, the standard-library
-  implementation and the kernel do not exist. The checks also measured the
-  compiler's own source: it needs oli1 step 6e (typed places, `rw` field
-  types, `loop`) before it is valid V0, and the harness pins that gap at those
-  three codes.
+  implementation and the kernel do not exist. The checks measured the compiler's own
+  source, oli1 step 6e added the three constructs it was missing (typed
+  places, `rw` field types, `loop`), and `olic` now analyses all ten of its own
+  modules as one program without a single diagnostic — the harness re-runs
+  that self-analysis on every build.
 - README and ROADMAP originally disagreed with each other and with G2's code.
 
 The single-file reference for the language and the working commands is

@@ -24,10 +24,10 @@ proc sbeg(pg: ref Prog) -> u64
     ret pg.soff
 end
 
-proc sput(pg: ref Prog, s: view u8)
+proc sput(pg: rw ref Prog, s: view u8)
     b := pg.sbuf
     n := pg.soff
-    i := 0
+    i : u64 <- 0
     while i < s.len
         b[n + i] <- s[i]
         i <- i + 1
@@ -44,8 +44,8 @@ proc sput_toks(pg: ref Prog, mi: u64, a: u64, b: u64)
     -- A type from the source, with paths reduced to the item they name.
     cx := mod_ctx(pg, mi)
     tmp := pg.tmp
-    prev := 0
-    i := a
+    prev : u64 <- 0
+    i : u64 <- a
     while i < b
         t := ctok(cx, i)
         if t.kind == TK_IDENT
@@ -69,8 +69,8 @@ proc sput_toks(pg: ref Prog, mi: u64, a: u64, b: u64)
         end
         if t.kind == TK_INT
             n := t.val
-            d := 1
-            m := n
+            d : u64 <- 1
+            m : u64 <- n
             while m >= 10
                 m <- m / 10
                 d <- d * 10
@@ -105,7 +105,7 @@ end
 
 proc elem_of(v: view u8) -> view u8
     -- `rw view u8` and `view u8` both have element type `u8`.
-    s := v
+    s : view u8 <- v
     if starts_with(s, "rw ")
         s <- s[3..]
     end
@@ -117,7 +117,7 @@ end
 
 proc ok_of(v: view u8) -> view u8
     -- The `T` of `T or E`.
-    i := 0
+    i : u64 <- 0
     while i + 4 <= v.len
         if view_eq(v[i..i + 4], " or ")
             ret v[..i]
@@ -129,7 +129,7 @@ end
 
 -- Local table --------------------------------------------------------------------
 
-proc add_loc(pg: ref Prog, name: u64, kind: u64, idx: u64, start: u64)
+proc add_loc(pg: rw ref Prog, name: u64, kind: u64, idx: u64, start: u64)
     i := pg.nloc
     l := loc_at(pg, i)
     l.mod <- pg.curmod
@@ -144,7 +144,7 @@ end
 proc loc_type(pg: ref Prog, name: view u8) -> view u8
     -- The type of a local of the procedure being analysed.
     b := pg.sbuf
-    i := pg.nloc
+    i : u64 <- pg.nloc
     while i > pg.locbase
         i <- i - 1
         l := loc_at(pg, i)
@@ -158,7 +158,7 @@ end
 
 proc proc_result(pg: ref Prog, name: view u8) -> view u8
     -- The declared result type of a procedure, by its unqualified name.
-    q := 0
+    q : u64 <- 0
     while q < pg.nproc
         v := proc_at(pg, q)
         cx := mod_ctx(pg, v.mod)
@@ -181,7 +181,7 @@ end
 
 proc field_type_text(pg: ref Prog, base: view u8, fname: view u8) -> view u8
     -- The type of a field of the layout or choice variant `base` names.
-    nm := base
+    nm : view u8 <- base
     if starts_with(nm, "rw ")
         nm <- nm[3..]
     end
@@ -195,7 +195,7 @@ proc field_type_text(pg: ref Prog, base: view u8, fname: view u8) -> view u8
     end
     it := item_at(pg, idx)
     cx := mod_ctx(pg, it.mod)
-    f := 0
+    f : u64 <- 0
     while f < it.nfld
         fr := fld_at(pg, it.first + f)
         fn := node_at(cx, fr.node)
@@ -299,12 +299,12 @@ end
 
 proc variant_field_type(pg: ref Prog, vname: view u8, fname: view u8) -> view u8
     -- `when fail bad_magic {found}` binds the field of that variant.
-    i := 0
+    i : u64 <- 0
     while i < pg.nitem
         it := item_at(pg, i)
         if it.kind == 1
             cx := mod_ctx(pg, it.mod)
-            f := 0
+            f : u64 <- 0
             while f < it.nfld
                 fr := fld_at(pg, it.first + f)
                 vn := node_at(cx, fr.variant)
@@ -348,7 +348,7 @@ proc collect_pattern(pg: ref Prog, mi: u64, subject: view u8, pat: u64)
     if sn.kind != N_PAT
         ret
     end
-    f := kid1(cx, sub)
+    f : u64 <- kid1(cx, sub)
     while f != 0
         fn := node_at(cx, f)
         ft := variant_field_type(pg, tok_text(cx, sn.t0), tok_text(cx, fn.t0))
@@ -389,7 +389,7 @@ proc walk_stmt(pg: ref Prog, mi: u64, n: u64)
         st3 := sbeg(pg)
         sput(pg, "zone")
         add_loc(pg, nd.t0, L_ZONE, 0, st3)
-        body := kid1(cx, n)
+        body : u64 <- kid1(cx, n)
         while body != 0
             bn := node_at(cx, body)
             if bn.kind == N_BODY
@@ -410,7 +410,7 @@ proc walk_stmt(pg: ref Prog, mi: u64, n: u64)
     end
     if k == N_CASE
         subj := infer(pg, mi, kid1(cx, n))
-        arm := kid2(cx, n)
+        arm : u64 <- kid2(cx, n)
         while arm != 0
             an := node_at(cx, arm)
             if an.kind == N_WHEN
@@ -425,7 +425,7 @@ proc walk_stmt(pg: ref Prog, mi: u64, n: u64)
         ret
     end
     if k == N_IF
-        br := kid2(cx, n)
+        br : u64 <- kid2(cx, n)
         while br != 0
             bn2 := node_at(cx, br)
             if bn2.kind == N_ELIF
@@ -456,7 +456,7 @@ end
 
 proc walk_kids(pg: ref Prog, mi: u64, first: u64)
     cx := mod_ctx(pg, mi)
-    k := first
+    k : u64 <- first
     while k != 0
         walk_stmt(pg, mi, k)
         k <- sibling(cx, k)
@@ -471,13 +471,17 @@ proc pg_ctx(pg: ref Prog, mi: u64) -> rw ref Ctx
     ret mod_ctx(pg, mi)
 end
 
-proc collect_locals(pg: ref Prog, mi: u64, node: u64)
+proc collect_locals(pg: rw ref Prog, mi: u64, node: u64)
+    -- The table and the type buffer hold one procedure at a time: every slice
+    -- they hand out is consumed before the next procedure starts.
     cx := mod_ctx(pg, mi)
     pg.curmod <- mi
-    pg.locbase <- pg.nloc
+    pg.nloc <- 0
+    pg.soff <- 0
+    pg.locbase <- 0
     params := kid1(cx, node)
-    p := kid1(cx, params)
-    i := 0
+    p : u64 <- kid1(cx, params)
+    i : u64 <- 0
     while p != 0
         pn := node_at(cx, p)
         st := sbeg(pg)
@@ -486,7 +490,7 @@ proc collect_locals(pg: ref Prog, mi: u64, node: u64)
         i <- i + 1
         p <- sibling(cx, p)
     end
-    k := sibling(cx, params)
+    k : u64 <- sibling(cx, params)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_BODY
@@ -499,8 +503,8 @@ end
 proc print_locals(pg: ref Prog)
     tmp := pg.tmp
     b := pg.sbuf
-    i := pg.locbase
-    n := 0
+    i : u64 <- pg.locbase
+    n : u64 <- 0
     while i < pg.nloc
         l := loc_at(pg, i)
         cx := mod_ctx(pg, l.mod)

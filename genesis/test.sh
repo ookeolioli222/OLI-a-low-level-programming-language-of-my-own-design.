@@ -881,6 +881,36 @@ end'; do
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 rejects unresolved/discarded fallible values, fail outside fallible procedures, E mismatches, bad case arms"
+# step 6e: typed places, rw field types and loop
+./build/oli1.bin < 3-oli1/tests/places.oli > build/o3.elf
+chmod +x build/o3.elf
+set +e; timeout 10 ./build/o3.elf; st=$?; set -e
+[ "$st" = 44 ] || fail "oli1: places.oli expected exit 44 got $st"
+for bad in 'proc start
+ entry
+ z : zone
+ ret 1
+end' 'proc start
+ entry
+ v : view u8 <- 5
+ ret 1
+end' 'proc start
+ entry
+ n : u64 <- "s"
+ ret 1
+end' 'proc start
+ entry
+ loop
+ ret 1
+end'; do
+    set +e
+    printf '%s\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed place/loop program exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed program produced output"
+done
+echo "ok: oli1 compiles typed places, view places, rw field types and loop; rejects zone places and type mismatches"
 # step 6d: module-level integer constants
 ./build/oli1.bin < 3-oli1/tests/consts.oli > build/o3.elf
 chmod +x build/o3.elf
@@ -914,7 +944,7 @@ end'; do
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 compiles module-level constants; rejects duplicates, non-literal values, stores and members"
-echo "genesis: layer 3 (oli-core compiler, steps 0-6d) passed"
+echo "genesis: layer 3 (oli-core compiler, steps 0-6e) passed"
 
 # --- layer 4: olic (G4), written in oli-core and compiled by oli1 ---
 cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/show_tokens.oli > build/show_tokens.oli
@@ -999,16 +1029,22 @@ for f in ../tests/sema/ok/*.oli ../lib/*.oli ../lib/*/*.oli; do
     ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: diagnostics for $f: $(cat build/items.err)"
     head -c 9 build/items.out | grep -q '^(program' || fail "items: $f produced no program"
 done
-# The compiler's own source still needs oli-core places, `rw` field types and
-# `loop` (step 6e) before it is valid V0; until then it is analysed, and the
-# diagnostics it earns are counted rather than ignored.
-for f in ../compiler/*.oli; do
-    ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || true
-    head -c 9 build/items.out | grep -q '^(program' || fail "items: $f produced no program"
-    grep -E 'E0(1[0-9][0-9]|2[0-9][0-9]|3[0-9][0-9]|4[0-9][0-9]|900)' build/items.err | grep -v 'E0110\|E0111\|E0230' > build/items.other || true
-    [ -s build/items.other ] && fail "items: $f reports an unexpected semantic diagnostic: $(head -1 build/items.other)"
+# The compiler analyses its own source, as one program and file by file, and
+# must report nothing: `compiler/` is valid V0, not merely valid oli-core.
+: > build/self.oli
+for f in ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli \
+         ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli \
+         ../compiler/check.oli ../compiler/show_items.oli; do
+    if [ -s build/self.oli ]; then grep -v '^module ' "$f" >> build/self.oli; else cat "$f" >> build/self.oli; fi
 done
-echo "ok: olic analyses its own source; only the three V0 gaps oli-core still has (places, rw fields, loop) are reported"
+( cd .. && genesis/build/show_items < genesis/build/self.oli > genesis/build/self.out 2> genesis/build/self.err ) \
+    || fail "self-analysis: olic reports $(grep -c 'error\[' build/self.err) diagnostics on its own source: $(head -2 build/self.err)"
+grep -q '(proc olic.io.check_proc' build/self.out || fail "self-analysis: the whole compiler was not analysed"
+for f in ../compiler/*.oli; do
+    ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: $f reports $(head -1 build/items.err)"
+    head -c 9 build/items.out | grep -q '^(program' || fail "items: $f produced no program"
+done
+echo "ok: olic analyses its own source - all ten modules as one program - without a single diagnostic"
 
 echo "ok: olic resolves packed/aligned layouts, nested payloads and every library module it imports"
 # Procedure signatures and parameter locals, compared against the same lines of

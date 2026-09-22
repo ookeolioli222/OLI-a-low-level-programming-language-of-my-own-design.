@@ -39,6 +39,7 @@ observable result. Nothing is marked done without such a test.
 | 5 | several `proc`s per file, parameters (`p: T`, up to six), `-> T`, calls as statements and factors, forward calls, recursion | SysV registers, `call rel32` with fixups, `leave; ret` | **done** |
 | 6a | `zone z SIZE [at ADDR] … end`, `z.bytes(n)`, views as two-word values (literals, params, results, locals), `v[i]`, `v[i] <- x`, `v[a..b]`, `v[..b]`, `v[a..]`, `.addr`/`.len`, raw `[a]`/`[a] <- x`, traps | mmap/munmap, bump allocation, `cmp`/`jcc` to a shared trap stub | **done** |
 | 6b | `layout Name [packed] [align N] … end` with `f : T [align N]`, `Name.size`/`.align`/`.at(v)`, `z.make(Name)`, `ref Name` locals/params/results, `r.f` loads (zero/sign-extended) and `r.f <- x` stores, view fields | field offsets, sized moves, `cmp`/`test` + trap | **done** |
+| 6e | `name : T` and `name : T <- expr` places, `rw`/`mmio` before a field type, `loop … end` | frame slots as for a binding; the type is checked for shape and otherwise ignored; `loop` is `while` with no condition | **done** |
 | 6d | `NAME := <decimal>` at module level: integer constants, visible in every procedure after the line; a local of the same name shadows one | `mov rax, imm64` | **done** |
 | 6c | `-> T or E` results, `fail [e]`, `e else fail` / `e else ret [v]` / `e else v`, `case e … when ok [x] … when fail [e] … end` (second arm may be `else`) | tag in `rax`, payload in `rdx`; `test`/`jcc` per resolution | **done** |
 
@@ -309,6 +310,28 @@ procedure's locals, so a parameter or local of the same name shadows it. A
 constant is a factor lowered to `mov rax, imm64`; storing into it, `.addr`/
 `.len`/`[i]` on it, a non-literal value and a duplicate name reject. Proven by
 `consts.oli` (42) and four rejection programs in the harness.
+
+## Step 6e (implemented)
+
+The three constructs `compiler/` needed for its own source to be valid V0
+(`spec/OLI_SEMANTICS_V0.md` §5), measured by running `olic`'s own checks over
+it: 290 stores into bindings, 93 stores through fields that could not be
+declared `rw`, and 8 infinite loops written as `while 1`.
+
+- `name : T` reserves the frame slots of `T` (one word, or two for a view) and
+  leaves them uninitialised; `name : T <- expr` stores an initial value. The
+  type is parsed with the same reader as a parameter type — `rw`, `view`,
+  `ref Name`, `zone` and any trailing words — and the value's type must match
+  it. A `zone` place is rejected: a zone is opened by `zone`, not declared.
+- A field type may start with `rw` or `mmio`; both are skipped before the
+  size and signedness are looked up, so `f : rw view u8` lays out as a view.
+- `loop … end` is the infinite loop of V0: the same code as `while` with the
+  condition and its branch removed, so only `break`, `ret` or `fail` leave it.
+
+Proven by `places.oli` in the harness (a place with and without an initial
+value, a view place, a `loop` left by `break`) and by the whole of
+`compiler/`, which oli1 compiles and `olic` then analyses without a single
+diagnostic.
 
 ## Diagnostics
 
