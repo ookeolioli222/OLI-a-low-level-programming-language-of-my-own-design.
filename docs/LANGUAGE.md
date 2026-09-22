@@ -82,7 +82,7 @@ runs the acceptance suite:
 | 1 | `genesis/build/hex2.bin` | labels and relative/absolute addresses; hex2 reproduces itself |
 | 2 | `genesis/build/asm.bin` | the `machine x64` assembler: exact bytes, real execution, rejection of unsupported forms |
 | 3 | `genesis/build/oli1.bin` | the oli-core compiler: every fixture in `genesis/3-oli1/tests` compiles, runs and exits with the expected status |
-| 4 | `genesis/build/show_tokens`, `show_ast`, `show_items` | the `olic` front end written in Oli--: tokens, AST snapshots, item layout, signatures |
+| 4 | `genesis/build/show_tokens`, `show_ast`, `show_sema` | the `olic` front end written in Oli--: tokens, AST snapshots, and the whole semantic graph — items, signatures, locals and typed bodies |
 
 The only non-Oli-- code in the chain is POSIX shell (`genesis/hexbin.sh`
 materialises the first binary once; `genesis/test.sh` orchestrates).
@@ -121,16 +121,17 @@ zone exhausted) prints `oli: trap` and exits 3.
 ```bash
 genesis/build/show_tokens < examples/hello.oli   # one token per line
 genesis/build/show_ast    < examples/hello.oli   # the syntax tree
-genesis/build/show_items  < examples/hello.oli   # layouts, choices, constants, signatures
+genesis/build/show_sema   < examples/hello.oli   # the semantic graph, typed
 ```
 
 Each writes its result on stdout and diagnostics on stderr, and exits 1 if it
-reported any. `show_items` resolves `import` by reading `lib/<path>.oli`, so
+reported any. `show_sema` resolves `import` by reading `lib/<path>.oli`, so
 run it from the repository root.
 
 Token lines are `LINE:COL kind [value] [text]`; the tree is the S-expression
-format of `tests/snapshots/*.ast`; the item output is the head of
-`tests/snapshots/*.sema`.
+format of `tests/snapshots/*.ast`; the semantic graph is
+`tests/snapshots/*.sema` exactly — every expression with its type, and with
+its region when the value may point into a parameter's memory or a zone.
 
 ### 3.4 Assemble a `machine x64` program **[runs]**
 
@@ -149,7 +150,7 @@ command line yet.
 | Planned command | Meaning |
 |-----------------|---------|
 | `olic file.oli` | compile to a native ELF — own encoder, own ELF writer, no linker |
-| `olic --show-tokens/--show-ast/--show-sema` | the three front-end dumps (the first two exist as drivers, the third is partial) |
+| `olic --show-tokens/--show-ast/--show-sema` | the three front-end dumps (all three exist as drivers, one per stage, reading stdin) |
 | `olic --show-oir/--show-machine-ir/--show-asm/--show-bytes` | back-end dumps |
 | `olic --check` / `--check-syntax` | analyse / parse only |
 | `olic --freestanding` | no OS: own entry point, own stack |

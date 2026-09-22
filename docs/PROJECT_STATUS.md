@@ -1,8 +1,9 @@
 # Oli-- completion plan and verified baseline
 
-Reviewed 2026-09-20; foreign oracle removed 2026-09-21. The requested scope is the entire roadmap, in order.
+Reviewed 2026-09-20; foreign oracle removed 2026-09-21; semantic analysis
+completed 2026-09-22. The requested scope is the entire roadmap, in order.
 This document records actual implementation, not an assertion that the project
-is complete. The working directory has no `.git` metadata.
+is complete.
 
 ## Baseline assessment
 
@@ -18,30 +19,32 @@ is complete. The working directory has no `.git` metadata.
   (`tests/`, `tests/snapshots`) is now the acceptance suite for the Oli--
   front end. Fixture groups can contain multiple source files. Fixtures
   marked `-- reference: skip` were excluded by the old harness; passing the
-  suite does not prove these features exist. Until G4, no program in the
-  repository can parse high-level Oli--.
+  suite does not prove these features exist. Since 2026-09-22 the repository's
+  own front end (`compiler/`, built by `oli1`) parses and analyses high-level
+  Oli-- and reproduces the whole corpus.
 - `genesis/3-oli1/` (the oli-core compiler `oli1`, written in `machine x64`)
-  exists and passes layer 3 of `genesis/test.sh` for steps 0–6d: locals,
+  exists and passes layer 3 of `genesis/test.sh` for steps 0–6e: locals,
   expressions, strings, control flow, syscalls, procedures, zones, views, raw
-  memory, layouts, refs, fallible results and module constants. `compiler/`
-  has begun (design 0022): the V0 lexer, parser, §8 diagnostic renderer, module
-  loader, item collection, signatures and local tables in oli-core, built by
-  `oli1`, pass the fixture corpus at layer 4 — all four `tests/snapshots/*.ast`
-  are reproduced byte for byte, all fifteen `tests/parse/err` fixtures give
-  exactly their expected diagnostics, and the layouts, choices, constants,
-  statics, procedure signatures and complete local tables of all three
-  `tests/snapshots/*.sema` are reproduced line for line, and twelve of the
-  fourteen `tests/sema/err` fixtures report exactly their expected diagnostics
-  (capabilities, `E0900`, constants, layouts, scopes, definite assignment,
-  reachability, failures, exhaustiveness, read-only places and region escapes)
-  with no diagnostic on any positive fixture. Expression typing (the two
-  remaining fixtures, `literals.oli` and `mixed_addr.oli`), the typed body
-  printer of `--show-sema`, OIR, the native backend, the standard-library
-  implementation and the kernel do not exist. The checks measured the compiler's own
-  source, oli1 step 6e added the three constructs it was missing (typed
-  places, `rw` field types, `loop`), and `olic` now analyses all ten of its own
-  modules as one program without a single diagnostic — the harness re-runs
-  that self-analysis on every build.
+  memory, layouts, refs, fallible results, module constants, typed places,
+  `rw` field types and `loop`. `compiler/`
+  is the front end (design 0022): the V0 lexer, parser, §8 diagnostic renderer,
+  module loader, item collection, signatures, local tables, expression typing
+  and typed bodies in oli-core, built by `oli1`, pass the fixture corpus at
+  layer 4 — all four `tests/snapshots/*.ast` **and all three
+  `tests/snapshots/*.sema`** are reproduced byte for byte (items, signatures,
+  locals, and a type and a region on every expression of every body), all
+  fifteen `tests/parse/err` fixtures and **all fourteen** `tests/sema/err`
+  fixtures give exactly their expected diagnostics (capabilities, `E0900`,
+  constants, layouts, scopes, definite assignment, reachability, failures,
+  exhaustiveness, read-only places, region escapes, literal types and address
+  spaces) with no diagnostic on any positive fixture. OIR, the native backend,
+  the standard-library implementation and the kernel do not exist. The checks
+  measured the compiler's own source twice: the first measurement specified
+  oli1 step 6e (typed places, `rw` field types, `loop`) and the second, from
+  expression typing, specifies step 6f (explicit conversions — 93 narrowing
+  sites in `compiler/`, none in `lib/`, `examples/` or the fixtures). `olic`
+  analyses all eleven of its own modules as one program without a single
+  diagnostic — the harness re-runs that self-analysis on every build.
 - README and ROADMAP originally disagreed with each other and with G2's code.
 
 The single-file reference for the language and the working commands is
@@ -73,7 +76,23 @@ Do not replace the autonomy requirement with a convenient foreign bootstrap,
 mark design-only features complete, or treat machine-byte tests as proof of
 source-level compiler functionality.
 
-## Implemented during this review
+## Implemented in the semantic-analysis stage (2026-09-22)
+
+`compiler/body.oli` gives every expression a type, a region and a printed
+form, so `--show-sema` is complete: all three `tests/snapshots/*.sema` are
+reproduced byte for byte and the last two negative fixtures (`literals.oli`,
+`mixed_addr.oli`) report `E0201`, `E0202` and `E0203` at their exact
+positions. `compiler/show_items.oli` became `compiler/show_sema.oli` because
+it now prints the whole semantic graph, not only the items.
+
+Running the new checks over the compiler's own source found and fixed four
+real defects in it (an untyped literal binding, three drivers whose `entry`
+procedure returned a value without declaring a result type, a reserved word
+used as a local name, a store into an immutable binding) and measured the one
+remaining gap between oli-core and V0: 93 implicit narrowing conversions,
+which is the specification of oli1 step 6f.
+
+## Implemented during the G2 review
 
 The 645-byte bytes-only assembler was expanded to a 6,878-byte, hand-encoded
 two-pass assembler. It now checks structure and entry selection; encodes r64

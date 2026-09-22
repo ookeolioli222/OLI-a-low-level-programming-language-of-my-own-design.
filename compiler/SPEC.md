@@ -18,17 +18,18 @@ cat compiler/io.oli compiler/lex.oli compiler/diag.oli compiler/show_tokens.oli 
 cat compiler/io.oli compiler/lex.oli compiler/diag.oli compiler/ast.oli compiler/parse.oli \
     compiler/show_ast.oli | $B/oli1.bin > $B/show_ast
 cat compiler/io.oli compiler/lex.oli compiler/diag.oli compiler/ast.oli compiler/parse.oli \
-    compiler/load.oli compiler/items.oli compiler/show_items.oli | $B/oli1.bin > $B/show_items
-chmod +x $B/show_tokens $B/show_ast $B/show_items
+    compiler/load.oli compiler/items.oli compiler/sema.oli compiler/body.oli \
+    compiler/check.oli compiler/show_sema.oli | $B/oli1.bin > $B/show_sema
+chmod +x $B/show_tokens $B/show_ast $B/show_sema
 
 $B/show_tokens < examples/hello.oli      # one token per line
 $B/show_ast    < examples/hello.oli      # the tree of tests/snapshots/hello.ast
-$B/show_items  < examples/hello.oli      # layouts, choices and constants (run from the repo root:
-                                         # imports are resolved under lib/)
+$B/show_sema   < examples/hello.oli      # the semantic graph of tests/snapshots/hello.sema
+                                         # (run from the repo root: imports are resolved under lib/)
 ```
 
 Each driver writes its result on stdout and its diagnostics on stderr, and
-exits 1 when it reported any. `show_items` resolves `import` by reading
+exits 1 when it reported any. `show_sema` resolves `import` by reading
 `lib/<path>.oli`, so run it from the repository root.
 
 `sh genesis/test.sh` (layer 4) builds every driver, checks the build is
@@ -49,9 +50,8 @@ deterministic and runs the acceptance tests below.
 | `olic.items` | `items.oli` | modules, item collection, layout/choice layout (ABI §3), constant evaluation, the item section of `--show-sema` | done |
 | `olic.sema` | `sema.oli` | the local table of every procedure: parameters, places, bindings, zone handles and `case` patterns, with inferred types | done |
 | `olic.check` | `check.oli` | capabilities (E0401), unimplemented features (E0900), constant cycles (E0106), constant range (E0212), recursive layouts (E0204) | done |
-| `olic.show_items` | `show_items.oli` | driver for the item, signature and local sections, and for the checks | done |
-| `olic.bodies` | — | typed statements and expressions, regions, capabilities, flow — the rest of `--show-sema` | planned |
-| `olic.sema` | — | items, layouts, signatures, constants, bodies, program rules, `--show-sema` | planned |
+| `olic.body` | `body.oli` | expression typing (contexts, conversions, regions), the typed-body printer and E0201/E0202/E0203 | done |
+| `olic.show_sema` | `show_sema.oli` | driver for `--show-sema`: the whole semantic graph, and every check | done |
 | `olic.oir`, `olic.x64`, `olic.elf` | — | back end | planned |
 
 ## Conventions imposed by oli-core
@@ -161,9 +161,62 @@ annotation, a string literal (`view u8`), `z.bytes(n)` (`rw view u8`),
 element type), `.addr`/`.len`, a conversion (`u64.bits(x)` → `u64`), an `each`
 binding (the element type of the iterable), `ok x` in a `case` (the `T` of
 `T or E`) and `fail V {f}` (the field of that variant). A type a path names is
-reduced to the item: `core.TrapKind` prints as `TrapKind`. An initialiser this
-stage cannot type yet — an arithmetic expression, a `checked(…)` fallback, an
-integer range in `each`, a compiler intrinsic such as `cpu.id` — prints `?`.
+reduced to the item: `core.TrapKind` prints as `TrapKind`. Since stage 3 the
+initialiser is typed by `olic.body`, so arithmetic, conversions and constants
+are covered too; a local whose initialiser this stage still cannot type — a
+compiler intrinsic such as `cpu.id`, or a call into a module that was not
+loaded — prints `?`.
+
+A name is resolved to the declaration that *precedes its use*: every local
+records the statement it was declared in, and a lookup takes the latest
+declaration at or before the statement being analysed. That is what makes a
+name reused in two sibling blocks resolve to the right one, which a flat table
+otherwise gets wrong.
+
+## Typed bodies (`body.oli`)
+
+Stage 3 gives every expression a type, a region and a printed form, which is
+the rest of `--show-sema`. There is no typed tree: the printer derives the
+type as it prints, and a separate walk (`tstmt`/`texpr`) derives the same
+types to report diagnostics, so `--check` never has to print.
+
+**Context types.** A type flows *down* as `want`: the declared type of a
+place, the annotation of a binding, the type of a store target, the result
+type of the procedure for `ret`, its failure type for `fail`, the parameter
+type of a call, the field type of a literal, `uword` for an index, a slice
+bound and a zone size, `bool` for a condition, and the width of a register for
+`in REG <- e`. An integer literal takes that type; a literal that never meets
+one is `E0201`, and one that does not fit is `E0202`.
+
+**Conversions.** Where a value's own type differs from the context's, the
+printer inserts what the conversion actually is: `(widen x)` for a lossless
+widening, `(bits x)` for an explicit same-width reinterpretation, `(inttoaddr
+x)` / `(inttophys x)` for an address, nothing at all when only `rw` is
+dropped or the representation is identical. `wrap(e)` / `sat(e)` /
+`checked(e)` set the mode of the arithmetic inside `e`, which prints as
+`(add/wrap …)`. `os.syscall` is special-cased the way the ABI is: an unsigned
+argument is reinterpreted (`(bits …):word`), a signed one is widened.
+
+**Regions** (design 0014) are a bit set: bit `i` is `param#i`, bit 16 is the
+frame, and bit `17 + k` is the `k`-th zone the procedure opens. A local
+records the region of the value it holds; an expression inherits it
+structurally, a call result is the union of its argument regions (rule 3 of
+`spec/OLI_MEMORY_V0.md`), and a value whose type cannot point anywhere carries
+none — which is exactly when the printer leaves `@…` out.
+
+**Places and values are different forms.** A read of memory prints as
+`(load [rw local total])`, `(load [field [deref (local hdr):ref Header] magic])`
+or `(load [rw raw (local a):addr u8])`; an array place read as a value prints
+as `(view-of [rw static heap_region])`. The `rw` of a place follows the base:
+a frame place and a static are writable, a field of a `ref` is not and a field
+of a `rw ref` is.
+
+Deviation to close: implicit narrowing of a *computed* value (`p <- e` where
+`e` is wider than `p`) is a V0 `E0202`, and the checker implements it, but it
+is gated behind `NARROW_STRICT` because oli-core has no conversions. Enabling
+it reports 93 sites in `compiler/` and **none** in `lib/`, `examples/` or the
+fixtures — that measurement is the specification of oli1 step 6f (`T(x)` and
+`T.wrap(x)`), exactly as the step 6e measurement was.
 
 ## Checks (`check.oli`)
 
@@ -207,15 +260,14 @@ layout field, procedure signature and body:
   `case` must cover every variant, both channels of `T or E`, `true` and
   `false`, or end in `else` — for integers only `else` is exhaustive.
 
-Acceptance (`genesis/test.sh`, layer 4): twelve of the fourteen
-`tests/sema/err` fixtures report exactly their expected codes and positions —
-`items`, `permits`, `not_implemented`, `flow`, `shadow`, `unassigned`,
-`unhandled`, `not_exhaustive`, `readonly`, `freestanding_zone`, `escape_frame`
-and `escape_zone`; every `tests/sema/ok` fixture, example and library module
-stays clean; and `tests/parse/ok/kernel_sketch.oli` — a file whose own header
-says it is rejected later — reports the missing `memory.raw` permit and the
-three V1 constructs it uses. The two fixtures that remain, `literals.oli` and
-`mixed_addr.oli`, need expression typing (E0201, E0202, E0203).
+- **E0201 / E0202 / E0203, types** (`body.oli`, below).
+
+Acceptance (`genesis/test.sh`, layer 4): **all fourteen** `tests/sema/err`
+fixtures report exactly their expected codes and positions; every
+`tests/sema/ok` fixture, example and library module stays clean; and
+`tests/parse/ok/kernel_sketch.oli` — a file whose own header says it is
+rejected later — reports the missing `memory.raw` permit and the three V1
+constructs it uses.
 
 ### The compiler analyses itself
 
@@ -225,23 +277,18 @@ declared `rw`, and 8 infinite loops written as `while 1`. oli1 step 6e added
 the three constructs that were missing — typed places, `rw` in field types and
 `loop` — and the sources were converted to use them.
 
-`olic` now analyses its own source, all ten modules as one program, **without
-a single diagnostic**: no shadowed name, no store into a binding or a
+`olic` now analyses its own source, all eleven modules as one program,
+**without a single diagnostic**: no shadowed name, no store into a binding or a
 read-only view, no read before assignment, no unreachable statement, no
 procedure that falls off its end, no unhandled failure, no missing permit.
 The harness runs that self-analysis on every build, so the compiler's source
 cannot drift out of V0.
 
-Acceptance (`genesis/test.sh`, layer 4): every `(proc …)` and `(local …)` line
-of all three `tests/snapshots/*.sema` is reproduced exactly — 46 lines across
-the three programs, covering every local kind and every inference rule above.
-
-Acceptance (`genesis/test.sh`, layer 4): the item section of
-`tests/snapshots/hello.sema`, `packet_demo.sema` and `freestanding.sema` is
-reproduced line for line (the head of each snapshot, down to the first
-procedure); `kernel_sketch` exercises `packed`, `align N` on a layout and on a
-field; `statements` exercises a choice whose variant carries two layouts by
-value; every fixture, library module and compiler source produces a program.
+Acceptance (`genesis/test.sh`, layer 4): all three `tests/snapshots/*.sema`
+are reproduced **byte for byte** — items, signatures, locals and typed bodies;
+`kernel_sketch` exercises `packed`, `align N` on a layout and on a field;
+`statements` exercises a choice whose variant carries two layouts by value;
+every fixture, library module and compiler source produces a program.
 
 Deviations to close in later stages: an aggregate constant (a layout literal or
 an array) prints as `0` because only integer constants are evaluated; a

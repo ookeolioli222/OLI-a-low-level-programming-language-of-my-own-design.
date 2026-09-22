@@ -25,12 +25,13 @@ fallible results (`T or E`, `fail`, `else` handlers, `case`) —
 `genesis/3-oli1/tests/hello.oli` prints `Hello Oli--`, `fib.oli` computes
 fib(10), `slurp.oli` reads stdin into a zone and upper-cases it in place and
 `propagate.oli` propagates parse failures through two procedures, all from
-oli-core source. G4 has begun: the V0 lexer, parser and the
-first semantic passes (`compiler/`), written in oli-core and built by `oli1`,
-tokenize every fixture, reproduce every `tests/snapshots/*.ast` byte for byte
-with the exact diagnostics of the negative fixtures, and reproduce the layouts,
-choices, constants, procedure signatures and local tables of every
-`tests/snapshots/*.sema` (`docs/design/0022`).**
+oli-core source. G4 has the whole front end: the V0 lexer, parser and
+semantic analysis (`compiler/`), written in oli-core and built by `oli1`,
+tokenize every fixture, reproduce every `tests/snapshots/*.ast` **and every
+`tests/snapshots/*.sema` byte for byte** — items, signatures, locals and typed
+bodies with a type and a region on every expression — and report exactly the
+diagnostics of all fifteen negative parse fixtures and all fourteen negative
+semantic fixtures (`docs/design/0022`).**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -40,7 +41,7 @@ choices, constants, procedure signatures and local tables of every
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
 | G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6e done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`), module constants, typed places, `rw` field types and `loop` |
-| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables and the semantic checks that need no type graph (twelve of fourteen `tests/sema/err` fixtures exact); **`olic` analyses its own source without a single diagnostic**; reproduces every AST snapshot and the items, signatures and locals of every semantic snapshot; typed bodies and the back end next; fixpoint `stage2 == stage3` | **in progress** |
+| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all fourteen `tests/sema/err` fixtures exact**); **`olic` analyses its own source without a single diagnostic**; reproduces every AST **and every semantic** snapshot byte for byte; OIR, x64 lowering and ELF next; fixpoint `stage2 == stage3` | **in progress** |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |
 | M3 | Freestanding binary with own entry point and own stack | not started |
@@ -65,7 +66,7 @@ genesis/build/fib.elf; echo $?           # 55 - an oli-core program compiled by 
 
 genesis/build/show_tokens < examples/hello.oli    # the front end of olic, built by oli1
 genesis/build/show_ast    < examples/hello.oli
-genesis/build/show_items  < examples/hello.oli
+genesis/build/show_sema   < examples/hello.oli    # the full semantic graph
 ```
 
 This example uses the genesis machine sub-language. The high-level

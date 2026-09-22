@@ -138,22 +138,21 @@ proc add_loc(pg: rw ref Prog, name: u64, kind: u64, idx: u64, start: u64)
     l.idx <- idx
     l.t0 <- start
     l.t1 <- pg.soff
+    l.reg <- 0
+    l.zord <- 0
+    l.dnode <- pg.curstmt
     pg.nloc <- i + 1
 end
 
 proc loc_type(pg: ref Prog, name: view u8) -> view u8
-    -- The type of a local of the procedure being analysed.
+    -- The type of the local this name refers to where it is being used.
     b := pg.sbuf
-    i : u64 <- pg.nloc
-    while i > pg.locbase
-        i <- i - 1
-        l := loc_at(pg, i)
-        cx := mod_ctx(pg, l.mod)
-        if view_eq(tok_text(cx, l.name), name)
-            ret b[l.t0..l.t1]
-        end
+    i := loc_find(pg, name)
+    if i < 0
+        ret b[0..0]
     end
-    ret b[0..0]
+    l := loc_at(pg, i)
+    ret b[l.t0..l.t1]
 end
 
 proc proc_result(pg: ref Prog, name: view u8) -> view u8
@@ -325,8 +324,9 @@ proc variant_field_type(pg: ref Prog, vname: view u8, fname: view u8) -> view u8
     ret b[0..0]
 end
 
-proc collect_pattern(pg: ref Prog, mi: u64, subject: view u8, pat: u64)
+proc collect_pattern(pg: rw ref Prog, mi: u64, subject: view u8, pat: u64, sreg: u64)
     cx := mod_ctx(pg, mi)
+    pg.curstmt <- pat
     pn := node_at(cx, pat)
     k := pn.kind
     if k == N_PATOK
@@ -334,6 +334,9 @@ proc collect_pattern(pg: ref Prog, mi: u64, subject: view u8, pat: u64)
             st := sbeg(pg)
             sput(pg, ok_of(subject))
             add_loc(pg, pn.t0, L_PATTERN, 0, st)
+            if carries_region(pg, ok_of(subject)) == 1
+                loc_setreg(pg, sreg)
+            end
         end
         ret
     end
@@ -355,18 +358,23 @@ proc collect_pattern(pg: ref Prog, mi: u64, subject: view u8, pat: u64)
         st2 := sbeg(pg)
         sput(pg, ft)
         add_loc(pg, fn.t0, L_PATTERN, 0, st2)
+        if carries_region(pg, ft) == 1
+            loc_setreg(pg, sreg)
+        end
         f <- sibling(cx, f)
     end
 end
 
-proc walk_stmt(pg: ref Prog, mi: u64, n: u64)
+proc walk_stmt(pg: rw ref Prog, mi: u64, n: u64)
     cx := mod_ctx(pg, mi)
+    pg.curstmt <- n
     nd := node_at(cx, n)
     k := nd.kind
     if k == N_PLACE
         st := sbeg(pg)
         sput_type_node(pg, mi, kid1(cx, n))
         add_loc(pg, nd.t0, L_PLACE, 0, st)
+        loc_setreg(pg, reg_of(pg, mi, kid2(cx, n)))
         ret
     end
     if k == N_BIND
@@ -375,20 +383,24 @@ proc walk_stmt(pg: ref Prog, mi: u64, n: u64)
             st1 := sbeg(pg)
             sput_type_node(pg, mi, v)
             add_loc(pg, nd.t0, L_BIND, 0, st1)
+            loc_setreg(pg, reg_of(pg, mi, sibling(cx, v)))
             ret
         end
         -- The inferred type may already have been written into the buffer, so
         -- it is produced before the local's own text begins.
-        t := infer(pg, mi, v)
+        b := pg.sbuf
+        t := ety(pg, mi, v, b[0..0])
         st2 := sbeg(pg)
         sput(pg, t)
         add_loc(pg, nd.t0, L_BIND, 0, st2)
+        loc_setreg(pg, reg_of(pg, mi, v))
         ret
     end
     if k == N_ZONE
         st3 := sbeg(pg)
         sput(pg, "zone")
         add_loc(pg, nd.t0, L_ZONE, 0, st3)
+        loc_setzone(pg)
         body : u64 <- kid1(cx, n)
         while body != 0
             bn := node_at(cx, body)
@@ -405,16 +417,20 @@ proc walk_stmt(pg: ref Prog, mi: u64, n: u64)
         st4 := sbeg(pg)
         sput(pg, et)
         add_loc(pg, nd.t0, L_BIND, 0, st4)
+        if carries_region(pg, et) == 1
+            loc_setreg(pg, reg_of(pg, mi, it))
+        end
         walk_body(pg, mi, kid2(cx, n))
         ret
     end
     if k == N_CASE
         subj := infer(pg, mi, kid1(cx, n))
+        sreg := reg_of(pg, mi, kid1(cx, n))
         arm : u64 <- kid2(cx, n)
         while arm != 0
             an := node_at(cx, arm)
             if an.kind == N_WHEN
-                collect_pattern(pg, mi, subj, kid1(cx, arm))
+                collect_pattern(pg, mi, subj, kid1(cx, arm), sreg)
                 walk_kids(pg, mi, kid2(cx, arm))
             end
             if an.kind == N_ELSE
@@ -479,7 +495,20 @@ proc collect_locals(pg: rw ref Prog, mi: u64, node: u64)
     pg.nloc <- 0
     pg.soff <- 0
     pg.locbase <- 0
+    pg.nzone <- 0
+    pg.curstmt <- 0
+    -- The result type is the context of every `ret`, so it is materialised
+    -- first and stays valid for the whole procedure.
+    nod := node_at(cx, node)
+    pg.rt0 <- 0
+    pg.rt1 <- 0
     params := kid1(cx, node)
+    if nod.val == 1
+        rst := sbeg(pg)
+        sput_type_node(pg, mi, sibling(cx, params))
+        pg.rt0 <- rst
+        pg.rt1 <- pg.soff
+    end
     p : u64 <- kid1(cx, params)
     i : u64 <- 0
     while p != 0
@@ -487,6 +516,9 @@ proc collect_locals(pg: rw ref Prog, mi: u64, node: u64)
         st := sbeg(pg)
         sput_type_node(pg, mi, kid1(cx, p))
         add_loc(pg, pn.t0, L_PARAM, i, st)
+        if carries_region(pg, sdone(pg, st)) == 1
+            loc_setreg(pg, reg_param(i))
+        end
         i <- i + 1
         p <- sibling(cx, p)
     end
@@ -508,7 +540,8 @@ proc print_locals(pg: ref Prog)
     while i < pg.nloc
         l := loc_at(pg, i)
         cx := mod_ctx(pg, l.mod)
-        put(1, "    (local ")
+        bline(pg, 4)
+        put(1, "(local ")
         put_uint(1, tmp, n)
         put(1, " ")
         put(1, tok_text(cx, l.name))
@@ -536,7 +569,7 @@ proc print_locals(pg: ref Prog)
             -- An initialiser whose type this stage cannot infer yet.
             put(1, "?")
         end
-        put(1, ")\n")
+        put(1, ")")
         n <- n + 1
         i <- i + 1
     end

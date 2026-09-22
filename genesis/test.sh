@@ -1003,30 +1003,26 @@ for f in ../tests/parse/err/*.oli; do
     head -c 8 build/ast.out | grep -q '^(module' || fail "parser: $f produced no module after recovery"
 done
 echo "ok: olic parser reports exactly the E0001-E0032/W0001 diagnostics the parse/err fixtures expect, and recovers"
-cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli ../compiler/check.oli ../compiler/show_items.oli > build/show_items.oli
-./build/oli1.bin < build/show_items.oli > build/show_items || fail "oli1 could not compile compiler/ (show_items)"
-chmod +x build/show_items
-./build/oli1.bin < build/show_items.oli > build/show_items.again
-cmp build/show_items build/show_items.again || fail "show_items build is not deterministic"
-# The item section must equal the head of the semantic snapshot, and it is read
+cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli ../compiler/body.oli ../compiler/check.oli ../compiler/show_sema.oli > build/show_sema.oli
+./build/oli1.bin < build/show_sema.oli > build/show_sema || fail "oli1 could not compile compiler/ (show_sema)"
+chmod +x build/show_sema
+./build/oli1.bin < build/show_sema.oli > build/show_sema.again
+cmp build/show_sema build/show_sema.again || fail "show_sema build is not deterministic"
+# The whole semantic graph must equal the snapshot, byte for byte. It is read
 # from the repository root because imports are resolved under lib/.
 for pair in "hello examples/hello.oli" "packet_demo examples/packet_demo.oli" "freestanding tests/sema/ok/freestanding.oli"; do
     set -- $pair
-    ( cd .. && genesis/build/show_items < "$2" > genesis/build/$1.out 2> genesis/build/items.err ) || fail "items: diagnostics for $2: $(cat build/items.err)"
-    sed -n '/^  (proc /q;p' build/$1.out > build/$1.items
-    n=$(wc -l < build/$1.items)
-    head -n "$n" ../tests/snapshots/$1.sema > build/$1.want
-    cmp build/$1.want build/$1.items || fail "items: $1 differs from the head of tests/snapshots/$1.sema"
-    [ "$n" -ge 5 ] || fail "items: $1 produced only $n lines"
+    ( cd .. && genesis/build/show_sema < "$2" > genesis/build/$1.out 2> genesis/build/items.err ) || fail "sema: diagnostics for $2: $(cat build/items.err)"
+    cmp build/$1.out ../tests/snapshots/$1.sema || fail "sema: $1 differs from tests/snapshots/$1.sema"
 done
-echo "ok: olic item collection matches the layouts, choices, constants and statics of every tests/snapshots/*.sema"
-( cd .. && genesis/build/show_items < tests/parse/ok/kernel_sketch.oli > genesis/build/ks.items 2>/dev/null ) || true
+echo "ok: olic reproduces every tests/snapshots/*.sema byte for byte - items, signatures, locals and typed bodies (--show-sema)"
+( cd .. && genesis/build/show_sema < tests/parse/ok/kernel_sketch.oli > genesis/build/ks.items 2>/dev/null ) || true
 grep -q '(layout GdtPointer#1 size=10 align=1 (limit u16 @0) (base addr u64 @2))' build/ks.items || fail "items: packed layout"
 grep -q '(layout Multiboot2Header#0 size=24 align=8 ' build/ks.items || fail "items: explicit layout alignment"
-( cd .. && genesis/build/show_items < tests/parse/ok/statements.oli > genesis/build/st.items 2>/dev/null ) || true
+( cd .. && genesis/build/show_sema < tests/parse/ok/statements.oli > genesis/build/st.items 2>/dev/null ) || true
 grep -q '(choice Shape#0 size=20 align=4 tag=1 payload@4 (dot) (line (a Point @4) (b Point @12)))' build/st.items || fail "items: choice with a layout payload"
 for f in ../tests/sema/ok/*.oli ../lib/*.oli ../lib/*/*.oli; do
-    ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: diagnostics for $f: $(cat build/items.err)"
+    ( cd .. && genesis/build/show_sema < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: diagnostics for $f: $(cat build/items.err)"
     head -c 9 build/items.out | grep -q '^(program' || fail "items: $f produced no program"
 done
 # The compiler analyses its own source, as one program and file by file, and
@@ -1034,46 +1030,43 @@ done
 : > build/self.oli
 for f in ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli \
          ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli \
-         ../compiler/check.oli ../compiler/show_items.oli; do
+         ../compiler/body.oli ../compiler/check.oli ../compiler/show_sema.oli; do
     if [ -s build/self.oli ]; then grep -v '^module ' "$f" >> build/self.oli; else cat "$f" >> build/self.oli; fi
 done
-( cd .. && genesis/build/show_items < genesis/build/self.oli > genesis/build/self.out 2> genesis/build/self.err ) \
+( cd .. && genesis/build/show_sema < genesis/build/self.oli > genesis/build/self.out 2> genesis/build/self.err ) \
     || fail "self-analysis: olic reports $(grep -c 'error\[' build/self.err) diagnostics on its own source: $(head -2 build/self.err)"
 grep -q '(proc olic.io.check_proc' build/self.out || fail "self-analysis: the whole compiler was not analysed"
 for f in ../compiler/*.oli; do
-    ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: $f reports $(head -1 build/items.err)"
+    ( cd .. && genesis/build/show_sema < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: $f reports $(head -1 build/items.err)"
     head -c 9 build/items.out | grep -q '^(program' || fail "items: $f produced no program"
 done
-echo "ok: olic analyses its own source - all ten modules as one program - without a single diagnostic"
+echo "ok: olic analyses its own source - all eleven modules as one program - without a single diagnostic"
 
 echo "ok: olic resolves packed/aligned layouts, nested payloads and every library module it imports"
-# Procedure signatures and parameter locals, compared against the same lines of
-# the semantic snapshot (bodies and inferred locals are the next stage).
+# Procedure signatures and locals again on their own, so a failure says which
+# stage broke when the whole-file comparison above fails.
 for pair in "hello examples/hello.oli" "packet_demo examples/packet_demo.oli" "freestanding tests/sema/ok/freestanding.oli"; do
     set -- $pair
-    ( cd .. && genesis/build/show_items < "$2" 2>/dev/null ) | grep -E '^  \(proc |^    \(local ' > build/$1.sig
+    ( cd .. && genesis/build/show_sema < "$2" 2>/dev/null ) | grep -E '^  \(proc |^    \(local ' > build/$1.sig
     grep -E '^  \(proc |^    \(local ' ../tests/snapshots/$1.sema > build/$1.sigwant
     cmp build/$1.sigwant build/$1.sig || fail "signatures: $1 differs from tests/snapshots/$1.sema"
     [ -s build/$1.sig ] || fail "signatures: $1 produced nothing"
 done
 # Semantic checks that need no type graph: capabilities, unimplemented
 # features, constant cycles and ranges, recursive layouts.
-for f in ../tests/sema/err/items.oli ../tests/sema/err/permits.oli ../tests/sema/err/not_implemented.oli \
-         ../tests/sema/err/flow.oli ../tests/sema/err/shadow.oli ../tests/sema/err/unassigned.oli \
-         ../tests/sema/err/unhandled.oli ../tests/sema/err/not_exhaustive.oli ../tests/sema/err/readonly.oli \
-         ../tests/sema/err/freestanding_zone.oli ../tests/sema/err/escape_frame.oli ../tests/sema/err/escape_zone.oli; do
+for f in ../tests/sema/err/*.oli; do
     want=$(grep -- '-- expect: ' "$f" | sed 's/-- expect: //' | sort)
-    set +e; ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/chk.out 2> genesis/build/chk.err ); st=$?; set -e
+    set +e; ( cd .. && genesis/build/show_sema < "${f#../}" > genesis/build/chk.out 2> genesis/build/chk.err ); st=$?; set -e
     got=$(awk '/^error\[|^warning\[/ {code=substr($1,index($1,"[")+1,5)} /^ --> stdin:/ {split($2,a,":"); print code " @ " a[2] ":" a[3]}' build/chk.err | sort)
     [ "$got" = "$want" ] || fail "checks: $f expected [$want] got [$got]"
     [ "$st" = 1 ] || fail "checks: $f exit $st"
 done
-( cd .. && genesis/build/show_items < tests/parse/ok/kernel_sketch.oli > /dev/null 2> genesis/build/chk.err ) || true
+( cd .. && genesis/build/show_sema < tests/parse/ok/kernel_sketch.oli > /dev/null 2> genesis/build/chk.err ) || true
 grep -q 'E0401' build/chk.err || fail "checks: kernel_sketch must report the missing memory.raw permit"
 grep -q 'E0900' build/chk.err || fail "checks: kernel_sketch must report the V1 features it uses"
 for f in ../tests/sema/ok/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli; do
-    ( cd .. && genesis/build/show_items < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
+    ( cd .. && genesis/build/show_sema < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
 done
-echo "ok: olic reports exactly the diagnostics of twelve tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places and region escapes - and none on any positive fixture"
+echo "ok: olic reports exactly the diagnostics of all fourteen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types and address spaces - and none on any positive fixture"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
-echo "genesis: layer 4 (olic lexer, parser and item collection) passed"
+echo "genesis: layer 4 (olic front end and semantic analysis) passed"

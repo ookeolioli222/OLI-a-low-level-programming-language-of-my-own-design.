@@ -3,7 +3,7 @@ module olic.show_ast
 -- prints the S-expression tree of tests/snapshots/*.ast on stdout and the
 -- diagnostics on stderr; exit status 1 when any diagnostic was reported.
 
-proc start
+proc start -> s32
     entry
     permit os.syscall
     zone z 67108864

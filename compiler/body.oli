@@ -1,0 +1,3155 @@
+module olic.body
+-- Semantic analysis, stage 3: the typed body of every procedure. Each
+-- expression prints as `(form ...):type`, with `@region` when the value may
+-- point into memory that is not static, which is the rest of `--show-sema`
+-- (`tests/snapshots/*.sema`).
+--
+-- Types stay text in the shared buffer (`compiler/sema.oli`): the context type
+-- of an expression is threaded down as `want`, and that single parameter is
+-- what gives an integer literal its type (`E0201`), decides the implicit
+-- `widen`/`bits` conversions and finds the lossy ones (`E0202`).
+--
+-- Regions are a bit set (design 0014): bit `i` is `param#i`, bit 16 is the
+-- frame and bit `17 + k` is the `k`-th zone opened by this procedure. Static
+-- is the empty set, which is exactly the set the printer leaves out.
+
+RG_FRAME := 65536
+RG_ZBASE := 17
+RG_OTHER := 8589934592
+
+proc bitv(i: u64) -> u64
+    -- 2^i without shifts: oli-core has no bitwise operators.
+    r : u64 <- 1
+    k : u64 <- 0
+    while k < i
+        r <- r * 2
+        k <- k + 1
+    end
+    ret r
+end
+
+proc reg_join(a: u64, b: u64) -> u64
+    -- Set union, digit by digit.
+    if a == b
+        ret a
+    end
+    if a == 0
+        ret b
+    end
+    if b == 0
+        ret a
+    end
+    r : u64 <- 0
+    p : u64 <- 1
+    x : u64 <- a
+    y : u64 <- b
+    while x + y > 0
+        if x % 2 + y % 2 > 0
+            r <- r + p
+        end
+        x <- x / 2
+        y <- y / 2
+        p <- p * 2
+    end
+    ret r
+end
+
+proc reg_param(i: u64) -> u64
+    if i >= 16
+        ret RG_OTHER
+    end
+    ret bitv(i)
+end
+
+proc reg_zone(ord: u64) -> u64
+    if ord >= 16
+        ret RG_OTHER
+    end
+    ret bitv(RG_ZBASE + ord)
+end
+
+-- Integer types ---------------------------------------------------------------
+
+proc int_bits(t: view u8) -> word
+    -- The width of an integer type, or 0 when `t` is not one.
+    if view_eq(t, "u8")
+        ret 8
+    end
+    if view_eq(t, "byte")
+        ret 8
+    end
+    if view_eq(t, "s8")
+        ret 8
+    end
+    if view_eq(t, "u16")
+        ret 16
+    end
+    if view_eq(t, "s16")
+        ret 16
+    end
+    if view_eq(t, "u32")
+        ret 32
+    end
+    if view_eq(t, "s32")
+        ret 32
+    end
+    if view_eq(t, "u64")
+        ret 64
+    end
+    if view_eq(t, "s64")
+        ret 64
+    end
+    if view_eq(t, "word")
+        ret 64
+    end
+    if view_eq(t, "uword")
+        ret 64
+    end
+    ret 0
+end
+
+proc int_signed(t: view u8) -> word
+    if t.len == 0
+        ret 0
+    end
+    if view_eq(t, "word")
+        ret 1
+    end
+    if t[0] == 115
+        ret 1
+    end
+    ret 0
+end
+
+proc int_limit(t: view u8) -> u64
+    -- 1 + the largest value of an unsigned type, 0 when it does not bound.
+    if view_eq(t, "u8")
+        ret 256
+    end
+    if view_eq(t, "byte")
+        ret 256
+    end
+    if view_eq(t, "u16")
+        ret 65536
+    end
+    if view_eq(t, "u32")
+        ret 4294967296
+    end
+    ret 0
+end
+
+proc addr_kind(t: view u8) -> word
+    -- 1 for `addr T`, 2 for `physaddr`: the two address spaces of E0203.
+    if starts_with(t, "addr ")
+        ret 1
+    end
+    if view_eq(t, "physaddr")
+        ret 2
+    end
+    ret 0
+end
+
+proc unqual(t: view u8) -> view u8
+    -- A type without its `rw`.
+    if starts_with(t, "rw ")
+        ret t[3..]
+    end
+    ret t
+end
+
+proc err_of(v: view u8) -> view u8
+    -- The `E` of `T or E`.
+    i : u64 <- 0
+    while i + 4 <= v.len
+        if view_eq(v[i..i + 4], " or ")
+            ret v[i + 4..]
+        end
+        i <- i + 1
+    end
+    ret v[0..0]
+end
+
+proc is_fallible(v: view u8) -> word
+    e := err_of(v)
+    if e.len > 0
+        ret 1
+    end
+    ret 0
+end
+
+proc arr_elem(t: view u8) -> view u8
+    -- The `T` of `[N]T`.
+    i : u64 <- 0
+    while i < t.len
+        if t[i] == 93
+            ret t[i + 1..]
+        end
+        i <- i + 1
+    end
+    ret t[0..0]
+end
+
+proc carries_region(pg: ref Prog, t: view u8) -> word
+    -- A value of this type may point into memory (design 0014).
+    s := unqual(t)
+    if starts_with(s, "view ")
+        ret 1
+    end
+    if starts_with(s, "ref ")
+        ret 1
+    end
+    if view_eq(s, "zone")
+        ret 1
+    end
+    if starts_with(s, "[")
+        ret carries_region(pg, arr_elem(s))
+    end
+    e := err_of(s)
+    if e.len > 0
+        if carries_region(pg, ok_of(s))
+            ret 1
+        end
+        ret carries_region(pg, e)
+    end
+    idx := item_find(pg, s)
+    if idx < 0
+        ret 0
+    end
+    it := item_at(pg, idx)
+    cx := mod_ctx(pg, it.mod)
+    f : u64 <- 0
+    while f < it.nfld
+        fr := fld_at(pg, it.first + f)
+        ft := node_at(cx, kid1(cx, fr.node))
+        if type_toks_carry(pg, it.mod, ft.t0, ft.t1)
+            ret 1
+        end
+        f <- f + 1
+    end
+    ret 0
+end
+
+proc type_toks_carry(pg: ref Prog, mi: u64, a: u64, b: u64) -> word
+    -- The field type of a layout, without materialising it twice.
+    st := sbeg(pg)
+    sput_toks(pg, mi, a, b)
+    ret carries_region(pg, sdone(pg, st))
+end
+
+-- Lookups -----------------------------------------------------------------------
+
+proc loc_find(pg: ref Prog, name: view u8) -> word
+    -- The declaration this name refers to at the statement being analysed:
+    -- the latest one that precedes it, so a name reused in two sibling blocks
+    -- resolves to the one in scope (node ids grow with source position).
+    best : word <- -1
+    bnode : u64 <- 0
+    fallback : word <- -1
+    i : u64 <- pg.locbase
+    while i < pg.nloc
+        l := loc_at(pg, i)
+        cx := mod_ctx(pg, l.mod)
+        if view_eq(tok_text(cx, l.name), name)
+            if fallback < 0
+                fallback <- i
+            end
+            if l.dnode <= pg.curstmt
+                if l.dnode >= bnode
+                    bnode <- l.dnode
+                    best <- i
+                end
+            end
+        end
+        i <- i + 1
+    end
+    if best >= 0
+        ret best
+    end
+    ret fallback
+end
+
+proc loc_setreg(pg: ref Prog, mask: u64)
+    -- The region of the value the most recently collected local holds.
+    if pg.nloc == 0
+        ret
+    end
+    l := loc_at(pg, pg.nloc - 1)
+    l.reg <- mask
+end
+
+proc loc_setzone(pg: rw ref Prog)
+    -- A zone handle names its own region; the ordinal is what the printer
+    -- turns back into `@zone <name>`.
+    if pg.nloc == 0
+        ret
+    end
+    l := loc_at(pg, pg.nloc - 1)
+    l.zord <- pg.nzone
+    l.reg <- reg_zone(pg.nzone)
+    pg.nzone <- pg.nzone + 1
+end
+
+proc val_find(pg: ref Prog, name: view u8) -> word
+    i : u64 <- 0
+    while i < pg.nval
+        v := val_at(pg, i)
+        cx := mod_ctx(pg, v.mod)
+        vn := node_at(cx, v.node)
+        if view_eq(tok_text(cx, vn.t0), name)
+            ret i
+        end
+        i <- i + 1
+    end
+    ret -1
+end
+
+proc val_type(pg: ref Prog, i: u64) -> view u8
+    v := val_at(pg, i)
+    cx := mod_ctx(pg, v.mod)
+    vn := node_at(cx, v.node)
+    if vn.val >= 2
+        st := sbeg(pg)
+        sput_type_node(pg, v.mod, kid1(cx, v.node))
+        ret sdone(pg, st)
+    end
+    ret "word"
+end
+
+proc proc_find(pg: ref Prog, name: view u8) -> word
+    q : u64 <- 0
+    while q < pg.nproc
+        v := proc_at(pg, q)
+        cx := mod_ctx(pg, v.mod)
+        nd := node_at(cx, v.node)
+        if view_eq(tok_text(cx, nd.t0), name)
+            ret q
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc is_item_name(pg: ref Prog, cx: ref Ctx, n: u64) -> word
+    -- `Header.size`, `Header.at(v)`: the base names a layout or a choice.
+    nd := node_at(cx, n)
+    if nd.kind != N_NAME
+        ret 0
+    end
+    if item_find(pg, tok_text(cx, nd.t0)) < 0
+        ret 0
+    end
+    ret 1
+end
+
+proc name_kind(pg: ref Prog, mi: u64, n: u64) -> word
+    -- 1 local, 2 constant, 3 static, 0 unknown.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    name := tok_text(cx, nd.t0)
+    if loc_find(pg, name) >= 0
+        ret 1
+    end
+    vi := val_find(pg, name)
+    if vi < 0
+        ret 0
+    end
+    v := val_at(pg, vi)
+    if v.kind == 0
+        ret 2
+    end
+    ret 3
+end
+
+-- Type of an expression -----------------------------------------------------------
+
+proc lit_type(pg: ref Prog, want: view u8) -> view u8
+    -- The type an integer literal takes from its context; empty is E0201.
+    b := pg.sbuf
+    if int_bits(want) > 0
+        ret want
+    end
+    if addr_kind(want) > 0
+        ret "uword"
+    end
+    ret b[0..0]
+end
+
+proc native_int(t: view u8) -> view u8
+    -- A `be`/`le` field reads and writes as the native integer (spec §4).
+    if starts_with(t, "be ")
+        ret t[3..]
+    end
+    if starts_with(t, "le ")
+        ret t[3..]
+    end
+    ret t
+end
+
+proc addr_elem(t: view u8) -> view u8
+    if starts_with(t, "addr ")
+        ret t[5..]
+    end
+    ret t
+end
+
+proc mk_type(pg: ref Prog, head: view u8, tail: view u8) -> view u8
+    st := sbeg(pg)
+    sput(pg, head)
+    sput(pg, tail)
+    ret sdone(pg, st)
+end
+
+proc same_repr(a: view u8, b: view u8) -> word
+    if view_eq(a, b)
+        ret 1
+    end
+    if int_bits(a) == 0
+        ret 0
+    end
+    if int_bits(a) != int_bits(b)
+        ret 0
+    end
+    if int_signed(a) != int_signed(b)
+        ret 0
+    end
+    ret 1
+end
+
+proc widens_to(a: view u8, b: view u8) -> word
+    -- `uN` to any wider `uN` and `uword`; `sN` to any wider `sN` and `word`.
+    wa := int_bits(a)
+    wb := int_bits(b)
+    if wa == 0
+        ret 0
+    end
+    if wb == 0
+        ret 0
+    end
+    if int_signed(a) != int_signed(b)
+        ret 0
+    end
+    if wa < wb
+        ret 1
+    end
+    ret 0
+end
+
+proc ro_of(pg: ref Prog, t: view u8) -> view u8
+    -- `rw view T` seen as `view T`.
+    if starts_with(t, "rw ")
+        ret t[3..]
+    end
+    ret t
+end
+
+proc coerce_kind(pg: ref Prog, have: view u8, want: view u8) -> word
+    -- 0 none, 1 silent retype, 2 widen, 3 inttoaddr, 4 inttophys,
+    -- 5 lossy (E0202), 6 mismatch (E0200), 7 deref load. Unknown types are 0.
+    if have.len == 0
+        ret 0
+    end
+    if want.len == 0
+        ret 0
+    end
+    if view_eq(have, want)
+        ret 0
+    end
+    if view_eq(have, "never")
+        ret 0
+    end
+    if int_bits(have) > 0
+        if int_bits(want) > 0
+            if same_repr(have, want)
+                ret 1
+            end
+            if widens_to(have, want)
+                ret 2
+            end
+            ret 5
+        end
+        if addr_kind(want) == 1
+            ret 3
+        end
+        if addr_kind(want) == 2
+            ret 4
+        end
+    end
+    if view_eq(ro_of(pg, have), want)
+        ret 1
+    end
+    if starts_with(have, "ref ")
+        if view_eq(have[4..], want)
+            ret 7
+        end
+    end
+    if starts_with(have, "rw ref ")
+        if view_eq(have[7..], want)
+            ret 7
+        end
+    end
+    ret 6
+end
+
+-- Calls and intrinsics -------------------------------------------------------------
+
+CK_SYSCALL := 1
+CK_HALT := 2
+CK_PAUSE := 3
+CK_COPY := 4
+CK_SET := 5
+CK_ZERO := 6
+CK_SECZERO := 7
+CK_GET := 8
+CK_PUT := 9
+CK_BYTES := 10
+CK_TRYBYTES := 11
+CK_MAKE := 12
+CK_AT := 13
+CK_PROC := 14
+
+proc mem_width(name: view u8) -> word
+    -- The width of a `mem.get_*` / `mem.put_*` accessor, 0 when it is not one.
+    if name.len < 6
+        ret 0
+    end
+    tail := name[4..]
+    if view_eq(tail, "u16")
+        ret 16
+    end
+    if view_eq(tail, "u32")
+        ret 32
+    end
+    if view_eq(tail, "u64")
+        ret 64
+    end
+    if view_eq(tail, "be16")
+        ret 16
+    end
+    if view_eq(tail, "be32")
+        ret 32
+    end
+    if view_eq(tail, "be64")
+        ret 64
+    end
+    if view_eq(tail, "le16")
+        ret 16
+    end
+    if view_eq(tail, "le32")
+        ret 32
+    end
+    if view_eq(tail, "le64")
+        ret 64
+    end
+    ret 0
+end
+
+proc mem_endian(name: view u8) -> word
+    -- 0 native (`None`), 1 big (`Some(true)`), 2 little (`Some(false)`).
+    if name.len < 6
+        ret 0
+    end
+    t := name[4..]
+    if t[0] == 98
+        ret 1
+    end
+    if t[0] == 108
+        ret 2
+    end
+    ret 0
+end
+
+proc mem_acc_kind(name: view u8) -> word
+    -- 1 for `get_*`, 2 for `put_*`, 0 otherwise.
+    if mem_width(name) == 0
+        ret 0
+    end
+    if starts_with(name, "get_")
+        ret 1
+    end
+    if starts_with(name, "put_")
+        ret 2
+    end
+    ret 0
+end
+
+proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
+    -- Which intrinsic, zone operation or procedure this call names.
+    cx := mod_ctx(pg, mi)
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    if cn.kind == N_NAME
+        ret CK_PROC
+    end
+    if cn.kind != N_FIELD
+        ret 0
+    end
+    m := tok_text(cx, cn.t0)
+    base := kid1(cx, ce)
+    bn := node_at(cx, base)
+    if bn.kind == N_NAME
+        bname := tok_text(cx, bn.t0)
+        if name_kind(pg, mi, base) == 0
+            if view_eq(bname, "os")
+                if view_eq(m, "syscall")
+                    ret CK_SYSCALL
+                end
+            end
+            if view_eq(bname, "cpu")
+                if view_eq(m, "halt")
+                    ret CK_HALT
+                end
+                if view_eq(m, "pause")
+                    ret CK_PAUSE
+                end
+            end
+            if view_eq(bname, "mem")
+                if view_eq(m, "copy")
+                    ret CK_COPY
+                end
+                if view_eq(m, "set")
+                    ret CK_SET
+                end
+                if view_eq(m, "zero")
+                    ret CK_ZERO
+                end
+                if view_eq(m, "secure_zero")
+                    ret CK_SECZERO
+                end
+                a := mem_acc_kind(m)
+                if a == 1
+                    ret CK_GET
+                end
+                if a == 2
+                    ret CK_PUT
+                end
+            end
+            if is_item_name(pg, cx, base)
+                if view_eq(m, "at")
+                    ret CK_AT
+                end
+            end
+            ret CK_PROC
+        end
+    end
+    if view_eq(m, "bytes")
+        ret CK_BYTES
+    end
+    if view_eq(m, "try_bytes")
+        ret CK_TRYBYTES
+    end
+    if view_eq(m, "make")
+        ret CK_MAKE
+    end
+    ret CK_PROC
+end
+
+proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
+    -- The result type of a call; `(no value)` when it produces none.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ck := call_kind(pg, mi, n)
+    if ck == CK_SYSCALL
+        ret "word"
+    end
+    if ck == CK_HALT
+        ret "(no value)"
+    end
+    if ck == CK_PAUSE
+        ret "(no value)"
+    end
+    if ck == CK_COPY
+        ret "(no value)"
+    end
+    if ck == CK_SET
+        ret "(no value)"
+    end
+    if ck == CK_ZERO
+        ret "(no value)"
+    end
+    if ck == CK_SECZERO
+        ret "(no value)"
+    end
+    if ck == CK_PUT
+        ret "(no value)"
+    end
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    if ck == CK_GET
+        w := mem_width(tok_text(cx, cn.t0))
+        if w == 16
+            ret "u16"
+        end
+        if w == 32
+            ret "u32"
+        end
+        ret "u64"
+    end
+    if ck == CK_BYTES
+        ret "rw view u8"
+    end
+    if ck == CK_TRYBYTES
+        ret "rw view u8 or none"
+    end
+    if ck == CK_MAKE
+        arg := node_at(cx, kid2(cx, n))
+        ret mk_type(pg, "rw ref ", tok_text(cx, arg.t0))
+    end
+    if ck == CK_AT
+        bn := node_at(cx, kid1(cx, ce))
+        vt := ety(pg, mi, kid2(cx, n), b[0..0])
+        if starts_with(vt, "rw ")
+            ret mk_type(pg, "rw ref ", tok_text(cx, bn.t0))
+        end
+        ret mk_type(pg, "ref ", tok_text(cx, bn.t0))
+    end
+    pi := proc_find(pg, tok_text(cx, cn.t0))
+    if pi < 0
+        ret b[0..0]
+    end
+    pv := proc_at(pg, pi)
+    pcx := mod_ctx(pg, pv.mod)
+    pn := node_at(pcx, pv.node)
+    if pn.val != 1
+        ret "(no value)"
+    end
+    ret proc_result(pg, tok_text(cx, cn.t0))
+end
+
+-- The type of an expression -------------------------------------------------------
+
+proc binop_is_compare(op: view u8) -> word
+    if view_eq(op, "==")
+        ret 1
+    end
+    if view_eq(op, "!=")
+        ret 1
+    end
+    if view_eq(op, "<")
+        ret 1
+    end
+    if view_eq(op, "<=")
+        ret 1
+    end
+    if view_eq(op, ">")
+        ret 1
+    end
+    if view_eq(op, ">=")
+        ret 1
+    end
+    if view_eq(op, "and")
+        ret 1
+    end
+    if view_eq(op, "or")
+        ret 1
+    end
+    ret 0
+end
+
+proc unify(pg: ref Prog, a: view u8, b: view u8) -> view u8
+    -- The common type of two operands: the wider of two integers.
+    if a.len == 0
+        ret b
+    end
+    if b.len == 0
+        ret a
+    end
+    if view_eq(a, b)
+        ret a
+    end
+    if widens_to(a, b)
+        ret b
+    end
+    if widens_to(b, a)
+        ret a
+    end
+    if same_repr(a, b)
+        ret a
+    end
+    ret a
+end
+
+proc binop_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    op := tok_text(cx, nd.t0)
+    if binop_is_compare(op)
+        ret "bool"
+    end
+    lhs := kid1(cx, n)
+    rhs := kid2(cx, n)
+    if view_eq(op, "<<")
+        ret ety(pg, mi, lhs, want)
+    end
+    if view_eq(op, ">>")
+        ret ety(pg, mi, lhs, want)
+    end
+    lt := ety(pg, mi, lhs, b[0..0])
+    rt := ety(pg, mi, rhs, b[0..0])
+    if lt.len == 0
+        if rt.len == 0
+            ret lit_type(pg, want)
+        end
+    end
+    ret unify(pg, lt, rt)
+end
+
+proc field_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
+    -- `v.len`, `v.addr`, `Name.size`, a module constant, or a layout field.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    m := tok_text(cx, nd.t0)
+    base := kid1(cx, n)
+    bn := node_at(cx, base)
+    if bn.kind == N_NAME
+        if name_kind(pg, mi, base) == 0
+            if is_item_name(pg, cx, base)
+                if view_eq(m, "size")
+                    ret lit_type(pg, want)
+                end
+                if view_eq(m, "align")
+                    ret lit_type(pg, want)
+                end
+            end
+            vi := val_find(pg, m)
+            if vi >= 0
+                v := val_at(pg, vi)
+                if v.kind == 0
+                    if int_bits(want) > 0
+                        ret want
+                    end
+                    ret val_type(pg, vi)
+                end
+                ret val_type(pg, vi)
+            end
+        end
+    end
+    bt := ety(pg, mi, base, b[0..0])
+    if view_eq(m, "len")
+        ret "uword"
+    end
+    if view_eq(m, "addr")
+        ret mk_type(pg, "addr ", elem_of(bt))
+    end
+    ret native_int(field_type_text(pg, bt, m))
+end
+
+proc name_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    name := tok_text(cx, nd.t0)
+    li := loc_find(pg, name)
+    if li >= 0
+        ret loc_type(pg, name)
+    end
+    vi := val_find(pg, name)
+    if vi < 0
+        ret b[0..0]
+    end
+    v := val_at(pg, vi)
+    t := val_type(pg, vi)
+    if v.kind == 0
+        if int_bits(want) > 0
+            ret want
+        end
+        ret t
+    end
+    if starts_with(t, "[")
+        ret mk_type(pg, "rw view ", arr_elem(t))
+    end
+    ret t
+end
+
+proc lit_item_type(pg: ref Prog, mi: u64, n: u64) -> view u8
+    -- `Name { ... }`: the layout it names, or the choice a variant belongs to.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    hn := node_at(cx, kid1(cx, n))
+    name := tok_text(cx, hn.t0)
+    if item_find(pg, name) >= 0
+        ret name
+    end
+    ret choice_of_variant(pg, name)
+end
+
+proc choice_of_variant(pg: ref Prog, vname: view u8) -> view u8
+    -- The choice that declares this variant.
+    b := pg.sbuf
+    i : u64 <- 0
+    while i < pg.nitem
+        it := item_at(pg, i)
+        if it.kind == 1
+            cx := mod_ctx(pg, it.mod)
+            nd := node_at(cx, it.node)
+            vn : u64 <- kid1(cx, it.node)
+            while vn != 0
+                v := node_at(cx, vn)
+                if view_eq(tok_text(cx, v.t0), vname)
+                    ret tok_text(cx, nd.t0)
+                end
+                vn <- sibling(cx, vn)
+            end
+        end
+        i <- i + 1
+    end
+    ret b[0..0]
+end
+
+proc ety(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
+    -- The type of expression `n` in a context that wants `want` (empty: none).
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    if n == 0
+        ret b[0..0]
+    end
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_INT
+        ret lit_type(pg, want)
+    end
+    if k == N_CHAR
+        ret lit_type(pg, want)
+    end
+    if k == N_STR
+        ret "view u8"
+    end
+    if k == N_TRUE
+        ret "bool"
+    end
+    if k == N_FALSE
+        ret "bool"
+    end
+    if k == N_NONE
+        ret "none"
+    end
+    if k == N_NAME
+        ret name_type(pg, mi, n, want)
+    end
+    if k == N_FIELD
+        ret field_type(pg, mi, n, want)
+    end
+    if k == N_INDEX
+        bt := ety(pg, mi, kid1(cx, n), b[0..0])
+        ix := node_at(cx, kid2(cx, n))
+        if ix.kind == N_RANGE
+            ret bt
+        end
+        ret elem_of(bt)
+    end
+    if k == N_RAWLOAD
+        ret addr_elem(ety(pg, mi, kid1(cx, n), b[0..0]))
+    end
+    if k == N_BINOP
+        ret binop_type(pg, mi, n, want)
+    end
+    if k == N_UNOP
+        s := nd.sub
+        if s == U_NOT
+            ret "bool"
+        end
+        if s == U_ADDROF
+            aty := place_type(pg, mi, kid1(cx, n))
+            if starts_with(aty, "[")
+                ret mk_type(pg, "addr ", arr_elem(aty))
+            end
+            ret mk_type(pg, "addr ", elem_of(aty))
+        end
+        if s == U_REFOF
+            ret mk_type(pg, "ref ", ety(pg, mi, kid1(cx, n), b[0..0]))
+        end
+        ret ety(pg, mi, kid1(cx, n), want)
+    end
+    if k == N_CONVERT
+        st := sbeg(pg)
+        sput_toks(pg, mi, nd.t0, nd.t1)
+        ret sdone(pg, st)
+    end
+    if k == N_FALLBACK
+        ret ok_of(ety(pg, mi, kid1(cx, n), b[0..0]))
+    end
+    if k == N_LIT
+        ret lit_item_type(pg, mi, n)
+    end
+    if k == N_ARRAY
+        ret want
+    end
+    if k == N_CALL
+        ret call_type(pg, mi, n)
+    end
+    ret b[0..0]
+end
+
+-- Regions of a value ---------------------------------------------------------------
+
+proc reg_raw(pg: ref Prog, mi: u64, n: u64) -> u64
+    -- The regions this expression may point into, before the type filter.
+    cx := mod_ctx(pg, mi)
+    if n == 0
+        ret 0
+    end
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_NAME
+        li := loc_find(pg, tok_text(cx, nd.t0))
+        if li < 0
+            ret 0
+        end
+        l := loc_at(pg, li)
+        ret l.reg
+    end
+    if k == N_INDEX
+        ret reg_raw(pg, mi, kid1(cx, n))
+    end
+    if k == N_FIELD
+        ret reg_raw(pg, mi, kid1(cx, n))
+    end
+    if k == N_UNOP
+        ret reg_raw(pg, mi, kid1(cx, n))
+    end
+    if k == N_CONVERT
+        ret reg_raw(pg, mi, kid1(cx, n))
+    end
+    if k == N_FALLBACK
+        ret reg_raw(pg, mi, kid1(cx, n))
+    end
+    if k == N_LIT
+        r : u64 <- 0
+        f : u64 <- kid2(cx, n)
+        while f != 0
+            r <- reg_join(r, reg_of(pg, mi, kid1(cx, f)))
+            f <- sibling(cx, f)
+        end
+        ret r
+    end
+    if k == N_ARRAY
+        ra : u64 <- 0
+        e : u64 <- kid1(cx, n)
+        while e != 0
+            ra <- reg_join(ra, reg_of(pg, mi, e))
+            e <- sibling(cx, e)
+        end
+        ret ra
+    end
+    if k != N_CALL
+        ret 0
+    end
+    ck := call_kind(pg, mi, n)
+    if ck == CK_BYTES
+        ret reg_raw(pg, mi, kid1(cx, kid1(cx, n)))
+    end
+    if ck == CK_TRYBYTES
+        ret reg_raw(pg, mi, kid1(cx, kid1(cx, n)))
+    end
+    if ck == CK_MAKE
+        ret reg_raw(pg, mi, kid1(cx, kid1(cx, n)))
+    end
+    if ck == CK_AT
+        ret reg_of(pg, mi, kid2(cx, n))
+    end
+    if ck != CK_PROC
+        ret 0
+    end
+    -- Rule 3 of spec/OLI_MEMORY_V0.md: the result may point wherever an
+    -- argument points.
+    rc : u64 <- 0
+    a : u64 <- kid2(cx, n)
+    while a != 0
+        rc <- reg_join(rc, reg_of(pg, mi, a))
+        a <- sibling(cx, a)
+    end
+    ret rc
+end
+
+proc reg_of(pg: ref Prog, mi: u64, n: u64) -> u64
+    -- A value whose type cannot point anywhere carries no region.
+    b := pg.sbuf
+    if carries_region(pg, ety(pg, mi, n, b[0..0])) == 0
+        ret 0
+    end
+    ret reg_raw(pg, mi, n)
+end
+
+proc zone_name_of(pg: ref Prog, ord: u64) -> view u8
+    -- The handle of the `ord`-th zone opened by this procedure.
+    b := pg.sbuf
+    i : u64 <- pg.locbase
+    while i < pg.nloc
+        l := loc_at(pg, i)
+        if l.kind == L_ZONE
+            if l.zord == ord
+                cx := mod_ctx(pg, l.mod)
+                ret tok_text(cx, l.name)
+            end
+        end
+        i <- i + 1
+    end
+    ret b[0..0]
+end
+
+proc put_region(pg: ref Prog, mask: u64)
+    -- ` @param#0`, ` @frame`, ` @zone name`, joined with `|` when a value may
+    -- point into more than one region.
+    if mask == 0
+        ret
+    end
+    tmp := pg.tmp
+    put(1, " @")
+    x : u64 <- mask
+    i : u64 <- 0
+    first : u64 <- 1
+    while x > 0
+        if x % 2 == 1
+            if first == 0
+                put(1, "|")
+            end
+            first <- 0
+            if i < 16
+                put(1, "param#")
+                put_uint(1, tmp, i)
+            else
+                if i == 16
+                    put(1, "frame")
+                else
+                    if i >= 33
+                        put(1, "?")
+                    else
+                        put(1, "zone ")
+                        put(1, zone_name_of(pg, i - RG_ZBASE))
+                    end
+                end
+            end
+        end
+        x <- x / 2
+        i <- i + 1
+    end
+end
+
+-- Output lines ---------------------------------------------------------------------
+
+proc bline(pg: rw ref Prog, ind: u64)
+    -- The newline of the previous line is deferred, so a closing `)` lands on
+    -- it: `(ret (int 0):s32)))` is three blocks closing at once.
+    if pg.pend == 1
+        put(1, "\n")
+    end
+    pg.pend <- 1
+    i : u64 <- 0
+    while i < ind
+        put(1, " ")
+        i <- i + 1
+    end
+end
+
+proc bnum(pg: ref Prog, v: u64)
+    tmp := pg.tmp
+    put_uint(1, tmp, v)
+end
+
+-- Places ---------------------------------------------------------------------------
+
+proc is_place(pg: ref Prog, mi: u64, n: u64) -> word
+    -- Typed memory (design 0014): a frame place, a static, a field or element
+    -- of one, the referent of a `ref`, or a raw address.
+    cx := mod_ctx(pg, mi)
+    if n == 0
+        ret 0
+    end
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_RAWLOAD
+        ret 1
+    end
+    if k == N_NAME
+        nk := name_kind(pg, mi, n)
+        if nk == 3
+            ret 1
+        end
+        if nk != 1
+            ret 0
+        end
+        li := loc_find(pg, tok_text(cx, nd.t0))
+        l := loc_at(pg, li)
+        if l.kind == L_PLACE
+            ret 1
+        end
+        ret 0
+    end
+    if k == N_INDEX
+        ix := node_at(cx, kid2(cx, n))
+        if ix.kind == N_RANGE
+            ret 0
+        end
+        ret 1
+    end
+    if k != N_FIELD
+        ret 0
+    end
+    m := tok_text(cx, nd.t0)
+    if view_eq(m, "len")
+        ret 0
+    end
+    if view_eq(m, "addr")
+        ret 0
+    end
+    base := kid1(cx, n)
+    bn := node_at(cx, base)
+    if bn.kind == N_NAME
+        if name_kind(pg, mi, base) == 0
+            ret 0
+        end
+    end
+    b := pg.sbuf
+    bt := ety(pg, mi, base, b[0..0])
+    if bt.len == 0
+        ret 0
+    end
+    ret 1
+end
+
+proc place_rw(pg: ref Prog, mi: u64, n: u64) -> word
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_RAWLOAD
+        ret 1
+    end
+    if k == N_NAME
+        nk := name_kind(pg, mi, n)
+        if nk == 3
+            ret 1
+        end
+        ret 1
+    end
+    if k == N_FIELD
+        base := kid1(cx, n)
+        bt := ety(pg, mi, base, b[0..0])
+        if starts_with(bt, "rw ")
+            ret 1
+        end
+        if starts_with(bt, "ref ")
+            ret 0
+        end
+        ret place_rw(pg, mi, base)
+    end
+    if k == N_INDEX
+        bt2 := ety(pg, mi, kid1(cx, n), b[0..0])
+        if starts_with(bt2, "rw ")
+            ret 1
+        end
+        ret 0
+    end
+    ret 0
+end
+
+proc pplace(pg: ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    k := nd.kind
+    put(1, "[")
+    if place_rw(pg, mi, n) == 1
+        put(1, "rw ")
+    end
+    if k == N_NAME
+        if name_kind(pg, mi, n) == 3
+            put(1, "static ")
+        else
+            put(1, "local ")
+        end
+        put(1, tok_text(cx, nd.t0))
+        put(1, "]")
+        ret
+    end
+    if k == N_RAWLOAD
+        put(1, "raw ")
+        pexpr(pg, mi, kid1(cx, n), b[0..0])
+        put(1, "]")
+        ret
+    end
+    if k == N_INDEX
+        put(1, "elem ")
+        base := kid1(cx, n)
+        if is_place(pg, mi, base)
+            pplace(pg, mi, base)
+        else
+            pexpr(pg, mi, base, b[0..0])
+        end
+        put(1, " ")
+        pexpr(pg, mi, kid2(cx, n), "uword")
+        put(1, "]")
+        ret
+    end
+    if k == N_FIELD
+        put(1, "field ")
+        fbase := kid1(cx, n)
+        if is_place(pg, mi, fbase)
+            pplace(pg, mi, fbase)
+        else
+            put(1, "[")
+            ft := ety(pg, mi, fbase, b[0..0])
+            if starts_with(ft, "rw ")
+                put(1, "rw ")
+            end
+            put(1, "deref ")
+            pexpr(pg, mi, fbase, b[0..0])
+            put(1, "]")
+        end
+        put(1, " ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, "]")
+        ret
+    end
+    put(1, "?]")
+end
+
+-- Values -----------------------------------------------------------------------------
+
+proc conv_name(pg: ref Prog, src: view u8, dst: view u8) -> view u8
+    -- The conversion `T(x)` performs (spec §2, "Explicit conversions").
+    if int_bits(dst) > 0
+        if int_bits(src) > 0
+            ret "widen"
+        end
+        if addr_kind(src) == 1
+            ret "addrtoint"
+        end
+        if addr_kind(src) == 2
+            ret "phystoint"
+        end
+        ret "widen"
+    end
+    if addr_kind(dst) == 1
+        ret "inttoaddr"
+    end
+    if addr_kind(dst) == 2
+        ret "inttophys"
+    end
+    ret "reinterpret"
+end
+
+proc untyped_int_expr(pg: ref Prog, mi: u64, n: u64) -> word
+    -- An expression built only from integer literals: it has no type of its
+    -- own and takes one from its context, or it is E0201.
+    cx := mod_ctx(pg, mi)
+    if n == 0
+        ret 0
+    end
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_INT
+        ret 1
+    end
+    if k == N_CHAR
+        ret 1
+    end
+    if k == N_UNOP
+        ret untyped_int_expr(pg, mi, kid1(cx, n))
+    end
+    if k != N_BINOP
+        ret 0
+    end
+    if untyped_int_expr(pg, mi, kid1(cx, n)) == 0
+        ret 0
+    end
+    ret untyped_int_expr(pg, mi, kid2(cx, n))
+end
+
+proc conv_operand_want(pg: ref Prog, mi: u64, arg: u64, dst: view u8) -> view u8
+    -- What `T(x)` gives `x`: an integer literal settles as `T` (or as `uword`
+    -- on the way to an address); anything else keeps its own type and is
+    -- converted by the node itself.
+    b := pg.sbuf
+    if addr_kind(dst) > 0
+        ret "uword"
+    end
+    if untyped_int_expr(pg, mi, arg) == 1
+        ret dst
+    end
+    ret b[0..0]
+end
+
+proc binop_name(op: view u8) -> view u8
+    if view_eq(op, "+")
+        ret "add"
+    end
+    if view_eq(op, "-")
+        ret "sub"
+    end
+    if view_eq(op, "*")
+        ret "mul"
+    end
+    if view_eq(op, "/")
+        ret "div"
+    end
+    if view_eq(op, "%")
+        ret "rem"
+    end
+    if view_eq(op, "==")
+        ret "eq"
+    end
+    if view_eq(op, "!=")
+        ret "ne"
+    end
+    if view_eq(op, "<")
+        ret "lt"
+    end
+    if view_eq(op, "<=")
+        ret "le"
+    end
+    if view_eq(op, ">")
+        ret "gt"
+    end
+    if view_eq(op, ">=")
+        ret "ge"
+    end
+    if view_eq(op, "&")
+        ret "bitand"
+    end
+    if view_eq(op, "|")
+        ret "bitor"
+    end
+    if view_eq(op, "^")
+        ret "bitxor"
+    end
+    if view_eq(op, "<<")
+        ret "shl"
+    end
+    if view_eq(op, ">>")
+        ret "shr"
+    end
+    if view_eq(op, "and")
+        ret "and"
+    end
+    ret "or"
+end
+
+proc put_mode(pg: ref Prog)
+    if pg.amode == 1
+        put(1, "/wrap")
+    end
+    if pg.amode == 2
+        put(1, "/sat")
+    end
+    if pg.amode == 3
+        put(1, "/checked")
+    end
+end
+
+proc put_type_suffix(pg: ref Prog, mi: u64, n: u64, ty: view u8)
+    put(1, ":")
+    if ty.len == 0
+        put(1, "?")
+    else
+        put(1, ty)
+    end
+    put_region(pg, reg_of(pg, mi, n))
+end
+
+proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
+    if ck == CK_SYSCALL
+        put(1, "OsSyscall")
+        ret
+    end
+    if ck == CK_HALT
+        put(1, "CpuHalt")
+        ret
+    end
+    if ck == CK_PAUSE
+        put(1, "CpuPause")
+        ret
+    end
+    if ck == CK_COPY
+        put(1, "MemCopy")
+        ret
+    end
+    if ck == CK_SET
+        put(1, "MemSet")
+        ret
+    end
+    if ck == CK_ZERO
+        put(1, "MemZero")
+        ret
+    end
+    if ck == CK_SECZERO
+        put(1, "MemSecureZero")
+        ret
+    end
+    if ck == CK_GET
+        put(1, "MemGet(")
+    else
+        put(1, "MemPut(")
+    end
+    e := mem_endian(name)
+    if e == 0
+        put(1, "None")
+    end
+    if e == 1
+        put(1, "Some(true)")
+    end
+    if e == 2
+        put(1, "Some(false)")
+    end
+    put(1, ", ")
+    bnum(pg, mem_width(name))
+    put(1, ")")
+end
+
+proc acc_value_type(name: view u8) -> view u8
+    w := mem_width(name)
+    if w == 16
+        ret "u16"
+    end
+    if w == 32
+        ret "u32"
+    end
+    ret "u64"
+end
+
+proc param_type(pg: ref Prog, pi: u64, k: u64) -> view u8
+    -- The declared type of parameter `k` of procedure `pi`.
+    v := proc_at(pg, pi)
+    cx := mod_ctx(pg, v.mod)
+    b := pg.sbuf
+    params := kid1(cx, v.node)
+    p : u64 <- kid1(cx, params)
+    i : u64 <- 0
+    while p != 0
+        if i == k
+            st := sbeg(pg)
+            sput_type_node(pg, v.mod, kid1(cx, p))
+            ret sdone(pg, st)
+        end
+        i <- i + 1
+        p <- sibling(cx, p)
+    end
+    ret b[0..0]
+end
+
+proc psyscall_arg(pg: ref Prog, mi: u64, a: u64)
+    -- Syscall arguments are words: an unsigned integer is reinterpreted.
+    b := pg.sbuf
+    t := ety(pg, mi, a, "word")
+    if int_bits(t) > 0
+        if int_signed(t) == 0
+            put(1, "(bits ")
+            pexpr(pg, mi, a, "uword")
+            put(1, "):word")
+            ret
+        end
+    end
+    if addr_kind(t) > 0
+        pexpr(pg, mi, a, b[0..0])
+        ret
+    end
+    pexpr(pg, mi, a, "word")
+end
+
+proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ck := call_kind(pg, mi, n)
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    if ck == CK_BYTES
+        put(1, "(bytes ")
+        pexpr(pg, mi, kid1(cx, ce), b[0..0])
+        put(1, " ")
+        pexpr(pg, mi, kid2(cx, n), "uword")
+        put(1, ")")
+        ret
+    end
+    if ck == CK_TRYBYTES
+        put(1, "(try-bytes ")
+        pexpr(pg, mi, kid1(cx, ce), b[0..0])
+        put(1, " ")
+        pexpr(pg, mi, kid2(cx, n), "uword")
+        put(1, ")")
+        ret
+    end
+    if ck == CK_MAKE
+        put(1, "(make ")
+        pexpr(pg, mi, kid1(cx, ce), b[0..0])
+        put(1, " ")
+        mk := node_at(cx, kid2(cx, n))
+        put(1, tok_text(cx, mk.t0))
+        put(1, ")")
+        ret
+    end
+    if ck == CK_AT
+        put(1, "(at ")
+        an := node_at(cx, kid1(cx, ce))
+        put(1, tok_text(cx, an.t0))
+        put(1, " ")
+        pexpr(pg, mi, kid2(cx, n), b[0..0])
+        put(1, ")")
+        ret
+    end
+    if ck == CK_PROC
+        pi := proc_find(pg, tok_text(cx, cn.t0))
+        put(1, "(call ")
+        if pi < 0
+            put(1, tok_text(cx, cn.t0))
+        else
+            pv := proc_at(pg, pi)
+            put_module_name(pg, pv.mod)
+            put(1, ".")
+            put(1, tok_text(cx, cn.t0))
+        end
+        a : u64 <- kid2(cx, n)
+        k : u64 <- 0
+        while a != 0
+            put(1, " ")
+            if pi < 0
+                pexpr(pg, mi, a, b[0..0])
+            else
+                pexpr(pg, mi, a, param_type(pg, pi, k))
+            end
+            k <- k + 1
+            a <- sibling(cx, a)
+        end
+        put(1, ")")
+        ret
+    end
+    put(1, "(intrinsic ")
+    mname := tok_text(cx, cn.t0)
+    pintrinsic_name(pg, ck, mname)
+    if ck == CK_SYSCALL
+        s : u64 <- kid2(cx, n)
+        while s != 0
+            put(1, " ")
+            psyscall_arg(pg, mi, s)
+            s <- sibling(cx, s)
+        end
+        put(1, ")")
+        ret
+    end
+    a2 : u64 <- kid2(cx, n)
+    j : u64 <- 0
+    while a2 != 0
+        put(1, " ")
+        if ck == CK_PUT
+            if j == 0
+                pexpr(pg, mi, a2, "rw view u8")
+            else
+                pexpr(pg, mi, a2, acc_value_type(mname))
+            end
+        else
+            if ck == CK_GET
+                pexpr(pg, mi, a2, "view u8")
+            else
+                if j == 0
+                    pexpr(pg, mi, a2, "rw view u8")
+                else
+                    pexpr(pg, mi, a2, b[0..0])
+                end
+            end
+        end
+        j <- j + 1
+        a2 <- sibling(cx, a2)
+    end
+    put(1, ")")
+end
+
+proc cur_result(pg: ref Prog) -> view u8
+    b := pg.sbuf
+    ret b[pg.rt0..pg.rt1]
+end
+
+proc variant_fields_of(pg: ref Prog, vname: view u8) -> word
+    -- The choice item that declares this variant, or -1.
+    i : u64 <- 0
+    while i < pg.nitem
+        it := item_at(pg, i)
+        if it.kind == 1
+            cx := mod_ctx(pg, it.mod)
+            vn : u64 <- kid1(cx, it.node)
+            while vn != 0
+                v := node_at(cx, vn)
+                if view_eq(tok_text(cx, v.t0), vname)
+                    ret i
+                end
+                vn <- sibling(cx, vn)
+            end
+        end
+        i <- i + 1
+    end
+    ret -1
+end
+
+proc lit_field_expr(pg: ref Prog, mi: u64, n: u64, fname: view u8) -> u64
+    -- The initialiser a layout literal gives this field, 0 when it gives none.
+    cx := mod_ctx(pg, mi)
+    f : u64 <- kid2(cx, n)
+    while f != 0
+        fn := node_at(cx, f)
+        if view_eq(tok_text(cx, fn.t0), fname)
+            ret kid1(cx, f)
+        end
+        f <- sibling(cx, f)
+    end
+    ret 0
+end
+
+proc plit_fields(pg: ref Prog, mi: u64, n: u64, idx: u64, vname: view u8)
+    -- Fields in declaration order, each with the field's type as its context.
+    it := item_at(pg, idx)
+    cx := mod_ctx(pg, it.mod)
+    f : u64 <- 0
+    while f < it.nfld
+        fr := fld_at(pg, it.first + f)
+        fn := node_at(cx, fr.node)
+        take : u64 <- 1
+        if it.kind == 1
+            vn := node_at(cx, fr.variant)
+            if view_eq(tok_text(cx, vn.t0), vname) == 0
+                take <- 0
+            end
+        end
+        if take == 1
+            e := lit_field_expr(pg, mi, n, tok_text(cx, fn.t0))
+            put(1, " ")
+            st := sbeg(pg)
+            sput_type_node(pg, it.mod, kid1(cx, fr.node))
+            pexpr(pg, mi, e, sdone(pg, st))
+        end
+        f <- f + 1
+    end
+end
+
+proc plit(pg: ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    hn := node_at(cx, kid1(cx, n))
+    name := tok_text(cx, hn.t0)
+    idx := item_find(pg, name)
+    if idx >= 0
+        put(1, "(layout ")
+        put(1, name)
+        plit_fields(pg, mi, n, idx, b[0..0])
+        put(1, ")")
+        ret
+    end
+    vi := variant_fields_of(pg, name)
+    put(1, "(variant ")
+    put(1, name)
+    if vi >= 0
+        plit_fields(pg, mi, n, vi, name)
+    end
+    put(1, ")")
+end
+
+proc pfallback(pg: ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    put(1, "(else ")
+    pexpr(pg, mi, kid1(cx, n), b[0..0])
+    put(1, " ")
+    h := kid2(cx, n)
+    hn := node_at(cx, h)
+    if hn.kind == N_FAIL
+        put(1, "(fail)")
+        put(1, ")")
+        ret
+    end
+    if hn.kind == N_RET
+        put(1, "(ret")
+        v := kid1(cx, h)
+        if v != 0
+            put(1, " ")
+            pexpr(pg, mi, v, cur_result(pg))
+        end
+        put(1, ")")
+        put(1, ")")
+        ret
+    end
+    put(1, "(default ")
+    pexpr(pg, mi, kid1(cx, h), ok_of(ety(pg, mi, kid1(cx, n), b[0..0])))
+    put(1, ")")
+    put(1, ")")
+end
+
+proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
+    -- The expression form, without its `:type` suffix.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_INT
+        put(1, "(int ")
+        if nd.sub == 1
+            put(1, "-")
+        end
+        bnum(pg, nd.val)
+        put(1, ")")
+        ret
+    end
+    if k == N_CHAR
+        t := ctok(cx, nd.t0)
+        put(1, "(int ")
+        bnum(pg, t.val)
+        put(1, ")")
+        ret
+    end
+    if k == N_STR
+        put(1, "(str ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, ")")
+        ret
+    end
+    if k == N_TRUE
+        put(1, "(bool true)")
+        ret
+    end
+    if k == N_FALSE
+        put(1, "(bool false)")
+        ret
+    end
+    if k == N_NONE
+        put(1, "(none)")
+        ret
+    end
+    if k == N_NAME
+        nk := name_kind(pg, mi, n)
+        if nk == 1
+            put(1, "(local ")
+            put(1, tok_text(cx, nd.t0))
+            put(1, ")")
+            ret
+        end
+        if nk == 2
+            put(1, "(int ")
+            bnum(pg, const_value(pg, mi, n))
+            put(1, ")")
+            ret
+        end
+        vt := choice_of_variant(pg, tok_text(cx, nd.t0))
+        if vt.len > 0
+            put(1, "(variant ")
+            put(1, tok_text(cx, nd.t0))
+            put(1, ")")
+            ret
+        end
+        put(1, "(local ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, ")")
+        ret
+    end
+    if k == N_FIELD
+        m := tok_text(cx, nd.t0)
+        base := kid1(cx, n)
+        bn := node_at(cx, base)
+        if bn.kind == N_NAME
+            if name_kind(pg, mi, base) == 0
+                put(1, "(int ")
+                ci := val_find(pg, m)
+                if ci >= 0
+                    bnum(pg, const_of(pg, ci))
+                else
+                    bnum(pg, const_value(pg, mi, n))
+                end
+                put(1, ")")
+                ret
+            end
+        end
+        if view_eq(m, "len")
+            put(1, "(len ")
+            pexpr(pg, mi, base, b[0..0])
+            put(1, ")")
+            ret
+        end
+        if view_eq(m, "addr")
+            put(1, "(addr ")
+            pexpr(pg, mi, base, b[0..0])
+            put(1, ")")
+            ret
+        end
+        put(1, "(?field)")
+        ret
+    end
+    if k == N_INDEX
+        ix := kid2(cx, n)
+        ixn := node_at(cx, ix)
+        if ixn.kind == N_RANGE
+            put(1, "(slice ")
+            pexpr(pg, mi, kid1(cx, n), b[0..0])
+            put(1, " ")
+            lo := kid1(cx, ix)
+            if lo == 0
+                put(1, "(int 0):uword")
+            else
+                pexpr(pg, mi, lo, "uword")
+            end
+            put(1, " ")
+            hi := kid2(cx, ix)
+            if hi == 0
+                put(1, "end")
+            else
+                pexpr(pg, mi, hi, "uword")
+            end
+            put(1, ")")
+            ret
+        end
+        put(1, "(?index)")
+        ret
+    end
+    if k == N_UNOP
+        s := nd.sub
+        arg := kid1(cx, n)
+        if s == U_WRAP
+            save := pg.amode
+            pg.amode <- 1
+            pform(pg, mi, arg, ty)
+            pg.amode <- save
+            ret
+        end
+        if s == U_SAT
+            save2 := pg.amode
+            pg.amode <- 2
+            pform(pg, mi, arg, ty)
+            pg.amode <- save2
+            ret
+        end
+        if s == U_CHECKED
+            save3 := pg.amode
+            pg.amode <- 3
+            pform(pg, mi, arg, ty)
+            pg.amode <- save3
+            ret
+        end
+        if s == U_ADDROF
+            if is_place(pg, mi, arg)
+                put(1, "(addr-of ")
+                pplace(pg, mi, arg)
+                put(1, ")")
+                ret
+            end
+            put(1, "(addr ")
+            pexpr(pg, mi, arg, b[0..0])
+            put(1, ")")
+            ret
+        end
+        if s == U_REFOF
+            put(1, "(ref-of ")
+            pplace(pg, mi, arg)
+            put(1, ")")
+            ret
+        end
+        if s == U_NEG
+            put(1, "(neg ")
+        end
+        if s == U_BITNOT
+            put(1, "(bitnot ")
+        end
+        if s == U_NOT
+            put(1, "(not ")
+        end
+        pexpr(pg, mi, arg, ty)
+        put(1, ")")
+        ret
+    end
+    if k == N_BINOP
+        op := tok_text(cx, nd.t0)
+        put(1, "(")
+        put(1, binop_name(op))
+        if binop_is_compare(op) == 0
+            put_mode(pg)
+        end
+        put(1, " ")
+        ot : view u8 <- ty
+        if binop_is_compare(op)
+            ot <- binop_operand_type(pg, mi, n)
+        end
+        pexpr(pg, mi, kid1(cx, n), ot)
+        put(1, " ")
+        pexpr(pg, mi, kid2(cx, n), ot)
+        put(1, ")")
+        ret
+    end
+    if k == N_CONVERT
+        mnode := kid1(cx, n)
+        mn := node_at(cx, mnode)
+        arg2 : u64 <- mnode
+        if mn.kind == N_MODE
+            arg2 <- sibling(cx, mnode)
+        end
+        src := ety(pg, mi, arg2, b[0..0])
+        if mn.kind == N_MODE
+            put(1, "(")
+            put(1, tok_text(cx, mn.t0))
+        else
+            put(1, "(")
+            put(1, conv_name(pg, src, ty))
+        end
+        put(1, " ")
+        pexpr(pg, mi, arg2, conv_operand_want(pg, mi, arg2, ty))
+        put(1, ")")
+        ret
+    end
+    if k == N_FALLBACK
+        pfallback(pg, mi, n)
+        ret
+    end
+    if k == N_LIT
+        plit(pg, mi, n)
+        ret
+    end
+    if k == N_ARRAY
+        put(1, "(array")
+        e : u64 <- kid1(cx, n)
+        while e != 0
+            put(1, " ")
+            pexpr(pg, mi, e, arr_elem(ty))
+            e <- sibling(cx, e)
+        end
+        put(1, ")")
+        ret
+    end
+    if k == N_CALL
+        pcall(pg, mi, n, ty)
+        ret
+    end
+    put(1, "(error)")
+end
+
+proc binop_operand_type(pg: ref Prog, mi: u64, n: u64) -> view u8
+    -- Comparisons compare two values of one type; the result is `bool`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    lt := ety(pg, mi, kid1(cx, n), b[0..0])
+    rt := ety(pg, mi, kid2(cx, n), b[0..0])
+    ret unify(pg, lt, rt)
+end
+
+proc place_type(pg: ref Prog, mi: u64, n: u64) -> view u8
+    -- The type of the memory a place denotes: a static array stays `[N]T`,
+    -- which is what makes reading it a `view-of` and not a `load`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    if nd.kind == N_NAME
+        if name_kind(pg, mi, n) == 3
+            vi := val_find(pg, tok_text(cx, nd.t0))
+            if vi >= 0
+                ret val_type(pg, vi)
+            end
+        end
+    end
+    ret ety(pg, mi, n, b[0..0])
+end
+
+proc pvalue(pg: ref Prog, mi: u64, n: u64, ty: view u8)
+    b := pg.sbuf
+    if is_place(pg, mi, n) == 1
+        pt := place_type(pg, mi, n)
+        if starts_with(pt, "[")
+            put(1, "(view-of ")
+        else
+            put(1, "(load ")
+        end
+        pplace(pg, mi, n)
+        put(1, ")")
+        put_type_suffix(pg, mi, n, ty)
+        ret
+    end
+    pform(pg, mi, n, ty)
+    put_type_suffix(pg, mi, n, ty)
+end
+
+proc pexpr(pg: ref Prog, mi: u64, n: u64, want: view u8)
+    -- Prints `n` in a context that wants `want`, inserting the conversion the
+    -- context implies.
+    b := pg.sbuf
+    if n == 0
+        put(1, "()")
+        ret
+    end
+    have := ety(pg, mi, n, want)
+    ck := coerce_kind(pg, have, want)
+    if ck == 2
+        put(1, "(widen ")
+        pvalue(pg, mi, n, have)
+        put(1, "):")
+        put(1, want)
+        ret
+    end
+    if ck == 3
+        put(1, "(inttoaddr ")
+        pvalue(pg, mi, n, "uword")
+        put(1, "):")
+        put(1, want)
+        ret
+    end
+    if ck == 4
+        put(1, "(inttophys ")
+        pvalue(pg, mi, n, "uword")
+        put(1, "):")
+        put(1, want)
+        ret
+    end
+    if ck == 1
+        pvalue(pg, mi, n, want)
+        ret
+    end
+    if have.len == 0
+        pvalue(pg, mi, n, want)
+        ret
+    end
+    pvalue(pg, mi, n, have)
+end
+
+-- Machine blocks ----------------------------------------------------------------
+
+proc reg_type(name: view u8) -> view u8
+    -- The width of a named x86-64 register, as the type its input takes.
+    if name.len == 0
+        ret "u64"
+    end
+    if name.len >= 3
+        if name[0] == 114
+            last := name[name.len - 1]
+            if last == 100
+                ret "u32"
+            end
+            if last == 119
+                ret "u16"
+            end
+            if last == 98
+                ret "u8"
+            end
+            ret "u64"
+        end
+        if name[0] == 101
+            ret "u32"
+        end
+        ret "u64"
+    end
+    if name.len == 2
+        l2 := name[1]
+        if l2 == 108
+            ret "u8"
+        end
+        if l2 == 104
+            ret "u8"
+        end
+        ret "u16"
+    end
+    ret "u64"
+end
+
+proc psym(pg: ref Prog, mi: u64, a: u64, b: u64)
+    -- A machine-block name: a procedure, a static, or a register/mnemonic.
+    cx := mod_ctx(pg, mi)
+    text := mod_text(cx, a, b)
+    last := last_component(cx, a, b)
+    pi := proc_find(pg, last)
+    if pi >= 0
+        v := proc_at(pg, pi)
+        put(1, "proc:")
+        put_module_name(pg, v.mod)
+        put(1, ".")
+        put(1, last)
+        ret
+    end
+    vi := val_find(pg, last)
+    if vi >= 0
+        vv := val_at(pg, vi)
+        if vv.kind == 1
+            put(1, "static:")
+            put(1, last)
+            ret
+        end
+    end
+    put(1, text)
+end
+
+proc pmterm(pg: ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    if nd.sub == 1
+        put(1, "-")
+    else
+        put(1, "+")
+    end
+    k := kid1(cx, n)
+    kn := node_at(cx, k)
+    if kn.kind == N_INT
+        bnum(pg, kn.val)
+    else
+        psym(pg, mi, kn.t0, kn.t1)
+    end
+    if nd.val > 0
+        put(1, "*")
+        bnum(pg, nd.val)
+    end
+end
+
+proc pmoperand(pg: ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_MEM
+        put(1, "(mem")
+        if nd.val == 1
+            put(1, " ")
+            put(1, tok_text(cx, nd.t0))
+        end
+        t : u64 <- kid1(cx, n)
+        while t != 0
+            put(1, " ")
+            pmterm(pg, mi, t)
+            t <- sibling(cx, t)
+        end
+        put(1, ")")
+        ret
+    end
+    if k == N_INT
+        if nd.sub == 1
+            put(1, "-")
+        end
+        bnum(pg, nd.val)
+        ret
+    end
+    psym(pg, mi, nd.t0, nd.t1)
+end
+
+proc pmline(pg: ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_LABEL
+        put(1, "(label ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, ")")
+        ret
+    end
+    if k == N_CLOBBER
+        put(1, "(clobber")
+        c : u64 <- kid1(cx, n)
+        while c != 0
+            put(1, " ")
+            pmoperand(pg, mi, c)
+            c <- sibling(cx, c)
+        end
+        put(1, ")")
+        ret
+    end
+    if k == N_MIN
+        put(1, "(in ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, " ")
+        pexpr(pg, mi, kid1(cx, n), reg_type(tok_text(cx, nd.t0)))
+        put(1, ")")
+        ret
+    end
+    if k == N_MOUT
+        put(1, "(out ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, " ")
+        pplace(pg, mi, kid1(cx, n))
+        put(1, ")")
+        ret
+    end
+    put(1, "(instr ")
+    put(1, tok_text(cx, nd.t0))
+    o : u64 <- kid1(cx, n)
+    while o != 0
+        put(1, " ")
+        pmoperand(pg, mi, o)
+        o <- sibling(cx, o)
+    end
+    put(1, ")")
+end
+
+-- Statements -------------------------------------------------------------------
+
+proc pblock(pg: ref Prog, mi: u64, first: u64, ind: u64, head: view u8)
+    -- `(head stmt stmt)`, one statement per line, closing on the last one.
+    cx := mod_ctx(pg, mi)
+    bline(pg, ind)
+    put(1, "(")
+    put(1, head)
+    if first == 0
+        put(1, ")")
+        ret
+    end
+    k : u64 <- first
+    while k != 0
+        pstmt(pg, mi, k, ind + 2)
+        k <- sibling(cx, k)
+    end
+    put(1, ")")
+end
+
+proc pbody_node(pg: ref Prog, mi: u64, body: u64, ind: u64)
+    cx := mod_ctx(pg, mi)
+    pblock(pg, mi, kid1(cx, body), ind, "body")
+end
+
+proc ppattern(pg: ref Prog, mi: u64, pat: u64)
+    cx := mod_ctx(pg, mi)
+    pn := node_at(cx, pat)
+    k := pn.kind
+    if k == N_PATOK
+        put(1, "ok")
+        if pn.t1 > pn.t0
+            put(1, " ")
+            put(1, tok_text(cx, pn.t0))
+        end
+        ret
+    end
+    if k == N_PATFAIL
+        put(1, "fail")
+        sub := kid1(cx, pat)
+        if sub != 0
+            put(1, " ")
+            ppattern(pg, mi, sub)
+        end
+        ret
+    end
+    if k == N_PAT
+        vname := tok_text(cx, pn.t0)
+        put(1, vname)
+        f : u64 <- kid1(cx, pat)
+        if f == 0
+            ret
+        end
+        vi := variant_fields_of(pg, vname)
+        put(1, " {")
+        sep : u64 <- 0
+        while f != 0
+            if sep == 1
+                put(1, " ")
+            end
+            sep <- 1
+            fn := node_at(cx, f)
+            bnum(pg, variant_field_index(pg, vi, vname, tok_text(cx, fn.t0)))
+            put(1, "=")
+            put(1, tok_text(cx, fn.t0))
+            f <- sibling(cx, f)
+        end
+        put(1, "}")
+        ret
+    end
+    pexpr(pg, mi, pat, "")
+end
+
+proc variant_field_index(pg: ref Prog, idx: u64, vname: view u8, fname: view u8) -> u64
+    -- The position of a field inside its variant, which is how a pattern
+    -- binding is recorded.
+    if idx < 0
+        ret 0
+    end
+    it := item_at(pg, idx)
+    cx := mod_ctx(pg, it.mod)
+    f : u64 <- 0
+    k : u64 <- 0
+    while f < it.nfld
+        fr := fld_at(pg, it.first + f)
+        vn := node_at(cx, fr.variant)
+        if view_eq(tok_text(cx, vn.t0), vname)
+            fn := node_at(cx, fr.node)
+            if view_eq(tok_text(cx, fn.t0), fname)
+                ret k
+            end
+            k <- k + 1
+        end
+        f <- f + 1
+    end
+    ret 0
+end
+
+proc pzone_stmt(pg: rw ref Prog, mi: u64, n: u64, ind: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    put(1, "(zone ")
+    put(1, tok_text(cx, nd.t0))
+    put(1, " ")
+    pexpr(pg, mi, kid1(cx, n), "uword")
+    rest : u64 <- kid2(cx, n)
+    if nd.sub == 1
+        put(1, " at=")
+        pexpr(pg, mi, rest, "addr u8")
+        rest <- sibling(cx, rest)
+    end
+    if nd.sub == 2
+        st := ety(pg, mi, rest, b[0..0])
+        if view_eq(st, "zone")
+            put(1, " from-zone=")
+            pexpr(pg, mi, rest, b[0..0])
+        else
+            put(1, " from-buffer=")
+            pexpr(pg, mi, rest, b[0..0])
+        end
+        rest <- sibling(cx, rest)
+    end
+    if nd.sub == 0
+        if pg.pzone == 0
+            put(1, " os")
+        else
+            put(1, " parent=")
+            put(1, zone_name_of(pg, pg.pzone - 1))
+        end
+    end
+    save := pg.pzone
+    li := loc_find(pg, tok_text(cx, nd.t0))
+    if li >= 0
+        zl := loc_at(pg, li)
+        pg.pzone <- zl.zord + 1
+    end
+    pbody_node(pg, mi, rest, ind + 2)
+    pg.pzone <- save
+    put(1, ")")
+end
+
+proc pcase_stmt(pg: ref Prog, mi: u64, n: u64, ind: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    put(1, "(case ")
+    pexpr(pg, mi, kid1(cx, n), b[0..0])
+    arm : u64 <- kid2(cx, n)
+    while arm != 0
+        an := node_at(cx, arm)
+        if an.kind == N_ELSE
+            pblock(pg, mi, kid1(cx, arm), ind + 2, "else")
+        else
+            bline(pg, ind + 2)
+            put(1, "(when ")
+            ppattern(pg, mi, kid1(cx, arm))
+            s : u64 <- kid2(cx, arm)
+            while s != 0
+                pstmt(pg, mi, s, ind + 4)
+                s <- sibling(cx, s)
+            end
+            put(1, ")")
+        end
+        arm <- sibling(cx, arm)
+    end
+    put(1, ")")
+end
+
+proc pif_stmt(pg: ref Prog, mi: u64, n: u64, ind: u64)
+    cx := mod_ctx(pg, mi)
+    put(1, "(if ")
+    pexpr(pg, mi, kid1(cx, n), "bool")
+    br : u64 <- kid2(cx, n)
+    while br != 0
+        bn := node_at(cx, br)
+        if bn.kind == N_THEN
+            pblock(pg, mi, kid1(cx, br), ind + 2, "then")
+        end
+        if bn.kind == N_ELSE
+            pblock(pg, mi, kid1(cx, br), ind + 2, "else")
+        end
+        if bn.kind == N_ELIF
+            bline(pg, ind + 2)
+            put(1, "(elif ")
+            pexpr(pg, mi, kid1(cx, br), "bool")
+            s2 : u64 <- kid2(cx, br)
+            while s2 != 0
+                pstmt(pg, mi, s2, ind + 4)
+                s2 <- sibling(cx, s2)
+            end
+            put(1, ")")
+        end
+        br <- sibling(cx, br)
+    end
+    put(1, ")")
+end
+
+proc pstmt(pg: rw ref Prog, mi: u64, n: u64, ind: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    pg.curstmt <- n
+    nd := node_at(cx, n)
+    k := nd.kind
+    -- The type scratch holds one statement at a time.
+    pg.soff <- pg.sbase
+    pg.amode <- 0
+    bline(pg, ind)
+    if k == N_BIND
+        put(1, "(bind ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, " ")
+        v : u64 <- kid1(cx, n)
+        if nd.val >= 2
+            v <- sibling(cx, v)
+        end
+        pexpr(pg, mi, v, loc_type(pg, tok_text(cx, nd.t0)))
+        put(1, ")")
+        ret
+    end
+    if k == N_PLACE
+        put(1, "(place ")
+        put(1, tok_text(cx, nd.t0))
+        init := kid2(cx, n)
+        if init != 0
+            put(1, " ")
+            pexpr(pg, mi, init, loc_type(pg, tok_text(cx, nd.t0)))
+        end
+        put(1, ")")
+        ret
+    end
+    if k == N_STORE
+        put(1, "(store ")
+        tgt := kid1(cx, n)
+        pplace(pg, mi, tgt)
+        put(1, " ")
+        pexpr(pg, mi, kid2(cx, n), ety(pg, mi, tgt, b[0..0]))
+        put(1, ")")
+        ret
+    end
+    if k == N_MOVE
+        put(1, "(move ")
+        tgt2 := kid1(cx, n)
+        pplace(pg, mi, tgt2)
+        put(1, " ")
+        pexpr(pg, mi, kid2(cx, n), ety(pg, mi, tgt2, b[0..0]))
+        put(1, ")")
+        ret
+    end
+    if k == N_EXPR
+        put(1, "(expr ")
+        pexpr(pg, mi, kid1(cx, n), b[0..0])
+        put(1, ")")
+        ret
+    end
+    if k == N_RET
+        put(1, "(ret")
+        rv := kid1(cx, n)
+        if rv != 0
+            put(1, " ")
+            pexpr(pg, mi, rv, ok_of(cur_result(pg)))
+        end
+        put(1, ")")
+        ret
+    end
+    if k == N_FAIL
+        put(1, "(fail")
+        fv := kid1(cx, n)
+        if fv != 0
+            put(1, " ")
+            pexpr(pg, mi, fv, err_of(cur_result(pg)))
+        end
+        put(1, ")")
+        ret
+    end
+    if k == N_BREAK
+        put(1, "(break)")
+        ret
+    end
+    if k == N_CONTINUE
+        put(1, "(continue)")
+        ret
+    end
+    if k == N_IF
+        pif_stmt(pg, mi, n, ind)
+        ret
+    end
+    if k == N_IFTHEN
+        put(1, "(if ")
+        pexpr(pg, mi, kid1(cx, n), "bool")
+        pblock(pg, mi, kid2(cx, n), ind + 2, "then")
+        put(1, ")")
+        ret
+    end
+    if k == N_WHILE
+        put(1, "(while ")
+        pexpr(pg, mi, kid1(cx, n), "bool")
+        pbody_node(pg, mi, kid2(cx, n), ind + 2)
+        put(1, ")")
+        ret
+    end
+    if k == N_EACH
+        put(1, "(each ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, " ")
+        it := kid1(cx, n)
+        itn := node_at(cx, it)
+        if itn.kind == N_RANGE
+            put(1, "(range ")
+            pexpr(pg, mi, kid1(cx, it), "uword")
+            put(1, " ")
+            pexpr(pg, mi, kid2(cx, it), "uword")
+            put(1, ")")
+        else
+            pexpr(pg, mi, it, b[0..0])
+        end
+        pbody_node(pg, mi, kid2(cx, n), ind + 2)
+        put(1, ")")
+        ret
+    end
+    if k == N_LOOP
+        put(1, "(loop")
+        pbody_node(pg, mi, kid1(cx, n), ind + 2)
+        put(1, ")")
+        ret
+    end
+    if k == N_CASE
+        pcase_stmt(pg, mi, n, ind)
+        ret
+    end
+    if k == N_ZONE
+        pzone_stmt(pg, mi, n, ind)
+        ret
+    end
+    if k == N_MACHINE
+        put(1, "(machine ")
+        put(1, tok_text(cx, nd.t0))
+        m : u64 <- kid1(cx, n)
+        while m != 0
+            bline(pg, ind + 2)
+            pmline(pg, mi, m)
+            m <- sibling(cx, m)
+        end
+        put(1, ")")
+        ret
+    end
+    if k == N_BODY
+        pbody_node(pg, mi, n, ind)
+        ret
+    end
+    put(1, "(?stmt)")
+end
+
+proc print_body(pg: rw ref Prog, mi: u64, node: u64, ind: u64)
+    -- The `(body ...)` of one procedure; the local table, the result type and
+    -- the type buffer were filled by `collect_locals`.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, node)
+    pg.sbase <- pg.soff
+    params := kid1(cx, node)
+    k : u64 <- sibling(cx, params)
+    if nd.val == 1
+        k <- sibling(cx, k)
+    end
+    pg.pzone <- 0
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_BODY
+            pbody_node(pg, mi, k, ind)
+            ret
+        end
+        k <- sibling(cx, k)
+    end
+    bline(pg, ind)
+    put(1, "(body)")
+end
+
+-- Type checking -------------------------------------------------------------------
+-- The printer above derives a type for every expression; this pass walks the
+-- same contexts and reports what the derivation found wrong. It is a separate
+-- walk because `--check` must report without printing anything.
+
+-- Implicit narrowing of a computed value (`p <- e` where `e` is wider than
+-- `p`) is a V0 error, but oli-core has no conversions, so the compiler's own
+-- source still relies on it; reporting it is gated until `oli1` grows
+-- `T.wrap(x)` (design 0022, the measurement below).
+NARROW_STRICT := 0
+
+proc lit_fits(t: view u8, v: u64, neg: u64) -> word
+    -- Does this literal fit the type its context gives it?
+    w := int_bits(t)
+    if w == 0
+        ret 1
+    end
+    if w == 64
+        ret 1
+    end
+    if int_signed(t) == 1
+        lim : u64 <- 128
+        if w == 16
+            lim <- 32768
+        end
+        if w == 32
+            lim <- 2147483648
+        end
+        if neg == 1
+            if v <= lim
+                ret 1
+            end
+            ret 0
+        end
+        if v < lim
+            ret 1
+        end
+        ret 0
+    end
+    if neg == 1
+        if v == 0
+            ret 1
+        end
+        ret 0
+    end
+    ulim : u64 <- 256
+    if w == 16
+        ulim <- 65536
+    end
+    if w == 32
+        ulim <- 4294967296
+    end
+    if v < ulim
+        ret 1
+    end
+    ret 0
+end
+
+proc terr(pg: rw ref Prog, mi: u64, code: u64, n: u64)
+    sdiag(pg, mi, code, first_tok(pg, mi, n))
+end
+
+proc tconvert(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
+    -- `T(x)`: lossless only, unless a mode says what should happen.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    mnode := kid1(cx, n)
+    mn := node_at(cx, mnode)
+    arg : u64 <- mnode
+    if mn.kind == N_MODE
+        arg <- sibling(cx, mnode)
+    end
+    dst := ety(pg, mi, n, b[0..0])
+    src := ety(pg, mi, arg, b[0..0])
+    texpr(pg, mi, arg, conv_operand_want(pg, mi, arg, dst))
+    an := node_at(cx, arg)
+    if mn.kind == 0
+        ret
+    end
+    if mn.kind != N_MODE
+        if an.kind != N_INT
+            if int_bits(dst) > 0
+                if int_bits(src) > 0
+                    if tconv_lossless(src, dst) == 0
+                        terr(pg, mi, 202, n)
+                        ret
+                    end
+                end
+            end
+        end
+    end
+    -- The converted value still has to fit the context around it.
+    if coerce_kind(pg, dst, want) == 5
+        terr(pg, mi, 202, n)
+    end
+end
+
+proc tconv_lossless(src: view u8, dst: view u8) -> word
+    -- `T(x)` also accepts unsigned to strictly wider signed.
+    if same_repr(src, dst)
+        ret 1
+    end
+    if widens_to(src, dst)
+        ret 1
+    end
+    if int_signed(src) == 0
+        if int_signed(dst) == 1
+            if int_bits(dst) > int_bits(src)
+                ret 1
+            end
+        end
+    end
+    ret 0
+end
+
+proc tbinop(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    op := tok_text(cx, nd.t0)
+    lhs := kid1(cx, n)
+    rhs := kid2(cx, n)
+    lt := ety(pg, mi, lhs, b[0..0])
+    rt := ety(pg, mi, rhs, b[0..0])
+    la := addr_kind(lt)
+    ra := addr_kind(rt)
+    if la > 0
+        if ra > 0
+            if la != ra
+                -- `physaddr` and `addr T` are different address spaces.
+                terr(pg, mi, 203, n)
+            end
+        end
+    end
+    ot : view u8 <- want
+    if binop_is_compare(op)
+        ot <- unify(pg, lt, rt)
+    end
+    if view_eq(op, "<<")
+        texpr(pg, mi, lhs, ot)
+        texpr(pg, mi, rhs, b[0..0])
+        ret
+    end
+    if view_eq(op, ">>")
+        texpr(pg, mi, lhs, ot)
+        texpr(pg, mi, rhs, b[0..0])
+        ret
+    end
+    if ot.len == 0
+        ot <- unify(pg, lt, rt)
+    end
+    if ot.len == 0
+        if untyped_int_expr(pg, mi, n) == 1
+            -- `x := 1 + 2`: nothing in the program says how wide this is.
+            terr(pg, mi, 201, n)
+        end
+        ret
+    end
+    texpr(pg, mi, lhs, ot)
+    texpr(pg, mi, rhs, ot)
+end
+
+proc tcall(pg: rw ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ck := call_kind(pg, mi, n)
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    if ck == CK_BYTES
+        texpr(pg, mi, kid2(cx, n), "uword")
+        ret
+    end
+    if ck == CK_TRYBYTES
+        texpr(pg, mi, kid2(cx, n), "uword")
+        ret
+    end
+    if ck == CK_MAKE
+        ret
+    end
+    if ck == CK_AT
+        texpr(pg, mi, kid2(cx, n), b[0..0])
+        ret
+    end
+    if ck == CK_SYSCALL
+        s : u64 <- kid2(cx, n)
+        while s != 0
+            st := ety(pg, mi, s, "word")
+            if addr_kind(st) > 0
+                texpr(pg, mi, s, b[0..0])
+            else
+                if int_signed(st) == 0
+                    if int_bits(st) > 0
+                        texpr(pg, mi, s, "uword")
+                    else
+                        texpr(pg, mi, s, "word")
+                    end
+                else
+                    texpr(pg, mi, s, "word")
+                end
+            end
+            s <- sibling(cx, s)
+        end
+        ret
+    end
+    if ck == CK_PROC
+        pi := proc_find(pg, tok_text(cx, cn.t0))
+        if pi < 0
+            -- An unknown callee gives its arguments no context at all; a
+            -- diagnostic here would be about this stage, not the program.
+            ret
+        end
+        a : u64 <- kid2(cx, n)
+        k : u64 <- 0
+        while a != 0
+            texpr(pg, mi, a, param_type(pg, pi, k))
+            k <- k + 1
+            a <- sibling(cx, a)
+        end
+        ret
+    end
+    mname := tok_text(cx, cn.t0)
+    a2 : u64 <- kid2(cx, n)
+    j : u64 <- 0
+    while a2 != 0
+        if ck == CK_PUT
+            if j == 0
+                texpr(pg, mi, a2, "rw view u8")
+            else
+                texpr(pg, mi, a2, acc_value_type(mname))
+            end
+        else
+            if ck == CK_GET
+                texpr(pg, mi, a2, "view u8")
+            else
+                texpr(pg, mi, a2, b[0..0])
+            end
+        end
+        j <- j + 1
+        a2 <- sibling(cx, a2)
+    end
+end
+
+proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
+    -- Checks `n` in a context that wants `want`; an unknown type reports
+    -- nothing, so a construct this stage cannot type stays silent.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    if n == 0
+        ret
+    end
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_INT
+        if want.len == 0
+            -- `x := 10`: nothing in the program says how wide this is.
+            terr(pg, mi, 201, n)
+            ret
+        end
+        if int_bits(want) > 0
+            if lit_fits(want, nd.val, nd.sub) == 0
+                terr(pg, mi, 202, n)
+            end
+        end
+        ret
+    end
+    if k == N_CHAR
+        if want.len == 0
+            terr(pg, mi, 201, n)
+        end
+        ret
+    end
+    if k == N_CONVERT
+        tconvert(pg, mi, n, want)
+        ret
+    end
+    if k == N_BINOP
+        tbinop(pg, mi, n, want)
+        ret
+    end
+    if k == N_CALL
+        tcall(pg, mi, n)
+        ret
+    end
+    if k == N_UNOP
+        s := nd.sub
+        if s == U_NOT
+            texpr(pg, mi, kid1(cx, n), "bool")
+            ret
+        end
+        if s == U_ADDROF
+            texpr(pg, mi, kid1(cx, n), b[0..0])
+            ret
+        end
+        if s == U_REFOF
+            texpr(pg, mi, kid1(cx, n), b[0..0])
+            ret
+        end
+        texpr(pg, mi, kid1(cx, n), want)
+        ret
+    end
+    if k == N_INDEX
+        texpr(pg, mi, kid1(cx, n), b[0..0])
+        ix := kid2(cx, n)
+        ixn := node_at(cx, ix)
+        if ixn.kind == N_RANGE
+            texpr(pg, mi, kid1(cx, ix), "uword")
+            texpr(pg, mi, kid2(cx, ix), "uword")
+        else
+            texpr(pg, mi, ix, "uword")
+        end
+        ret
+    end
+    if k == N_FIELD
+        base := kid1(cx, n)
+        bn := node_at(cx, base)
+        if bn.kind == N_NAME
+            if name_kind(pg, mi, base) == 0
+                ret
+            end
+        end
+        texpr(pg, mi, base, b[0..0])
+        ret
+    end
+    if k == N_RAWLOAD
+        texpr(pg, mi, kid1(cx, n), b[0..0])
+        ret
+    end
+    if k == N_FALLBACK
+        texpr(pg, mi, kid1(cx, n), b[0..0])
+        h := kid2(cx, n)
+        hn := node_at(cx, h)
+        if hn.kind == N_RET
+            texpr(pg, mi, kid1(cx, h), ok_of(cur_result(pg)))
+        end
+        if hn.kind == N_DEFAULT
+            texpr(pg, mi, kid1(cx, h), ok_of(ety(pg, mi, kid1(cx, n), b[0..0])))
+        end
+        ret
+    end
+    if k == N_LIT
+        hn2 := node_at(cx, kid1(cx, n))
+        lname := tok_text(cx, hn2.t0)
+        idx : word <- item_find(pg, lname)
+        if idx < 0
+            idx <- variant_fields_of(pg, lname)
+        end
+        f : u64 <- kid2(cx, n)
+        while f != 0
+            fn := node_at(cx, f)
+            if idx < 0
+                texpr(pg, mi, kid1(cx, f), b[0..0])
+            else
+                texpr(pg, mi, kid1(cx, f), lit_field_type(pg, idx, lname, tok_text(cx, fn.t0)))
+            end
+            f <- sibling(cx, f)
+        end
+        ret
+    end
+    if k == N_ARRAY
+        e : u64 <- kid1(cx, n)
+        while e != 0
+            texpr(pg, mi, e, arr_elem(want))
+            e <- sibling(cx, e)
+        end
+        ret
+    end
+    if NARROW_STRICT == 1
+        have := ety(pg, mi, n, want)
+        if coerce_kind(pg, have, want) == 5
+            terr(pg, mi, 202, n)
+        end
+    end
+end
+
+proc lit_field_type(pg: ref Prog, idx: u64, oname: view u8, fname: view u8) -> view u8
+    -- The declared type of one field of a layout or variant literal.
+    b := pg.sbuf
+    it := item_at(pg, idx)
+    cx := mod_ctx(pg, it.mod)
+    f : u64 <- 0
+    while f < it.nfld
+        fr := fld_at(pg, it.first + f)
+        fn := node_at(cx, fr.node)
+        if view_eq(tok_text(cx, fn.t0), fname)
+            take : u64 <- 1
+            if it.kind == 1
+                vn := node_at(cx, fr.variant)
+                if view_eq(tok_text(cx, vn.t0), oname) == 0
+                    take <- 0
+                end
+            end
+            if take == 1
+                st := sbeg(pg)
+                sput_type_node(pg, it.mod, kid1(cx, fr.node))
+                ret native_int(sdone(pg, st))
+            end
+        end
+        f <- f + 1
+    end
+    ret b[0..0]
+end
+
+proc tstmt(pg: rw ref Prog, mi: u64, n: u64)
+    -- The expressions of one statement, each with the type its context wants.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    pg.curstmt <- n
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_BIND
+        v : u64 <- kid1(cx, n)
+        if nd.val >= 2
+            v <- sibling(cx, v)
+        end
+        texpr(pg, mi, v, loc_type(pg, tok_text(cx, nd.t0)))
+        ret
+    end
+    if k == N_PLACE
+        init := kid2(cx, n)
+        if init != 0
+            texpr(pg, mi, init, loc_type(pg, tok_text(cx, nd.t0)))
+        end
+        ret
+    end
+    if k == N_STORE
+        tgt := kid1(cx, n)
+        tt := ety(pg, mi, tgt, b[0..0])
+        if tt.len == 0
+            -- A target this stage cannot type gives no context to check in.
+            ret
+        end
+        texpr(pg, mi, kid2(cx, n), tt)
+        ret
+    end
+    if k == N_MOVE
+        tgt2 := kid1(cx, n)
+        tt2 := ety(pg, mi, tgt2, b[0..0])
+        if tt2.len == 0
+            ret
+        end
+        texpr(pg, mi, kid2(cx, n), tt2)
+        ret
+    end
+    if k == N_EXPR
+        texpr(pg, mi, kid1(cx, n), b[0..0])
+        ret
+    end
+    if k == N_RET
+        texpr(pg, mi, kid1(cx, n), ok_of(cur_result(pg)))
+        ret
+    end
+    if k == N_FAIL
+        texpr(pg, mi, kid1(cx, n), err_of(cur_result(pg)))
+        ret
+    end
+    if k == N_IF
+        texpr(pg, mi, kid1(cx, n), "bool")
+        br : u64 <- kid2(cx, n)
+        while br != 0
+            bn := node_at(cx, br)
+            if bn.kind == N_ELIF
+                texpr(pg, mi, kid1(cx, br), "bool")
+            end
+            br <- sibling(cx, br)
+        end
+        ret
+    end
+    if k == N_IFTHEN
+        texpr(pg, mi, kid1(cx, n), "bool")
+        ret
+    end
+    if k == N_WHILE
+        texpr(pg, mi, kid1(cx, n), "bool")
+        ret
+    end
+    if k == N_EACH
+        it := kid1(cx, n)
+        itn := node_at(cx, it)
+        if itn.kind == N_RANGE
+            texpr(pg, mi, kid1(cx, it), "uword")
+            texpr(pg, mi, kid2(cx, it), "uword")
+        else
+            texpr(pg, mi, it, b[0..0])
+        end
+        ret
+    end
+    if k == N_CASE
+        texpr(pg, mi, kid1(cx, n), b[0..0])
+        ret
+    end
+    if k == N_ZONE
+        texpr(pg, mi, kid1(cx, n), "uword")
+        rest := kid2(cx, n)
+        if nd.sub == 1
+            texpr(pg, mi, rest, "addr u8")
+        end
+        if nd.sub == 2
+            texpr(pg, mi, rest, b[0..0])
+        end
+        ret
+    end
+    if k == N_MACHINE
+        m : u64 <- kid1(cx, n)
+        while m != 0
+            mn := node_at(cx, m)
+            if mn.kind == N_MIN
+                texpr(pg, mi, kid1(cx, m), reg_type(tok_text(cx, mn.t0)))
+            end
+            m <- sibling(cx, m)
+        end
+        ret
+    end
+end

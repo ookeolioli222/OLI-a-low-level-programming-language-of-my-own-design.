@@ -43,6 +43,15 @@ proc smsg(code: u64) -> view u8
     if code == 200
         ret "type mismatch"
     end
+    if code == 201
+        ret "integer literal needs a type"
+    end
+    if code == 202
+        ret "lossy conversion needs `wrap`, `sat` or `checked`"
+    end
+    if code == 203
+        ret "mixed address spaces"
+    end
     if code == 220
         ret "read of uninitialized place"
     end
@@ -827,6 +836,8 @@ proc check_branch(pg: rw ref Prog, mi: u64, first: u64) -> word
 end
 
 proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
+    -- Types first: every expression of this statement in its own context.
+    tstmt(pg, mi, n)
     cx := mod_ctx(pg, mi)
     nd := node_at(cx, n)
     k := nd.kind

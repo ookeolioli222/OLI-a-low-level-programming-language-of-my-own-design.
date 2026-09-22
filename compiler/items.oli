@@ -32,6 +32,9 @@ layout Loc
     idx : u64
     t0 : u64
     t1 : u64
+    reg : u64
+    zord : u64
+    dnode : u64
 end
 
 layout Item
@@ -92,6 +95,15 @@ layout Prog
     nerr : u64
     entrymod : u64
     entrynode : u64
+    pend : u64
+    sbase : u64
+    nzone : u64
+    amode : u64
+    tcheck : u64
+    rt0 : u64
+    rt1 : u64
+    pzone : u64
+    curstmt : u64
 end
 
 proc prog_new(z: zone) -> rw ref Prog
@@ -125,6 +137,15 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.nerr <- 0
     pg.entrymod <- 0
     pg.entrynode <- 0
+    pg.pend <- 0
+    pg.sbase <- 0
+    pg.nzone <- 0
+    pg.amode <- 0
+    pg.tcheck <- 0
+    pg.rt0 <- 0
+    pg.rt1 <- 0
+    pg.pzone <- 0
+    pg.curstmt <- 0
     ret pg
 end
 
@@ -422,7 +443,6 @@ proc resolve_choice(pg: ref Prog, idx: u64)
     end
     payload := round_up(1, palign)
     size : u64 <- payload
-    v := 0
     cursor : u64 <- payload
     last : u64 <- 0
     g : u64 <- 0
@@ -873,7 +893,8 @@ end
 
 proc print_layout(pg: ref Prog, idx: u64, num: u64)
     it := item_at(pg, idx)
-    put(1, "  (layout ")
+    bline(pg, 2)
+    put(1, "(layout ")
     put_name(pg, it.mod, it.node)
     put(1, "#")
     put_num(pg, num)
@@ -886,13 +907,14 @@ proc print_layout(pg: ref Prog, idx: u64, num: u64)
         print_fld(pg, it.first + f)
         f <- f + 1
     end
-    put(1, ")\n")
+    put(1, ")")
 end
 
 proc print_choice(pg: ref Prog, idx: u64, num: u64)
     it := item_at(pg, idx)
     cx := mod_ctx(pg, it.mod)
-    put(1, "  (choice ")
+    bline(pg, 2)
+    put(1, "(choice ")
     put_name(pg, it.mod, it.node)
     put(1, "#")
     put_num(pg, num)
@@ -920,7 +942,7 @@ proc print_choice(pg: ref Prog, idx: u64, num: u64)
         end
         v <- sibling(cx, v)
     end
-    put(1, ")\n")
+    put(1, ")")
 end
 
 proc print_clauses(pg: ref Prog, mi: u64, node: u64)
@@ -948,10 +970,11 @@ proc print_val(pg: ref Prog, i: u64, num: u64)
     v := val_at(pg, i)
     cx := mod_ctx(pg, v.mod)
     vn := node_at(cx, v.node)
+    bline(pg, 2)
     if v.kind == 0
-        put(1, "  (const ")
+        put(1, "(const ")
     else
-        put(1, "  (static ")
+        put(1, "(static ")
     end
     put_name(pg, v.mod, v.node)
     if v.kind == 1
@@ -971,7 +994,7 @@ proc print_val(pg: ref Prog, i: u64, num: u64)
         put(1, "zero")
     end
     print_clauses(pg, v.mod, v.node)
-    put(1, ")\n")
+    put(1, ")")
 end
 
 proc put_module_name(pg: ref Prog, mi: u64)
@@ -1064,7 +1087,8 @@ proc print_proc(pg: ref Prog, pi: u64)
     mi := v.mod
     cx := mod_ctx(pg, mi)
     nd := node_at(cx, v.node)
-    put(1, "  (proc ")
+    bline(pg, 2)
+    put(1, "(proc ")
     put_module_name(pg, mi)
     put(1, ".")
     put_name(pg, mi, v.node)
@@ -1076,12 +1100,14 @@ proc print_proc(pg: ref Prog, pi: u64)
     end
     print_permits(pg, mi, v.node)
     print_proc_clauses(pg, mi, v.node)
-    put(1, "\n")
     collect_locals(pg, mi, v.node)
     print_locals(pg)
+    print_body(pg, mi, v.node, 4)
+    put(1, ")")
 end
 
 proc print_program(pg: ref Prog)
+    bline(pg, 0)
     put(1, "(program entry=")
     if pg.entrynode == 0
         -- A library module has no entry procedure of its own.
@@ -1093,7 +1119,6 @@ proc print_program(pg: ref Prog)
         put(1, ".")
         put_name(pg, pg.entrymod, pg.entrynode)
     end
-    put(1, "\n")
     n : u64 <- 0
     i : u64 <- 0
     while i < pg.nitem
@@ -1131,6 +1156,7 @@ proc print_program(pg: ref Prog)
         print_proc(pg, q)
         q <- q + 1
     end
+    put(1, ")\n")
 end
 
 proc target_freestanding(src: view u8) -> word

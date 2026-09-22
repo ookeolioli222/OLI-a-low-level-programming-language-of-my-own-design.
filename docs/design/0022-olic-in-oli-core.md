@@ -1,7 +1,9 @@
 # 0022 — Genesis layer 4: `olic` written in oli-core
 
-Status: in progress. Lexer, parser, diagnostic renderer, module loader, item
-collection, signatures and local tables implemented and tested 2026-09-22.
+Status: in progress. The whole front end — lexer, parser, diagnostic renderer,
+module loader, item collection, signatures, local tables, expression typing and
+typed bodies — is implemented and tested (2026-09-22). The back end (OIR, x64,
+ELF) and the `stage2 == stage3` fixpoint remain.
 
 ## Problem
 Layer 3 (`oli1`) compiles oli-core. The self-hosted compiler `olic` must be
@@ -28,11 +30,12 @@ Each front-end stage gets a driver that prints its output (`--show-tokens`,
 (`tests/`, `tests/snapshots`) — the corpus is the only oracle. Records live in
 zone arenas; tables are `T.at` views over `z.bytes` allocations.
 
-The lexer and parser validate the approach: ~2 900 lines of oli-core, 84 KiB
+The lexer and parser validated the approach: ~2 900 lines of oli-core, 84 KiB
 of machine code from `oli1`, reproducing all four AST snapshots byte for byte
 and the exact diagnostic set of all fifteen negative parse fixtures. The
-parser also parses its own source cleanly, which is the first real evidence
-that oli-core is expressive enough for `olic`.
+parser also parses its own source cleanly, which was the first real evidence
+that oli-core is expressive enough for `olic`. The whole front end is now
+~10 900 lines of oli-core and 255 KiB of machine code from `oli1`.
 
 Two decisions shape the tree. It is a single arena of uniform nodes (kind,
 sub, val, token range, child list) rather than one layout per construct: in
@@ -59,14 +62,37 @@ from `lib/`, which is what `--lib DIR` will select later; the loader uses
 `openat`/`read`/`close` directly, with no libc and no buffering.
 
 The checks that need no type graph — capabilities, unimplemented features,
-constant cycles and ranges, recursive layouts — are implemented before the
+constant cycles and ranges, recursive layouts — were implemented before the
 type graph, because they are exactly the checks a kernel author relies on
 (`docs/KERNEL_PROGRAMMING.md` §2) and because each one is pinned by a fixture
-that already exists. Twelve of the fourteen `tests/sema/err` fixtures pass
-exactly; the two that remain need expression typing.
+that already exists.
 
-Running those checks over `compiler/*.oli` measured the distance between
-oli-core and V0 for the first time: 290 stores into bindings (V0 wants
+Stage 3 then types every expression. There is still no type graph and no typed
+tree: a type is text in the same buffer, and the *context* type is threaded
+down as one extra parameter (`want`). That single parameter is the whole of
+bidirectional typing — it gives an integer literal its width (`E0201` when
+nothing does), decides which implicit conversion to print (`widen`, `bits`,
+`inttoaddr`, or nothing when only `rw` is dropped) and finds the lossy ones
+(`E0202`). Regions are a bit set over parameters, the frame and the zones a
+procedure opens, so the union rule of `spec/OLI_MEMORY_V0.md` is one `or` and
+the printer's `@zone scratch` is one lookup.
+
+The printer and the checker are two walks over the same rules rather than one
+walk that does both: the printer derives types as it prints, and `--check`
+must report without printing anything. The cost is that the two walks have to
+agree, which the snapshots enforce — a want that disagrees shows up as a wrong
+type in a `.sema` file.
+
+Typing also fixed the local table's name resolution: a flat table resolved a
+name reused in two sibling blocks to whichever came last. Every local now
+records the statement it was declared in, and a lookup takes the latest
+declaration at or before the statement being analysed.
+
+All fourteen `tests/sema/err` fixtures now pass exactly, and all three
+`tests/snapshots/*.sema` are reproduced byte for byte.
+
+Running the checks that need no type graph over `compiler/*.oli` measured the
+distance between oli-core and V0 for the first time: 290 stores into bindings (V0 wants
 `x : T <- e` places), 93 stores through layout fields that oli-core cannot
 declare `rw`, and 8 procedures whose infinite loop is `while 1` because
 oli-core has no `loop`. Nothing else — so the measurement *was* the
@@ -79,6 +105,17 @@ and it paid immediately: converting the sources turned up a name declared
 twice with two different types in one procedure, parameters that were written
 through without being `rw`, and a procedure that read a place before assigning
 it. None of those are errors in oli-core; all of them are errors in V0.
+
+Expression typing repeated the exercise and found four more: a binding of a
+bare `0` with nothing to give it a width, three drivers whose `entry`
+procedure returned a status without declaring `-> s32`, a local called `at`
+(a reserved word), and a store into an immutable binding. It also produced the
+next measurement: with implicit narrowing reported, `compiler/` has **93**
+sites where a wider value is stored into a narrower place — and `lib/`,
+`examples/` and the fixture corpus have none. oli-core has no conversions, so
+those 93 sites are the specification of oli1 step 6f (`T(x)`, `T.wrap(x)`),
+and the check is written but gated (`NARROW_STRICT`) until the step lands.
+The same shape as step 6e: measure with the compiler, then grow the subset.
 
 Writing the compiler in its own subset pays for itself here: `olic` lays out
 its own `Tok`, `Lex`, `Ctx`, `Node`, `Item` and `Prog` layouts, and the parser

@@ -29,8 +29,8 @@ layout, not existing code.
 | `oli_lexer` | 1 | tokens (`Kw`, `Prim`, operators, `Doc`, `Newline`), the lexer | **`compiler/lex.oli` (oli-core), built by `oli1`; passes the corpus (layer 4)** |
 | `oli_ast` | 1 | syntax tree types, S-expression printer (`--show-ast`, snapshots) | **`compiler/ast.oli` (oli-core); reproduces every snapshot byte for byte** |
 | `oli_parser` | 1 | recursive-descent parser with recovery (`decl`, `stmt`, `expr`, `types`, `machine`) | **`compiler/parse.oli` (oli-core); E0010–E0032, W0001 exact on the negative fixtures** |
-| `oli_sema` | 1b | module loader, `hir` (the semantic graph), name/type resolution, layouts, constant evaluation, flow, regions, capabilities, `--show-sema` printer | **begun: `compiler/load.oli` (imports under `lib/`), `compiler/items.oli` (items, layout/choice layout, constants, signatures), `compiler/sema.oli` (local tables with type inference) and `compiler/check.oli` (capabilities E0401, E0900, E0106, E0212, E0204) reproduce the items, signatures and locals of every semantic snapshot and the diagnostics of three `tests/sema/err` fixtures; typed bodies, regions and flow remain** |
-| `olic` | driver | CLI: `--show-tokens`, `--show-ast`, `--show-sema`, `--check-syntax`, `--check`, `--freestanding`, `--lib` | `--show-tokens`, `--show-ast` and the item section of `--show-sema` exist as `compiler/show_tokens.oli`, `compiler/show_ast.oli` and `compiler/show_items.oli` (stdin → stdout, one driver per stage until argv access exists); the rest to be written |
+| `oli_sema` | 1b | module loader, `hir` (the semantic graph), name/type resolution, layouts, constant evaluation, flow, regions, capabilities, `--show-sema` printer | **done for V0 without a back end: `compiler/load.oli` (imports under `lib/`), `compiler/items.oli` (items, layout/choice layout, constants, signatures), `compiler/sema.oli` (local tables), `compiler/body.oli` (expression typing, regions, conversions, typed bodies, E0201–E0203) and `compiler/check.oli` (capabilities, scopes, flow, failures, regions) reproduce every `tests/snapshots/*.sema` byte for byte and the diagnostics of all fourteen `tests/sema/err` fixtures** |
+| `olic` | driver | CLI: `--show-tokens`, `--show-ast`, `--show-sema`, `--check-syntax`, `--check`, `--freestanding`, `--lib` | `--show-tokens`, `--show-ast` and `--show-sema` exist as `compiler/show_tokens.oli`, `compiler/show_ast.oli` and `compiler/show_sema.oli` (stdin → stdout, one driver per stage until argv access exists); the flags themselves, `--check` and `--lib DIR` wait for command-line access |
 | `lib/` | library | `core.oli` (`TrapKind`, `Site`), `core/mem.oli`, `std/os.oli` — written in Oli-- | V0 subset |
 | `oli_oir` | 2 | OIR, verifier, passes | not started |
 | `oli_x64` | 2 | machine lowering, register allocation, encoder | not started |
@@ -57,7 +57,7 @@ then runs the passes of `sema/mod.rs` in order:
 | layouts/choices | `items.rs` | fields with offsets, `size`/`align`, recursion (`E0204`) — on demand |
 | signatures | `items.rs` | parameter/result types, permits, clauses |
 | constants/statics | `consts.rs` | `ConstValue`s, backing `.rodata` statics for aggregate constants, cycles (`E0106`) |
-| bodies | `body.rs`, `expr.rs`, `machine.rs` | the typed tree: places vs values, regions, flow state, capabilities |
+| bodies | `body.rs`, `expr.rs`, `machine.rs` (Oli--: `body.oli`, `check.oli`) | the typed tree: places vs values, regions, flow state, capabilities |
 | program | `program.rs` | `main`/`entry`/`traps` rules, symbol uniqueness |
 
 Design record: `design/0014-semantic-graph-and-regions.md`. The graph and its

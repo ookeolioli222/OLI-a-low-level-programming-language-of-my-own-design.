@@ -80,7 +80,7 @@ proc print_tokens(lx: ref Lex)
     end
 end
 
-proc start
+proc start -> s32
     entry
     permit os.syscall
     zone z 16777216
