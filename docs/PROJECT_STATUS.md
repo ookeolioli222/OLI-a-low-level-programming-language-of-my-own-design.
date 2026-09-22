@@ -35,6 +35,10 @@ is complete. The working directory has no `.git` metadata.
   exist.
 - README and ROADMAP originally disagreed with each other and with G2's code.
 
+The single-file reference for the language and the working commands is
+[`docs/LANGUAGE.md`](LANGUAGE.md); it marks every construct as running,
+parsing or planned.
+
 ## Completion gates
 
 1. **G2 assembler:** checked structure; instruction encodings; memory operands;

@@ -982,7 +982,8 @@ cmp build/show_items build/show_items.again || fail "show_items build is not det
 # from the repository root because imports are resolved under lib/.
 for pair in "hello examples/hello.oli" "packet_demo examples/packet_demo.oli" "freestanding tests/sema/ok/freestanding.oli"; do
     set -- $pair
-    ( cd .. && genesis/build/show_items < "$2" > genesis/build/$1.items 2> genesis/build/items.err ) || fail "items: diagnostics for $2: $(cat build/items.err)"
+    ( cd .. && genesis/build/show_items < "$2" > genesis/build/$1.out 2> genesis/build/items.err ) || fail "items: diagnostics for $2: $(cat build/items.err)"
+    sed -n '/^  (proc /q;p' build/$1.out > build/$1.items
     n=$(wc -l < build/$1.items)
     head -n "$n" ../tests/snapshots/$1.sema > build/$1.want
     cmp build/$1.want build/$1.items || fail "items: $1 differs from the head of tests/snapshots/$1.sema"
@@ -999,4 +1000,14 @@ for f in ../tests/sema/ok/*.oli ../lib/*.oli ../lib/*/*.oli ../compiler/*.oli; d
     head -c 9 build/items.out | grep -q '^(program' || fail "items: $f produced no program"
 done
 echo "ok: olic resolves packed/aligned layouts, nested payloads and every library module it imports"
+# Procedure signatures and parameter locals, compared against the same lines of
+# the semantic snapshot (bodies and inferred locals are the next stage).
+for pair in "hello examples/hello.oli" "packet_demo examples/packet_demo.oli" "freestanding tests/sema/ok/freestanding.oli"; do
+    set -- $pair
+    ( cd .. && genesis/build/show_items < "$2" 2>/dev/null ) | grep -E '^  \(proc |^    \(local [0-9]+ .* param[0-9]+ ' > build/$1.sig
+    grep -E '^  \(proc |^    \(local [0-9]+ .* param[0-9]+ ' ../tests/snapshots/$1.sema > build/$1.sigwant
+    cmp build/$1.sigwant build/$1.sig || fail "signatures: $1 differs from tests/snapshots/$1.sema"
+    [ -s build/$1.sig ] || fail "signatures: $1 produced nothing"
+done
+echo "ok: olic prints every procedure signature and parameter local exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic lexer, parser and item collection) passed"

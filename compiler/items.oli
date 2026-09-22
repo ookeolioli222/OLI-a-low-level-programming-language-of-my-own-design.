@@ -43,8 +43,10 @@ layout Prog
     items : view u8
     flds : view u8
     vals : view u8
+    procs : view u8
     tmp : view u8
     nmod : u64
+    nproc : u64
     nitem : u64
     nfld : u64
     nval : u64
@@ -60,7 +62,9 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.items <- z.bytes(ITEM_MAX * Item.size)
     pg.flds <- z.bytes(FLD_MAX * Fld.size)
     pg.vals <- z.bytes(VAL_MAX * Val.size)
+    pg.procs <- z.bytes(VAL_MAX * Val.size)
     pg.tmp <- z.bytes(32)
+    pg.nproc <- 0
     pg.nmod <- 0
     pg.nitem <- 0
     pg.nfld <- 0
@@ -93,6 +97,23 @@ proc val_at(pg: ref Prog, i: u64) -> rw ref Val
     t := pg.vals
     off := i * Val.size
     ret Val.at(t[off..off + Val.size])
+end
+
+proc proc_at(pg: ref Prog, i: u64) -> rw ref Val
+    t := pg.procs
+    off := i * Val.size
+    ret Val.at(t[off..off + Val.size])
+end
+
+proc add_proc(pg: ref Prog, mi: u64, node: u64)
+    i := pg.nproc
+    v := proc_at(pg, i)
+    v.mod <- mi
+    v.node <- node
+    v.kind <- 0
+    v.value <- 0
+    v.has <- 0
+    pg.nproc <- i + 1
 end
 
 -- Loading ---------------------------------------------------------------------
@@ -510,6 +531,7 @@ proc collect(pg: ref Prog, mi: u64)
             add_val(pg, mi, k, 1)
         end
         if kk == N_PROC
+            add_proc(pg, mi, k)
             if has_entry(cx, k)
                 pg.entrymod <- mi
                 pg.entrynode <- k
@@ -658,6 +680,46 @@ proc put_toks(pg: ref Prog, mi: u64, a: u64, b: u64)
     end
 end
 
+proc put_type_canon(pg: ref Prog, mi: u64, a: u64, b: u64)
+    -- A type as semantic analysis names it: a path is reduced to the item it
+    -- resolves to, so `core.TrapKind` prints as `TrapKind`.
+    cx := mod_ctx(pg, mi)
+    tmp := pg.tmp
+    prev := 0
+    i := a
+    while i < b
+        t := ctok(cx, i)
+        if t.kind == TK_IDENT
+            nx := ctok(cx, i + 1)
+            if nx.kind == TK_OP
+                if nx.sub == OP_DOT
+                    i <- i + 2
+                    continue
+                end
+            end
+        end
+        w := is_word_tok(cx, i)
+        if prev == 1
+            if w == 1
+                put(1, " ")
+            end
+        end
+        if t.kind == TK_INT
+            put_uint(1, tmp, t.val)
+        else
+            put(1, tok_text(cx, i))
+        end
+        prev <- w
+        i <- i + 1
+    end
+end
+
+proc put_type_node(pg: ref Prog, mi: u64, ty: u64)
+    cx := mod_ctx(pg, mi)
+    tn := node_at(cx, ty)
+    put_type_canon(pg, mi, tn.t0, tn.t1)
+end
+
 proc put_type_of(pg: ref Prog, mi: u64, node: u64)
     cx := mod_ctx(pg, mi)
     ty := node_at(cx, kid1(cx, node))
@@ -789,6 +851,127 @@ proc print_val(pg: ref Prog, i: u64, num: u64)
     put(1, ")\n")
 end
 
+proc put_module_name(pg: ref Prog, mi: u64)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, cx.root)
+    put(1, mod_text(cx, nd.t0, nd.t1))
+end
+
+proc print_permits(pg: ref Prog, mi: u64, node: u64)
+    cx := mod_ctx(pg, mi)
+    first := 1
+    k := kid1(cx, node)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_PERMIT
+                c := kid1(cx, k)
+                while c != 0
+                    if first
+                        put(1, " permits=[")
+                        first <- 0
+                    else
+                        put(1, ",")
+                    end
+                    cn := node_at(cx, c)
+                    put_toks(pg, mi, cn.t0, cn.t1)
+                    c <- sibling(cx, c)
+                end
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    if first == 0
+        put(1, "]")
+    end
+end
+
+proc print_proc_clauses(pg: ref Prog, mi: u64, node: u64)
+    -- The order of docs/COMPILER_ARCHITECTURE.md's printer: calls, entry,
+    -- section, traps; `permit` was printed before them.
+    cx := mod_ctx(pg, mi)
+    k := kid1(cx, node)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_CALLS
+                put(1, " calls=")
+                c := node_at(cx, kid1(cx, k))
+                put_toks(pg, mi, c.t0, c.t1)
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    k2 := kid1(cx, node)
+    while k2 != 0
+        kn2 := node_at(cx, k2)
+        if kn2.kind == N_CLAUSE
+            if kn2.sub == C_ENTRY
+                put(1, " entry")
+            end
+        end
+        k2 <- sibling(cx, k2)
+    end
+    k3 := kid1(cx, node)
+    while k3 != 0
+        kn3 := node_at(cx, k3)
+        if kn3.kind == N_CLAUSE
+            if kn3.sub == C_SECTION
+                put(1, " section=")
+                c3 := node_at(cx, kid1(cx, k3))
+                put_toks(pg, mi, c3.t0, c3.t1)
+            end
+        end
+        k3 <- sibling(cx, k3)
+    end
+    k4 := kid1(cx, node)
+    while k4 != 0
+        kn4 := node_at(cx, k4)
+        if kn4.kind == N_CLAUSE
+            if kn4.sub == C_TRAPS
+                put(1, " traps")
+            end
+        end
+        k4 <- sibling(cx, k4)
+    end
+end
+
+proc print_proc(pg: ref Prog, pi: u64)
+    v := proc_at(pg, pi)
+    mi := v.mod
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, v.node)
+    put(1, "  (proc ")
+    put_module_name(pg, mi)
+    put(1, ".")
+    put_name(pg, mi, v.node)
+    params := kid1(cx, v.node)
+    rest := sibling(cx, params)
+    if nd.val == 1
+        put(1, " -> ")
+        put_type_node(pg, mi, rest)
+    end
+    print_permits(pg, mi, v.node)
+    print_proc_clauses(pg, mi, v.node)
+    put(1, "\n")
+    tmp := pg.tmp
+    p := kid1(cx, params)
+    i := 0
+    while p != 0
+        put(1, "    (local ")
+        put_uint(1, tmp, i)
+        put(1, " ")
+        put_name(pg, mi, p)
+        put(1, " param")
+        put_uint(1, tmp, i)
+        put(1, " ")
+        put_type_node(pg, mi, kid1(cx, p))
+        put(1, ")\n")
+        i <- i + 1
+        p <- sibling(cx, p)
+    end
+end
+
 proc print_program(pg: ref Prog)
     put(1, "(program entry=")
     if pg.entrynode == 0
@@ -833,6 +1016,11 @@ proc print_program(pg: ref Prog)
             n3 <- n3 + 1
         end
         k <- k + 1
+    end
+    q := 0
+    while q < pg.nproc
+        print_proc(pg, q)
+        q <- q + 1
     end
 end
 

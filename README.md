@@ -78,6 +78,7 @@ Design documents (`docs/`):
 
 | File | Purpose |
 |------|---------|
+| [LANGUAGE.md](docs/LANGUAGE.md) | **The complete language and toolchain reference: every construct, every command, what runs today** |
 | [LANGUAGE_VISION.md](docs/LANGUAGE_VISION.md) | Goals, principles, cost model, non-goals |
 | [COMPILER_ARCHITECTURE.md](docs/COMPILER_ARCHITECTURE.md) | Crates, policies, front-end design, diagnostic codes, tests |
 | [SYNTAX_EXPERIMENTS.md](docs/SYNTAX_EXPERIMENTS.md) | Three competing syntax designs, evaluation, selection |
