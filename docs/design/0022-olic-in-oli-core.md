@@ -1,6 +1,6 @@
 # 0022 — Genesis layer 4: `olic` written in oli-core
 
-Status: in progress. Lexer implemented and tested 2026-09-21.
+Status: in progress. Lexer and parser implemented and tested 2026-09-22.
 
 ## Problem
 Layer 3 (`oli1`) compiles oli-core. The self-hosted compiler `olic` must be
@@ -27,9 +27,22 @@ Each front-end stage gets a driver that prints its output (`--show-tokens`,
 (`tests/`, `tests/snapshots`) — the corpus is the only oracle. Records live in
 zone arenas; tables are `T.at` views over `z.bytes` allocations.
 
-The lexer (first module) validates the approach: 600 lines of oli-core,
-~19 KiB of machine code, accepts the whole corpus and reports the exact
-lexical diagnostics of the negative fixtures.
+The lexer and parser validate the approach: ~2 900 lines of oli-core, 84 KiB
+of machine code from `oli1`, reproducing all four AST snapshots byte for byte
+and the exact diagnostic set of all fifteen negative parse fixtures. The
+parser also parses its own source cleanly, which is the first real evidence
+that oli-core is expressive enough for `olic`.
+
+Two decisions shape the tree. It is a single arena of uniform nodes (kind,
+sub, val, token range, child list) rather than one layout per construct: in
+oli-core a layout costs a declaration, a constructor and a field-access path,
+while a uniform node costs one. And a type is kept as a *token range*, printed
+by joining its tokens, so the parser needs no type tree before semantic
+analysis needs one — `[16K]u8` prints as `[16384]u8` because the printer takes
+an integer token's value, not its text.
+
+Recovery follows one rule: an error path never consumes a block closer, so a
+bad line costs one diagnostic instead of cascading to the end of the file.
 
 ## Advantages
 - No port step at self-hosting; `stage2 == stage3` is a byte comparison.

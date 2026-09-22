@@ -947,4 +947,30 @@ got=$(grep -c 'E0003' build/tok.err)
 got=$(grep ' int \| char ' build/tok.out | awk '{print $3}' | tr '\n' ' ')
 [ "$got" = "18446603336221196288 18446744073709551615 0 65536 2097152 1073741824 170 15 97 65 " ] || fail "lexer: literal values [$got]"
 echo "ok: olic lexer scales K/M/G, reads hex/binary/octal, u64 boundaries, char and escape values"
-echo "genesis: layer 4 (olic lexer) passed"
+
+cat ../compiler/io.oli ../compiler/lex.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/show_ast.oli > build/show_ast.oli
+./build/oli1.bin < build/show_ast.oli > build/show_ast || fail "oli1 could not compile compiler/ (show_ast)"
+chmod +x build/show_ast
+./build/oli1.bin < build/show_ast.oli > build/show_ast.again
+cmp build/show_ast build/show_ast.again || fail "show_ast build is not deterministic"
+for pair in "hello ../examples/hello.oli" "packet_demo ../examples/packet_demo.oli" "statements ../tests/parse/ok/statements.oli" "kernel_sketch ../tests/parse/ok/kernel_sketch.oli"; do
+    set -- $pair
+    ./build/show_ast < "$2" > build/$1.ast 2> build/ast.err || fail "parser: diagnostics for $2: $(cat build/ast.err)"
+    cmp build/$1.ast ../tests/snapshots/$1.ast || fail "parser: $1 differs from tests/snapshots/$1.ast"
+done
+echo "ok: olic parser reproduces every tests/snapshots/*.ast byte for byte (--show-ast)"
+for f in ../tests/sema/ok/*.oli ../tests/sema/err/*.oli ../lib/*.oli ../lib/*/*.oli ../compiler/*.oli 3-oli1/tests/*.oli; do
+    ./build/show_ast < "$f" > build/ast.out 2> build/ast.err || fail "parser: diagnostics for $f: $(cat build/ast.err)"
+    head -c 8 build/ast.out | grep -q '^(module' || fail "parser: $f produced no module"
+done
+echo "ok: olic parser accepts every fixture, library module and its own source without diagnostics"
+for f in ../tests/parse/err/*.oli; do
+    want=$(grep -- '-- expect: ' "$f" | sed 's/-- expect: //' | sort)
+    set +e; ./build/show_ast < "$f" > build/ast.out 2> build/ast.err; st=$?; set -e
+    got=$(awk '/^error\[|^warning\[/ {code=substr($1,index($1,"[")+1,5)} /^ --> stdin:/ {split($2,a,":"); print code " @ " a[2] ":" a[3]}' build/ast.err | sort)
+    [ "$got" = "$want" ] || fail "parser: $f expected [$want] got [$got]"
+    [ "$st" = 1 ] || fail "parser: $f exit $st"
+    head -c 8 build/ast.out | grep -q '^(module' || fail "parser: $f produced no module after recovery"
+done
+echo "ok: olic parser reports exactly the E0001-E0032/W0001 diagnostics the parse/err fixtures expect, and recovers"
+echo "genesis: layer 4 (olic lexer and parser) passed"

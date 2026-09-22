@@ -1,0 +1,2477 @@
+module olic.parse
+-- Recursive-descent parser for Oli-- V0 (spec/OLI_SYNTAX_V0.md §3-§7), written
+-- in oli-core. It consumes the token table of olic.lex and builds the tree of
+-- olic.ast. Newlines are significant except inside unclosed brackets and after
+-- a binary operator (§1), which `sync` and `depth` implement.
+
+-- Keyword indices, in the order of the table in olic.lex.
+KW_MODULE := 1
+KW_IMPORT := 2
+KW_PUB := 3
+KW_PROC := 4
+KW_PERMIT := 5
+KW_CALLS := 6
+KW_SECTION := 7
+KW_ALIGN := 8
+KW_ENTRY := 9
+KW_EXPORT := 10
+KW_TRAPS := 11
+KW_RET := 12
+KW_FAIL := 13
+KW_IF := 14
+KW_THEN := 15
+KW_ELIF := 16
+KW_ELSE := 17
+KW_END := 18
+KW_WHILE := 19
+KW_EACH := 20
+KW_IN := 21
+KW_LOOP := 22
+KW_BREAK := 23
+KW_CONTINUE := 24
+KW_ZONE := 25
+KW_AT := 26
+KW_FROM := 27
+KW_CASE := 28
+KW_WHEN := 29
+KW_LAYOUT := 30
+KW_CHOICE := 31
+KW_PACKED := 32
+KW_MACHINE := 33
+KW_CLOBBER := 34
+KW_AND := 35
+KW_OR := 36
+KW_NOT := 37
+KW_TRUE := 38
+KW_FALSE := 39
+KW_NONE := 40
+KW_NEVER := 41
+KW_RW := 42
+KW_MMIO := 43
+KW_ADDR := 44
+KW_REF := 45
+KW_VIEW := 46
+KW_OWN := 47
+KW_PORT := 48
+KW_BE := 49
+KW_LE := 50
+KW_WRAP := 51
+KW_SAT := 52
+KW_CHECKED := 53
+
+-- Two-character operators, in the order of the table in olic.lex.
+OP_BIND := 1
+OP_STORE := 2
+OP_MOVE := 3
+OP_ARROW := 4
+OP_DOTDOT := 5
+OP_EQ := 6
+OP_NE := 7
+OP_LE := 8
+OP_GE := 9
+OP_SHL := 10
+OP_SHR := 11
+
+-- One-character operators are 100 + the byte.
+OP_COLON := 158
+OP_COMMA := 144
+OP_DOT := 146
+OP_PLUS := 143
+OP_MINUS := 145
+OP_STAR := 142
+OP_SLASH := 147
+OP_PERCENT := 137
+OP_LT := 160
+OP_GT := 162
+OP_AMP := 138
+OP_BAR := 224
+OP_CARET := 194
+OP_TILDE := 226
+OP_LPAREN := 140
+OP_RPAREN := 141
+OP_LBRACK := 191
+OP_RBRACK := 193
+OP_LBRACE := 223
+OP_RBRACE := 225
+
+-- Token cursor ---------------------------------------------------------------
+
+proc sync(cx: ref Ctx)
+    -- Inside unclosed brackets newlines are not significant.
+    if cx.depth == 0
+        ret
+    end
+    while 1
+        t := ctok(cx, cx.pos)
+        if t.kind != TK_NL
+            ret
+        end
+        cx.pos <- cx.pos + 1
+    end
+end
+
+proc tkind(cx: ref Ctx) -> u64
+    sync(cx)
+    t := ctok(cx, cx.pos)
+    ret t.kind
+end
+
+proc tsub(cx: ref Ctx) -> u64
+    sync(cx)
+    t := ctok(cx, cx.pos)
+    ret t.sub
+end
+
+proc tpos(cx: ref Ctx) -> u64
+    sync(cx)
+    ret cx.pos
+end
+
+proc adv(cx: ref Ctx)
+    sync(cx)
+    if cx.pos + 1 < cx.ntok
+        cx.pos <- cx.pos + 1
+    end
+end
+
+proc adv_cont(cx: ref Ctx)
+    -- After a binary operator, `:=`, `<-`, `.` or `,` the line continues (§1).
+    -- The newline that was skipped is where a missing operand is reported.
+    adv(cx)
+    cx.contnl <- 0
+    first := 1
+    while 1
+        t := ctok(cx, cx.pos)
+        if t.kind != TK_NL
+            ret
+        end
+        if first
+            cx.contnl <- cx.pos
+            first <- 0
+        end
+        cx.pos <- cx.pos + 1
+    end
+end
+
+proc at_kw(cx: ref Ctx, k: u64) -> word
+    if tkind(cx) != TK_KW
+        ret 0
+    end
+    if tsub(cx) != k
+        ret 0
+    end
+    ret 1
+end
+
+proc at_op(cx: ref Ctx, code: u64) -> word
+    if tkind(cx) != TK_OP
+        ret 0
+    end
+    if tsub(cx) != code
+        ret 0
+    end
+    ret 1
+end
+
+proc at_ident(cx: ref Ctx) -> word
+    if tkind(cx) == TK_IDENT
+        ret 1
+    end
+    ret 0
+end
+
+proc eat_kw(cx: ref Ctx, k: u64) -> word
+    if at_kw(cx, k)
+        adv(cx)
+        ret 1
+    end
+    ret 0
+end
+
+proc eat_op(cx: ref Ctx, code: u64) -> word
+    if at_op(cx, code)
+        adv(cx)
+        ret 1
+    end
+    ret 0
+end
+
+proc open_bracket(cx: ref Ctx)
+    cx.depth <- cx.depth + 1
+    adv(cx)
+end
+
+proc close_bracket(cx: ref Ctx, code: u64)
+    if cx.depth > 0
+        cx.depth <- cx.depth - 1
+    end
+    eat_op(cx, code)
+end
+
+proc skip_nl(cx: ref Ctx)
+    while tkind(cx) == TK_NL
+        adv(cx)
+    end
+end
+
+-- Types ------------------------------------------------------------------------
+
+proc name_is(cx: ref Ctx, i: u64, s: view u8) -> word
+    ret view_eq(tok_text(cx, i), s)
+end
+
+proc is_prim_name(cx: ref Ctx, i: u64) -> word
+    tab := "u8 u16 u32 u64 s8 s16 s32 s64 word uword byte bool physaddr f32 f64 "
+    txt := tok_text(cx, i)
+    j := 0
+    while j < tab.len
+        e := j
+        while tab[e] != B_SPACE
+            e <- e + 1
+        end
+        if view_eq(tab[j..e], txt)
+            ret 1
+        end
+        j <- e + 1
+    end
+    ret 0
+end
+
+proc at_prim(cx: ref Ctx) -> word
+    if at_ident(cx) == 0
+        ret 0
+    end
+    ret is_prim_name(cx, tpos(cx))
+end
+
+proc eat_path(cx: ref Ctx)
+    -- ident { "." member }; after a dot any keyword is an ordinary name (§7.7).
+    adv(cx)
+    while at_op(cx, OP_DOT)
+        nxt := ctok(cx, tpos(cx) + 1)
+        if nxt.kind == TK_IDENT
+            adv(cx)
+            adv(cx)
+            continue
+        end
+        if nxt.kind == TK_KW
+            adv(cx)
+            adv(cx)
+            continue
+        end
+        ret
+    end
+end
+
+proc eat_type_core(cx: ref Ctx)
+    if at_op(cx, OP_LBRACK)
+        adv(cx)
+        if tkind(cx) == TK_INT
+            adv(cx)
+        end
+        eat_op(cx, OP_RBRACK)
+        eat_type_core(cx)
+        ret
+    end
+    if eat_kw(cx, KW_MMIO)
+        eat_type_core(cx)
+        ret
+    end
+    if eat_kw(cx, KW_RW)
+        eat_type_core(cx)
+        ret
+    end
+    if eat_kw(cx, KW_VIEW)
+        eat_type_core(cx)
+        ret
+    end
+    if eat_kw(cx, KW_REF)
+        eat_type_core(cx)
+        ret
+    end
+    if eat_kw(cx, KW_OWN)
+        eat_type_core(cx)
+        ret
+    end
+    if eat_kw(cx, KW_PORT)
+        eat_type_core(cx)
+        ret
+    end
+    if eat_kw(cx, KW_BE)
+        eat_type_core(cx)
+        ret
+    end
+    if eat_kw(cx, KW_LE)
+        eat_type_core(cx)
+        ret
+    end
+    if at_kw(cx, KW_ADDR)
+        adv(cx)
+        if at_ident(cx)
+            eat_type_core(cx)
+        end
+        ret
+    end
+    if eat_kw(cx, KW_ZONE)
+        ret
+    end
+    if eat_kw(cx, KW_NONE)
+        ret
+    end
+    if eat_kw(cx, KW_NEVER)
+        ret
+    end
+    if at_ident(cx)
+        eat_path(cx)
+    end
+end
+
+proc p_type(cx: ref Ctx) -> u64
+    t0 := tpos(cx)
+    eat_type_core(cx)
+    while at_kw(cx, KW_OR)
+        adv(cx)
+        eat_type_core(cx)
+    end
+    n := mk(cx, N_TYPE, t0)
+    nd := node_at(cx, n)
+    nd.t1 <- tpos(cx)
+    ret n
+end
+
+proc p_type_noor(cx: ref Ctx) -> u64
+    -- A type in a position where `or` belongs to the enclosing expression.
+    t0 := tpos(cx)
+    eat_type_core(cx)
+    n := mk(cx, N_TYPE, t0)
+    nd := node_at(cx, n)
+    nd.t1 <- tpos(cx)
+    ret n
+end
+
+-- Expressions -------------------------------------------------------------------
+
+proc p_int(cx: ref Ctx) -> u64
+    i := tpos(cx)
+    t := ctok(cx, i)
+    n := mk(cx, N_INT, i)
+    nd := node_at(cx, n)
+    nd.val <- t.val
+    adv(cx)
+    ret n
+end
+
+proc p_simple(cx: ref Ctx, kind: u64) -> u64
+    i := tpos(cx)
+    n := mk(cx, kind, i)
+    adv(cx)
+    ret n
+end
+
+proc p_mode(cx: ref Ctx) -> u64
+    -- `.wrap` / `.sat` / `.checked` / `.bits` after a type name.
+    adv(cx)
+    i := tpos(cx)
+    n := mk(cx, N_MODE, i)
+    adv(cx)
+    ret n
+end
+
+proc mode_follows(cx: ref Ctx) -> word
+    -- Current token is `.` and the one after it is a conversion mode.
+    if at_op(cx, OP_DOT) == 0
+        ret 0
+    end
+    i := tpos(cx) + 1
+    if name_is(cx, i, "wrap")
+        ret 1
+    end
+    if name_is(cx, i, "sat")
+        ret 1
+    end
+    if name_is(cx, i, "checked")
+        ret 1
+    end
+    if name_is(cx, i, "bits")
+        ret 1
+    end
+    ret 0
+end
+
+proc p_paren_expr(cx: ref Ctx) -> u64
+    open_bracket(cx)
+    e := p_expr(cx)
+    close_bracket(cx, OP_RPAREN)
+    ret e
+end
+
+proc p_convert(cx: ref Ctx, ty: u64) -> u64
+    -- A type followed by an optional mode and a parenthesized operand.
+    tyn := node_at(cx, ty)
+    n := mk(cx, N_CONVERT, tyn.t0)
+    nd := node_at(cx, n)
+    nd.t0 <- tyn.t0
+    nd.t1 <- tyn.t1
+    if mode_follows(cx)
+        add_kid(cx, n, p_mode(cx))
+    end
+    add_kid(cx, n, p_paren_expr(cx))
+    ret n
+end
+
+proc p_callop(cx: ref Ctx, sub: u64) -> u64
+    i := tpos(cx)
+    adv(cx)
+    n := mk(cx, N_UNOP, i)
+    nd := node_at(cx, n)
+    nd.sub <- sub
+    add_kid(cx, n, p_paren_expr(cx))
+    ret n
+end
+
+proc p_lit(cx: ref Ctx, base: u64) -> u64
+    -- Name { field: expr, ... }
+    n := mk(cx, N_LIT, tpos(cx))
+    add_kid(cx, n, base)
+    open_bracket(cx)
+    while 1
+        if at_op(cx, OP_RBRACE)
+            break
+        end
+        if tkind(cx) == TK_EOF
+            break
+        end
+        fi := tpos(cx)
+        adv(cx)
+        eat_op(cx, OP_COLON)
+        f := mk(cx, N_LITFIELD, fi)
+        add_kid(cx, f, p_expr(cx))
+        add_kid(cx, n, f)
+        if eat_op(cx, OP_COMMA) == 0
+            break
+        end
+    end
+    close_bracket(cx, OP_RBRACE)
+    ret n
+end
+
+proc p_array(cx: ref Ctx) -> u64
+    n := mk(cx, N_ARRAY, tpos(cx))
+    open_bracket(cx)
+    while 1
+        if at_op(cx, OP_RBRACE)
+            break
+        end
+        if tkind(cx) == TK_EOF
+            break
+        end
+        add_kid(cx, n, p_expr(cx))
+        if eat_op(cx, OP_COMMA) == 0
+            break
+        end
+    end
+    close_bracket(cx, OP_RBRACE)
+    ret n
+end
+
+proc p_type_prim(cx: ref Ctx) -> u64
+    -- A type in expression position: one primitive, or `port`/`be`/`le` plus
+    -- one. It never swallows a following `.wrap`/`.bits` (that is the mode).
+    t0 := tpos(cx)
+    if at_kw(cx, KW_PORT)
+        adv(cx)
+    end
+    if at_kw(cx, KW_BE)
+        adv(cx)
+    end
+    if at_kw(cx, KW_LE)
+        adv(cx)
+    end
+    if at_ident(cx)
+        adv(cx)
+    end
+    n := mk(cx, N_TYPE, t0)
+    nd := node_at(cx, n)
+    nd.t1 <- tpos(cx)
+    ret n
+end
+
+proc p_typestart(cx: ref Ctx) -> u64
+    -- A primitive or `port`/`be`/`le` type in expression position: a
+    -- conversion when an operand follows, otherwise a type argument (§7.4).
+    ty := p_type_prim(cx)
+    if at_op(cx, OP_LPAREN)
+        ret p_convert(cx, ty)
+    end
+    if mode_follows(cx)
+        ret p_convert(cx, ty)
+    end
+    tyn := node_at(cx, ty)
+    n := mk(cx, N_TYPEARG, tyn.t0)
+    nd := node_at(cx, n)
+    nd.t1 <- tyn.t1
+    ret n
+end
+
+proc addr_is_convert(cx: ref Ctx) -> word
+    -- §7.8: `addr` before a primitive type, `(` or `Name (` is a conversion.
+    i := tpos(cx) + 1
+    t := ctok(cx, i)
+    if t.kind == TK_OP
+        if t.sub == OP_LPAREN
+            ret 1
+        end
+        ret 0
+    end
+    if t.kind != TK_IDENT
+        ret 0
+    end
+    if is_prim_name(cx, i)
+        ret 1
+    end
+    t2 := ctok(cx, i + 1)
+    if t2.kind == TK_OP
+        if t2.sub == OP_LPAREN
+            ret 1
+        end
+    end
+    ret 0
+end
+
+proc p_primary(cx: ref Ctx) -> u64
+    k := tkind(cx)
+    if k == TK_INT
+        ret p_int(cx)
+    end
+    if k == TK_STR
+        ret p_simple(cx, N_STR)
+    end
+    if k == TK_CHAR
+        ret p_simple(cx, N_CHAR)
+    end
+    if at_op(cx, OP_LPAREN)
+        ret p_paren_expr(cx)
+    end
+    if at_op(cx, OP_LBRACK)
+        n := mk(cx, N_RAWLOAD, tpos(cx))
+        open_bracket(cx)
+        add_kid(cx, n, p_expr(cx))
+        close_bracket(cx, OP_RBRACK)
+        ret n
+    end
+    if at_op(cx, OP_LBRACE)
+        ret p_array(cx)
+    end
+    if at_kw(cx, KW_TRUE)
+        ret p_simple(cx, N_TRUE)
+    end
+    if at_kw(cx, KW_FALSE)
+        ret p_simple(cx, N_FALSE)
+    end
+    if at_kw(cx, KW_NONE)
+        ret p_simple(cx, N_NONE)
+    end
+    if at_kw(cx, KW_WRAP)
+        ret p_callop(cx, U_WRAP)
+    end
+    if at_kw(cx, KW_SAT)
+        ret p_callop(cx, U_SAT)
+    end
+    if at_kw(cx, KW_CHECKED)
+        ret p_callop(cx, U_CHECKED)
+    end
+    if at_kw(cx, KW_PORT)
+        ret p_typestart(cx)
+    end
+    if at_kw(cx, KW_BE)
+        ret p_typestart(cx)
+    end
+    if at_kw(cx, KW_LE)
+        ret p_typestart(cx)
+    end
+    if at_prim(cx)
+        ret p_typestart(cx)
+    end
+    if at_ident(cx)
+        ret p_simple(cx, N_NAME)
+    end
+    n2 := mk(cx, N_NAME, tpos(cx))
+    where := tpos(cx)
+    if cx.contnl > 0
+        if cx.contnl + 1 == cx.pos
+            where <- cx.contnl
+        end
+    end
+    diag_at(cx, 12, where)
+    -- A block closer, a newline or the end of input is left for the caller,
+    -- so one missing operand does not swallow the `end` of its block.
+    k2 := tkind(cx)
+    if k2 == TK_EOF
+        ret n2
+    end
+    if k2 == TK_NL
+        ret n2
+    end
+    if k2 == TK_KW
+        s2 := tsub(cx)
+        if s2 == KW_END
+            ret n2
+        end
+        if s2 == KW_ELSE
+            ret n2
+        end
+        if s2 == KW_ELIF
+            ret n2
+        end
+        if s2 == KW_WHEN
+            ret n2
+        end
+    end
+    adv(cx)
+    ret n2
+end
+
+proc at_named_arg(cx: ref Ctx) -> word
+    if at_ident(cx) == 0
+        ret 0
+    end
+    t := ctok(cx, tpos(cx) + 1)
+    if t.kind != TK_OP
+        ret 0
+    end
+    if t.sub == OP_COLON
+        ret 1
+    end
+    ret 0
+end
+
+proc p_args(cx: ref Ctx, call: u64)
+    -- Arguments are all positional or all named (§4, E0022).
+    open_bracket(cx)
+    npos := 0
+    nnamed := 0
+    while 1
+        if at_op(cx, OP_RPAREN)
+            break
+        end
+        if tkind(cx) == TK_EOF
+            break
+        end
+        if at_named_arg(cx)
+            adv(cx)
+            adv(cx)
+            if npos > 0
+                diag_at(cx, 22, tpos(cx))
+            end
+            nnamed <- nnamed + 1
+        else
+            if nnamed > 0
+                diag_at(cx, 22, tpos(cx))
+            end
+            npos <- npos + 1
+        end
+        add_kid(cx, call, p_expr(cx))
+        if eat_op(cx, OP_COMMA) == 0
+            break
+        end
+    end
+    close_bracket(cx, OP_RPAREN)
+end
+
+proc p_postfix(cx: ref Ctx) -> u64
+    e := p_primary(cx)
+    while 1
+        if at_op(cx, OP_DOT)
+            i := tpos(cx) + 1
+            t := ctok(cx, i)
+            if t.kind == TK_OP
+                ret e
+            end
+            adv_cont(cx)
+            f := mk(cx, N_FIELD, tpos(cx))
+            add_kid(cx, f, e)
+            adv(cx)
+            e <- f
+            continue
+        end
+        if at_op(cx, OP_LPAREN)
+            c := mk(cx, N_CALL, tpos(cx))
+            add_kid(cx, c, e)
+            p_args(cx, c)
+            e <- c
+            continue
+        end
+        if at_op(cx, OP_LBRACK)
+            ix := mk(cx, N_INDEX, tpos(cx))
+            add_kid(cx, ix, e)
+            open_bracket(cx)
+            add_kid(cx, ix, p_range(cx))
+            close_bracket(cx, OP_RBRACK)
+            e <- ix
+            continue
+        end
+        if at_op(cx, OP_LBRACE)
+            if cx.nolit
+                ret e
+            end
+            e <- p_lit(cx, e)
+            continue
+        end
+        ret e
+    end
+end
+
+proc p_unary(cx: ref Ctx) -> u64
+    if at_op(cx, OP_MINUS)
+        i := tpos(cx)
+        adv(cx)
+        n := mk(cx, N_UNOP, i)
+        nd := node_at(cx, n)
+        nd.sub <- U_NEG
+        add_kid(cx, n, p_unary(cx))
+        ret n
+    end
+    if at_op(cx, OP_TILDE)
+        i2 := tpos(cx)
+        adv(cx)
+        n2 := mk(cx, N_UNOP, i2)
+        nd2 := node_at(cx, n2)
+        nd2.sub <- U_BITNOT
+        add_kid(cx, n2, p_unary(cx))
+        ret n2
+    end
+    if at_kw(cx, KW_NOT)
+        i3 := tpos(cx)
+        adv(cx)
+        n3 := mk(cx, N_UNOP, i3)
+        nd3 := node_at(cx, n3)
+        nd3.sub <- U_NOT
+        add_kid(cx, n3, p_unary(cx))
+        ret n3
+    end
+    if at_kw(cx, KW_ADDR)
+        if addr_is_convert(cx)
+            ty := p_type_noor(cx)
+            ret p_convert(cx, ty)
+        end
+        i4 := tpos(cx)
+        adv(cx)
+        n4 := mk(cx, N_UNOP, i4)
+        nd4 := node_at(cx, n4)
+        nd4.sub <- U_ADDROF
+        add_kid(cx, n4, p_unary(cx))
+        ret n4
+    end
+    if at_kw(cx, KW_REF)
+        i5 := tpos(cx)
+        adv(cx)
+        n5 := mk(cx, N_UNOP, i5)
+        nd5 := node_at(cx, n5)
+        nd5.sub <- U_REFOF
+        add_kid(cx, n5, p_unary(cx))
+        ret n5
+    end
+    if at_kw(cx, KW_RW)
+        adv(cx)
+        ret p_unary(cx)
+    end
+    ret p_postfix(cx)
+end
+
+proc p_binop(cx: ref Ctx, left: u64, i: u64, right: u64) -> u64
+    n := mk(cx, N_BINOP, i)
+    add_kid(cx, n, left)
+    add_kid(cx, n, right)
+    ret n
+end
+
+proc p_mul(cx: ref Ctx) -> u64
+    e := p_unary(cx)
+    while 1
+        hit := 0
+        if at_op(cx, OP_STAR)
+            hit <- 1
+        end
+        if at_op(cx, OP_SLASH)
+            hit <- 1
+        end
+        if at_op(cx, OP_PERCENT)
+            hit <- 1
+        end
+        if hit == 0
+            ret e
+        end
+        i := tpos(cx)
+        adv_cont(cx)
+        e <- p_binop(cx, e, i, p_unary(cx))
+    end
+end
+
+proc p_add(cx: ref Ctx) -> u64
+    e := p_mul(cx)
+    while 1
+        hit := 0
+        if at_op(cx, OP_PLUS)
+            hit <- 1
+        end
+        if at_op(cx, OP_MINUS)
+            hit <- 1
+        end
+        if hit == 0
+            ret e
+        end
+        i := tpos(cx)
+        adv_cont(cx)
+        e <- p_binop(cx, e, i, p_mul(cx))
+    end
+end
+
+proc p_shift(cx: ref Ctx) -> u64
+    e := p_add(cx)
+    while 1
+        hit := 0
+        if at_op(cx, OP_SHL)
+            hit <- 1
+        end
+        if at_op(cx, OP_SHR)
+            hit <- 1
+        end
+        if hit == 0
+            ret e
+        end
+        i := tpos(cx)
+        adv_cont(cx)
+        e <- p_binop(cx, e, i, p_add(cx))
+    end
+end
+
+proc p_band(cx: ref Ctx) -> u64
+    e := p_shift(cx)
+    while at_op(cx, OP_AMP)
+        i := tpos(cx)
+        adv_cont(cx)
+        e <- p_binop(cx, e, i, p_shift(cx))
+    end
+    ret e
+end
+
+proc p_bxor(cx: ref Ctx) -> u64
+    e := p_band(cx)
+    while at_op(cx, OP_CARET)
+        i := tpos(cx)
+        adv_cont(cx)
+        e <- p_binop(cx, e, i, p_band(cx))
+    end
+    ret e
+end
+
+proc p_bor(cx: ref Ctx) -> u64
+    e := p_bxor(cx)
+    while at_op(cx, OP_BAR)
+        i := tpos(cx)
+        adv_cont(cx)
+        e <- p_binop(cx, e, i, p_bxor(cx))
+    end
+    ret e
+end
+
+proc at_cmp(cx: ref Ctx) -> word
+    if tkind(cx) != TK_OP
+        ret 0
+    end
+    s := tsub(cx)
+    if s == OP_EQ
+        ret 1
+    end
+    if s == OP_NE
+        ret 1
+    end
+    if s == OP_LE
+        ret 1
+    end
+    if s == OP_GE
+        ret 1
+    end
+    if s == OP_LT
+        ret 1
+    end
+    if s == OP_GT
+        ret 1
+    end
+    ret 0
+end
+
+proc p_cmp(cx: ref Ctx) -> u64
+    e := p_bor(cx)
+    if at_cmp(cx) == 0
+        ret e
+    end
+    i := tpos(cx)
+    adv_cont(cx)
+    e <- p_binop(cx, e, i, p_bor(cx))
+    if at_cmp(cx)
+        diag_at(cx, 31, tpos(cx))
+        while at_cmp(cx)
+            adv_cont(cx)
+            p_bor(cx)
+        end
+    end
+    ret e
+end
+
+proc p_and(cx: ref Ctx) -> u64
+    e := p_cmp(cx)
+    while at_kw(cx, KW_AND)
+        i := tpos(cx)
+        adv_cont(cx)
+        e <- p_binop(cx, e, i, p_cmp(cx))
+    end
+    ret e
+end
+
+proc p_or(cx: ref Ctx) -> u64
+    e := p_and(cx)
+    while at_kw(cx, KW_OR)
+        i := tpos(cx)
+        adv_cont(cx)
+        e <- p_binop(cx, e, i, p_and(cx))
+    end
+    ret e
+end
+
+proc starts_expr(cx: ref Ctx) -> word
+    k := tkind(cx)
+    if k == TK_INT
+        ret 1
+    end
+    if k == TK_STR
+        ret 1
+    end
+    if k == TK_CHAR
+        ret 1
+    end
+    if k == TK_IDENT
+        ret 1
+    end
+    if k == TK_KW
+        s := tsub(cx)
+        if s <= KW_TRAPS
+            ret 0
+        end
+        if s == KW_END
+            ret 0
+        end
+        if s == KW_THEN
+            ret 0
+        end
+        if s == KW_ELSE
+            ret 0
+        end
+        if s == KW_ELIF
+            ret 0
+        end
+        if s == KW_IN
+            ret 0
+        end
+        if s == KW_AT
+            ret 0
+        end
+        if s == KW_FROM
+            ret 0
+        end
+        if s == KW_WHEN
+            ret 0
+        end
+        ret 1
+    end
+    if k != TK_OP
+        ret 0
+    end
+    s2 := tsub(cx)
+    if s2 == OP_LPAREN
+        ret 1
+    end
+    if s2 == OP_LBRACK
+        ret 1
+    end
+    if s2 == OP_LBRACE
+        ret 1
+    end
+    if s2 == OP_MINUS
+        ret 1
+    end
+    if s2 == OP_TILDE
+        ret 1
+    end
+    ret 0
+end
+
+proc p_range(cx: ref Ctx) -> u64
+    lo := 0
+    if at_op(cx, OP_DOTDOT) == 0
+        lo <- p_or(cx)
+    end
+    if at_op(cx, OP_DOTDOT) == 0
+        ret lo
+    end
+    i := tpos(cx)
+    adv(cx)
+    n := mk(cx, N_RANGE, i)
+    add_kid(cx, n, lo)
+    if starts_expr(cx)
+        add_kid(cx, n, p_or(cx))
+    end
+    ret n
+end
+
+proc p_handler(cx: ref Ctx) -> u64
+    if at_kw(cx, KW_FAIL)
+        i := tpos(cx)
+        adv(cx)
+        ret mk(cx, N_FAIL, i)
+    end
+    if at_kw(cx, KW_RET)
+        i2 := tpos(cx)
+        adv(cx)
+        n := mk(cx, N_RET, i2)
+        if starts_expr(cx)
+            add_kid(cx, n, p_range(cx))
+        end
+        ret n
+    end
+    d := mk(cx, N_DEFAULT, tpos(cx))
+    add_kid(cx, d, p_range(cx))
+    ret d
+end
+
+proc p_expr(cx: ref Ctx) -> u64
+    e := p_range(cx)
+    if at_kw(cx, KW_ELSE) == 0
+        ret e
+    end
+    if cx.noelse
+        diag_at(cx, 16, tpos(cx))
+    end
+    i := tpos(cx)
+    adv(cx)
+    n := mk(cx, N_FALLBACK, i)
+    add_kid(cx, n, e)
+    add_kid(cx, n, p_handler(cx))
+    ret n
+end
+
+proc p_cond(cx: ref Ctx) -> u64
+    -- A condition may not be followed by a `{` block opener (§7.1, E0032).
+    cx.nolit <- 1
+    e := p_expr(cx)
+    cx.nolit <- 0
+    ret e
+end
+
+-- Diagnostics ---------------------------------------------------------------
+
+proc pmsg(code: u64) -> view u8
+    if code == 10
+        ret "reserved word used as a name"
+    end
+    if code == 11
+        ret "expected a different token here"
+    end
+    if code == 12
+        ret "expected expression"
+    end
+    if code == 13
+        ret "expected a type"
+    end
+    if code == 14
+        ret "missing `end`"
+    end
+    if code == 15
+        ret "expected a declaration"
+    end
+    if code == 16
+        ret "ambiguous `else` inside a one-line `if ... then`"
+    end
+    if code == 17
+        ret "store target is not a place"
+    end
+    if code == 18
+        ret "bad, duplicate or misplaced clause"
+    end
+    if code == 19
+        ret "bad machine-block line or operand"
+    end
+    if code == 20
+        ret "expected end of line"
+    end
+    if code == 22
+        ret "mixed named and positional arguments"
+    end
+    if code == 23
+        ret "import after a declaration"
+    end
+    if code == 24
+        ret "`module` line is not first"
+    end
+    if code == 31
+        ret "chained comparison"
+    end
+    if code == 32
+        ret "`{` at end of line used as a block opener"
+    end
+    ret "syntax error"
+end
+
+proc diag_at(cx: ref Ctx, code: u64, i: u64)
+    t := ctok(cx, i)
+    tmp := cx.tmp
+    put(2, "error[E00")
+    if code < 10
+        put(2, "0")
+    end
+    put_uint(2, tmp, code)
+    put(2, "]: ")
+    put(2, pmsg(code))
+    put(2, "\n --> stdin:")
+    put_uint(2, tmp, t.line)
+    put(2, ":")
+    put_uint(2, tmp, t.col)
+    put(2, "\n")
+    cx.nerr <- cx.nerr + 1
+end
+
+proc warn_at(cx: ref Ctx, code: u64, i: u64)
+    t := ctok(cx, i)
+    tmp := cx.tmp
+    put(2, "warning[W000")
+    put_uint(2, tmp, code)
+    put(2, "]: doc comment documents nothing\n --> stdin:")
+    put_uint(2, tmp, t.line)
+    put(2, ":")
+    put_uint(2, tmp, t.col)
+    put(2, "\n")
+    cx.nwarn <- cx.nwarn + 1
+end
+
+proc skip_raw_line(cx: ref Ctx)
+    -- Advance past the next newline token, ignoring bracket depth.
+    while 1
+        t := ctok(cx, cx.pos)
+        if t.kind == TK_EOF
+            ret
+        end
+        cx.pos <- cx.pos + 1
+        if t.kind == TK_NL
+            ret
+        end
+    end
+end
+
+proc pow10(n: u64) -> u64
+    r := 1
+    i := 0
+    while i < n
+        r <- r * 10
+        i <- i + 1
+    end
+    ret r
+end
+
+proc seen_count(seen: u64, code: u64) -> u64
+    ret seen / pow10(code) % 10
+end
+
+proc seen_add(seen: u64, code: u64) -> u64
+    ret seen + pow10(code)
+end
+
+proc is_pow2(v: u64) -> word
+    if v == 0
+        ret 0
+    end
+    p := 1
+    while p < v
+        p <- p * 2
+    end
+    if p == v
+        ret 1
+    end
+    ret 0
+end
+
+proc want_name(cx: ref Ctx) -> u64
+    -- A name is expected here; a reserved word in its place is E0010.
+    i := tpos(cx)
+    if tkind(cx) == TK_KW
+        diag_at(cx, 10, i)
+        adv(cx)
+        ret i
+    end
+    if at_ident(cx) == 0
+        diag_at(cx, 11, i)
+        ret i
+    end
+    adv(cx)
+    ret i
+end
+
+proc at_closer(cx: ref Ctx) -> word
+    if tkind(cx) != TK_KW
+        ret 0
+    end
+    s := tsub(cx)
+    if s == KW_END
+        ret 1
+    end
+    if s == KW_ELSE
+        ret 1
+    end
+    if s == KW_ELIF
+        ret 1
+    end
+    if s == KW_WHEN
+        ret 1
+    end
+    ret 0
+end
+
+proc recover_brace(cx: ref Ctx)
+    -- A `{` that opened a block by mistake (E0032): read it as the literal it
+    -- looks like, so the diagnostics inside it are reported once and the
+    -- closing `}` is not mistaken for a statement.
+    open_bracket(cx)
+    while 1
+        if at_op(cx, OP_RBRACE)
+            break
+        end
+        if tkind(cx) == TK_EOF
+            break
+        end
+        if at_ident(cx)
+            adv(cx)
+            if eat_op(cx, OP_COLON) == 0
+                diag_at(cx, 11, tpos(cx))
+                skip_raw_line(cx)
+            end
+        end
+        p_expr(cx)
+        if eat_op(cx, OP_COMMA) == 0
+            break
+        end
+    end
+    close_bracket(cx, OP_RBRACE)
+end
+
+proc end_line(cx: ref Ctx)
+    -- One statement per line (§1); anything left on it is E0020, except a
+    -- block-opening `{` at the end of a line, which is E0032 (§7.1).
+    k := tkind(cx)
+    if k == TK_NL
+        adv(cx)
+        ret
+    end
+    if k == TK_EOF
+        ret
+    end
+    if at_closer(cx)
+        -- The line ended inside a continuation; leave the closer to its block
+        -- and report only when nothing else was wrong with this statement.
+        if cx.nerr == cx.errmark
+            diag_at(cx, 20, tpos(cx))
+        end
+        ret
+    end
+    i := tpos(cx)
+    code := 20
+    if at_op(cx, OP_LBRACE)
+        nxt := ctok(cx, i + 1)
+        if nxt.kind == TK_NL
+            code <- 32
+        end
+    end
+    diag_at(cx, code, i)
+    if code == 32
+        recover_brace(cx)
+    end
+    while 1
+        k2 := tkind(cx)
+        if k2 == TK_EOF
+            ret
+        end
+        if k2 == TK_NL
+            adv(cx)
+            ret
+        end
+        if at_closer(cx)
+            ret
+        end
+        adv(cx)
+    end
+end
+
+-- Machine blocks ---------------------------------------------------------------
+
+proc pm_word(cx: ref Ctx) -> u64
+    -- A register, a mnemonic operand symbol or a `.label` reference.
+    i := tpos(cx)
+    n := mk(cx, N_MWORD, i)
+    if at_op(cx, OP_DOT)
+        adv(cx)
+    end
+    if at_ident(cx)
+        eat_path(cx)
+    end
+    nd := node_at(cx, n)
+    nd.t1 <- tpos(cx)
+    ret n
+end
+
+proc pm_int(cx: ref Ctx) -> u64
+    neg := 0
+    if at_op(cx, OP_MINUS)
+        neg <- 1
+        adv(cx)
+    end
+    n := p_int(cx)
+    nd := node_at(cx, n)
+    nd.sub <- neg
+    ret n
+end
+
+proc pm_term(cx: ref Ctx, sign: u64) -> u64
+    n := mk(cx, N_MTERM, tpos(cx))
+    nd := node_at(cx, n)
+    nd.sub <- sign
+    if tkind(cx) == TK_INT
+        add_kid(cx, n, p_int(cx))
+    else
+        add_kid(cx, n, pm_word(cx))
+    end
+    if at_op(cx, OP_STAR)
+        adv(cx)
+        if tkind(cx) == TK_INT
+            t := ctok(cx, tpos(cx))
+            nd2 := node_at(cx, n)
+            nd2.val <- t.val
+            adv(cx)
+        else
+            diag_at(cx, 19, tpos(cx))
+        end
+        -- Only an index register may be scaled, never a dotted symbol.
+        w := kid1(cx, n)
+        wn := node_at(cx, w)
+        if wn.t1 > wn.t0 + 1
+            diag_at(cx, 19, wn.t0)
+        end
+    end
+    ret n
+end
+
+proc pm_mem(cx: ref Ctx, size: u64, has_size: u64) -> u64
+    n := mk(cx, N_MEM, size)
+    nd := node_at(cx, n)
+    nd.val <- has_size
+    open_bracket(cx)
+    sign := 0
+    while 1
+        if at_op(cx, OP_RBRACK)
+            break
+        end
+        if tkind(cx) == TK_EOF
+            break
+        end
+        add_kid(cx, n, pm_term(cx, sign))
+        if at_op(cx, OP_PLUS)
+            sign <- 0
+            adv(cx)
+            continue
+        end
+        if at_op(cx, OP_MINUS)
+            sign <- 1
+            adv(cx)
+            continue
+        end
+        break
+    end
+    close_bracket(cx, OP_RBRACK)
+    ret n
+end
+
+proc pm_operand(cx: ref Ctx) -> u64
+    if at_op(cx, OP_LBRACK)
+        ret pm_mem(cx, 0, 0)
+    end
+    if tkind(cx) == TK_INT
+        ret pm_int(cx)
+    end
+    if at_op(cx, OP_MINUS)
+        ret pm_int(cx)
+    end
+    if at_ident(cx)
+        i := tpos(cx)
+        nxt := ctok(cx, i + 1)
+        if nxt.kind == TK_OP
+            if nxt.sub == OP_LBRACK
+                adv(cx)
+                ret pm_mem(cx, i, 1)
+            end
+        end
+        ret pm_word(cx)
+    end
+    if at_op(cx, OP_DOT)
+        ret pm_word(cx)
+    end
+    diag_at(cx, 19, tpos(cx))
+    adv(cx)
+    ret 0
+end
+
+proc pm_directive_kind(cx: ref Ctx) -> word
+    -- `in REG <- e` and `out REG -> lv` are directives; `in REG, REG` is the
+    -- instruction (§7.6): the token after the register decides. 1 = in, 2 = out.
+    i := tpos(cx)
+    dir := 0
+    if at_kw(cx, KW_IN)
+        dir <- 1
+    end
+    if at_ident(cx)
+        if name_is(cx, i, "out")
+            dir <- 2
+        end
+        if name_is(cx, i, "in")
+            dir <- 1
+        end
+    end
+    if dir == 0
+        ret 0
+    end
+    t2 := ctok(cx, i + 2)
+    if t2.kind != TK_OP
+        ret 0
+    end
+    if dir == 1
+        if t2.sub == OP_STORE
+            ret 1
+        end
+        ret 0
+    end
+    if t2.sub == OP_ARROW
+        ret 2
+    end
+    ret 0
+end
+
+proc pm_line(cx: ref Ctx, parent: u64)
+    d := pm_directive_kind(cx)
+    if d > 0
+        adv(cx)
+        reg := tpos(cx)
+        adv(cx)
+        adv(cx)
+        kind := N_MIN
+        if d == 2
+            kind <- N_MOUT
+        end
+        n := mk(cx, kind, reg)
+        lv := tpos(cx)
+        e := p_expr(cx)
+        add_kid(cx, n, e)
+        if d == 2
+            en := node_at(cx, e)
+            k := en.kind
+            ok := 0
+            if k == N_NAME
+                ok <- 1
+            end
+            if k == N_FIELD
+                ok <- 1
+            end
+            if k == N_INDEX
+                ok <- 1
+            end
+            if k == N_RAWLOAD
+                ok <- 1
+            end
+            if ok == 0
+                diag_at(cx, 17, lv)
+            end
+        end
+        add_kid(cx, parent, n)
+        end_line(cx)
+        ret
+    end
+    if at_kw(cx, KW_CLOBBER)
+        adv(cx)
+        n2 := mk(cx, N_CLOBBER, tpos(cx))
+        while 1
+            add_kid(cx, n2, pm_word(cx))
+            if eat_op(cx, OP_COMMA) == 0
+                break
+            end
+        end
+        add_kid(cx, parent, n2)
+        end_line(cx)
+        ret
+    end
+    if at_op(cx, OP_DOT)
+        nxt := ctok(cx, tpos(cx) + 2)
+        if nxt.kind == TK_OP
+            if nxt.sub == OP_COLON
+                adv(cx)
+                n3 := mk(cx, N_LABEL, tpos(cx))
+                adv(cx)
+                adv(cx)
+                add_kid(cx, parent, n3)
+                end_line(cx)
+                ret
+            end
+        end
+    end
+    mn := 0
+    if at_ident(cx)
+        mn <- 1
+    end
+    if tkind(cx) == TK_KW
+        mn <- 1
+    end
+    if mn == 0
+        diag_at(cx, 19, tpos(cx))
+        end_line(cx)
+        ret
+    end
+    n4 := mk(cx, N_INSTR, tpos(cx))
+    adv(cx)
+    while 1
+        if tkind(cx) == TK_NL
+            break
+        end
+        if tkind(cx) == TK_EOF
+            break
+        end
+        add_kid(cx, n4, pm_operand(cx))
+        if eat_op(cx, OP_COMMA) == 0
+            break
+        end
+    end
+    add_kid(cx, parent, n4)
+    end_line(cx)
+end
+
+proc p_machine(cx: ref Ctx) -> u64
+    adv(cx)
+    n := mk(cx, N_MACHINE, tpos(cx))
+    if at_ident(cx)
+        adv(cx)
+    end
+    end_line(cx)
+    while 1
+        skip_nl(cx)
+        if tkind(cx) == TK_EOF
+            diag_at(cx, 14, tpos(cx) - 1)
+            ret n
+        end
+        if at_kw(cx, KW_END)
+            adv(cx)
+            end_line(cx)
+            ret n
+        end
+        pm_line(cx, n)
+    end
+end
+
+-- Statements --------------------------------------------------------------------
+
+proc block_closes(cx: ref Ctx) -> word
+    k := tkind(cx)
+    if k == TK_EOF
+        ret 1
+    end
+    if at_kw(cx, KW_END)
+        ret 1
+    end
+    if at_kw(cx, KW_ELSE)
+        ret 1
+    end
+    if at_kw(cx, KW_ELIF)
+        ret 1
+    end
+    if at_kw(cx, KW_WHEN)
+        ret 1
+    end
+    ret 0
+end
+
+proc p_block(cx: ref Ctx, parent: u64)
+    while 1
+        skip_nl(cx)
+        if block_closes(cx)
+            ret
+        end
+        add_kid(cx, parent, p_stmt(cx))
+    end
+end
+
+proc expect_end(cx: ref Ctx)
+    skip_nl(cx)
+    if at_kw(cx, KW_END)
+        adv(cx)
+        end_line(cx)
+        ret
+    end
+    diag_at(cx, 14, tpos(cx) - 1)
+end
+
+proc p_body(cx: ref Ctx) -> u64
+    n := mk(cx, N_BODY, tpos(cx))
+    p_block(cx, n)
+    ret n
+end
+
+proc is_place_expr(cx: ref Ctx, e: u64) -> word
+    en := node_at(cx, e)
+    k := en.kind
+    if k == N_NAME
+        ret 1
+    end
+    if k == N_FIELD
+        ret 1
+    end
+    if k == N_INDEX
+        ret 1
+    end
+    if k == N_RAWLOAD
+        ret 1
+    end
+    ret 0
+end
+
+proc p_if(cx: ref Ctx) -> u64
+    i := tpos(cx)
+    adv(cx)
+    cond := p_cond(cx)
+    if at_kw(cx, KW_THEN)
+        adv(cx)
+        n := mk(cx, N_IFTHEN, i)
+        add_kid(cx, n, cond)
+        cx.noelse <- 1
+        add_kid(cx, n, p_stmt(cx))
+        cx.noelse <- 0
+        ret n
+    end
+    n2 := mk(cx, N_IF, i)
+    add_kid(cx, n2, cond)
+    end_line(cx)
+    th := mk(cx, N_THEN, tpos(cx))
+    p_block(cx, th)
+    add_kid(cx, n2, th)
+    while at_kw(cx, KW_ELIF)
+        ei := tpos(cx)
+        adv(cx)
+        el := mk(cx, N_ELIF, ei)
+        add_kid(cx, el, p_cond(cx))
+        end_line(cx)
+        p_block(cx, el)
+        add_kid(cx, n2, el)
+    end
+    if at_kw(cx, KW_ELSE)
+        oi := tpos(cx)
+        adv(cx)
+        ol := mk(cx, N_ELSE, oi)
+        end_line(cx)
+        p_block(cx, ol)
+        add_kid(cx, n2, ol)
+    end
+    expect_end(cx)
+    ret n2
+end
+
+proc pat_parse(cx: ref Ctx) -> u64
+    -- pattern := "ok" [ident] | "fail" [sub] | sub | literal
+    if name_is(cx, tpos(cx), "ok")
+        i := tpos(cx)
+        adv(cx)
+        n := mk(cx, N_PATOK, tpos(cx))
+        nd := node_at(cx, n)
+        nd.t1 <- tpos(cx)
+        if at_ident(cx)
+            nd.t1 <- tpos(cx) + 1
+            adv(cx)
+        end
+        ret n
+    end
+    if at_kw(cx, KW_FAIL)
+        i2 := tpos(cx)
+        adv(cx)
+        n2 := mk(cx, N_PATFAIL, i2)
+        if at_ident(cx)
+            add_kid(cx, n2, pat_parse(cx))
+        end
+        ret n2
+    end
+    if at_ident(cx)
+        i3 := tpos(cx)
+        adv(cx)
+        n3 := mk(cx, N_PAT, i3)
+        if at_op(cx, OP_LBRACE)
+            open_bracket(cx)
+            while 1
+                if at_op(cx, OP_RBRACE)
+                    break
+                end
+                if tkind(cx) == TK_EOF
+                    break
+                end
+                add_kid(cx, n3, mk(cx, N_NAME, tpos(cx)))
+                adv(cx)
+                if eat_op(cx, OP_COMMA) == 0
+                    break
+                end
+            end
+            close_bracket(cx, OP_RBRACE)
+        end
+        ret n3
+    end
+    if at_op(cx, OP_MINUS)
+        adv(cx)
+        n4 := p_int(cx)
+        nd4 := node_at(cx, n4)
+        nd4.sub <- 1
+        ret n4
+    end
+    ret p_primary(cx)
+end
+
+proc p_case(cx: ref Ctx) -> u64
+    i := tpos(cx)
+    adv(cx)
+    n := mk(cx, N_CASE, i)
+    add_kid(cx, n, p_cond(cx))
+    end_line(cx)
+    skip_nl(cx)
+    while at_kw(cx, KW_WHEN)
+        wi := tpos(cx)
+        adv(cx)
+        w := mk(cx, N_WHEN, wi)
+        add_kid(cx, w, pat_parse(cx))
+        end_line(cx)
+        p_block(cx, w)
+        add_kid(cx, n, w)
+        skip_nl(cx)
+    end
+    if at_kw(cx, KW_ELSE)
+        oi := tpos(cx)
+        adv(cx)
+        o := mk(cx, N_ELSE, oi)
+        end_line(cx)
+        p_block(cx, o)
+        add_kid(cx, n, o)
+    end
+    expect_end(cx)
+    ret n
+end
+
+proc p_zone(cx: ref Ctx) -> u64
+    i := tpos(cx)
+    adv(cx)
+    nm := tpos(cx)
+    if at_ident(cx) == 0
+        -- Without a name this is not a zone statement; do not open a block.
+        diag_at(cx, 11, nm)
+        end_line(cx)
+        ret mk(cx, N_EXPR, nm)
+    end
+    adv(cx)
+    n := mk(cx, N_ZONE, nm)
+    if starts_expr(cx)
+        add_kid(cx, n, p_expr(cx))
+    end
+    nd := node_at(cx, n)
+    if at_kw(cx, KW_AT)
+        adv(cx)
+        nd.sub <- 1
+        add_kid(cx, n, p_expr(cx))
+    end
+    if at_kw(cx, KW_FROM)
+        adv(cx)
+        nd.sub <- 2
+        add_kid(cx, n, p_expr(cx))
+    end
+    end_line(cx)
+    add_kid(cx, n, p_body(cx))
+    expect_end(cx)
+    ret n
+end
+
+proc p_loopish(cx: ref Ctx) -> u64
+    if at_kw(cx, KW_WHILE)
+        i := tpos(cx)
+        adv(cx)
+        n := mk(cx, N_WHILE, i)
+        add_kid(cx, n, p_cond(cx))
+        end_line(cx)
+        add_kid(cx, n, p_body(cx))
+        expect_end(cx)
+        ret n
+    end
+    if at_kw(cx, KW_LOOP)
+        i2 := tpos(cx)
+        adv(cx)
+        n2 := mk(cx, N_LOOP, i2)
+        end_line(cx)
+        add_kid(cx, n2, p_body(cx))
+        expect_end(cx)
+        ret n2
+    end
+    i3 := tpos(cx)
+    adv(cx)
+    nm := want_name(cx)
+    n3 := mk(cx, N_EACH, nm)
+    if eat_kw(cx, KW_IN) == 0
+        diag_at(cx, 11, tpos(cx))
+    end
+    if starts_expr(cx)
+        add_kid(cx, n3, p_cond(cx))
+    else
+        diag_at(cx, 12, tpos(cx))
+        add_kid(cx, n3, mk(cx, N_NAME, tpos(cx)))
+    end
+    end_line(cx)
+    add_kid(cx, n3, p_body(cx))
+    expect_end(cx)
+    ret n3
+end
+
+proc p_stmt(cx: ref Ctx) -> u64
+    cx.errmark <- cx.nerr
+    if tkind(cx) == TK_KW
+        if tsub(cx) > KW_CHECKED
+            -- A word reserved for a later version used as a name (E0010).
+            diag_at(cx, 10, tpos(cx))
+            rwtok := tpos(cx)
+            adv(cx)
+            if at_op(cx, OP_COLON)
+                adv(cx)
+                pl0 := mk(cx, N_PLACE, rwtok)
+                add_kid(cx, pl0, p_type(cx))
+                if at_op(cx, OP_STORE)
+                    adv_cont(cx)
+                    add_kid(cx, pl0, p_expr(cx))
+                end
+                end_line(cx)
+                ret pl0
+            end
+            if at_op(cx, OP_BIND)
+                adv_cont(cx)
+                b0 := mk(cx, N_BIND, rwtok)
+                add_kid(cx, b0, p_expr(cx))
+                end_line(cx)
+                ret b0
+            end
+            end_line(cx)
+            ret mk(cx, N_EXPR, rwtok)
+        end
+    end
+    if at_kw(cx, KW_RET)
+        i := tpos(cx)
+        adv(cx)
+        n := mk(cx, N_RET, i)
+        if starts_expr(cx)
+            add_kid(cx, n, p_expr(cx))
+        end
+        end_line(cx)
+        ret n
+    end
+    if at_kw(cx, KW_FAIL)
+        i2 := tpos(cx)
+        adv(cx)
+        n2 := mk(cx, N_FAIL, i2)
+        if starts_expr(cx)
+            add_kid(cx, n2, p_expr(cx))
+        end
+        end_line(cx)
+        ret n2
+    end
+    if at_kw(cx, KW_BREAK)
+        i3 := tpos(cx)
+        adv(cx)
+        end_line(cx)
+        ret mk(cx, N_BREAK, i3)
+    end
+    if at_kw(cx, KW_CONTINUE)
+        i4 := tpos(cx)
+        adv(cx)
+        end_line(cx)
+        ret mk(cx, N_CONTINUE, i4)
+    end
+    if at_kw(cx, KW_IF)
+        ret p_if(cx)
+    end
+    if at_kw(cx, KW_WHILE)
+        ret p_loopish(cx)
+    end
+    if at_kw(cx, KW_EACH)
+        ret p_loopish(cx)
+    end
+    if at_kw(cx, KW_LOOP)
+        ret p_loopish(cx)
+    end
+    if at_kw(cx, KW_CASE)
+        ret p_case(cx)
+    end
+    if at_kw(cx, KW_ZONE)
+        ret p_zone(cx)
+    end
+    if at_kw(cx, KW_MACHINE)
+        m := p_machine(cx)
+        ret m
+    end
+    st := tpos(cx)
+    if at_ident(cx)
+        nxt := ctok(cx, st + 1)
+        if nxt.kind == TK_OP
+            if nxt.sub == OP_BIND
+                adv(cx)
+                adv_cont(cx)
+                b := mk(cx, N_BIND, st)
+                add_kid(cx, b, p_expr(cx))
+                end_line(cx)
+                ret b
+            end
+            if nxt.sub == OP_COLON
+                adv(cx)
+                adv(cx)
+                ty := p_type(cx)
+                if at_op(cx, OP_BIND)
+                    -- `x : T := e` is a binding with an annotation (§4).
+                    adv_cont(cx)
+                    tb := mk(cx, N_BIND, st)
+                    tbn := node_at(cx, tb)
+                    tbn.val <- 2
+                    add_kid(cx, tb, ty)
+                    add_kid(cx, tb, p_expr(cx))
+                    end_line(cx)
+                    ret tb
+                end
+                pl := mk(cx, N_PLACE, st)
+                add_kid(cx, pl, ty)
+                if at_op(cx, OP_STORE)
+                    adv_cont(cx)
+                    add_kid(cx, pl, p_expr(cx))
+                end
+                end_line(cx)
+                ret pl
+            end
+        end
+    end
+    e := p_expr(cx)
+    if at_op(cx, OP_STORE)
+        adv_cont(cx)
+        s := mk(cx, N_STORE, st)
+        add_kid(cx, s, e)
+        add_kid(cx, s, p_expr(cx))
+        if is_place_expr(cx, e) == 0
+            diag_at(cx, 17, st)
+        end
+        end_line(cx)
+        ret s
+    end
+    if at_op(cx, OP_MOVE)
+        adv_cont(cx)
+        s2 := mk(cx, N_MOVE, st)
+        add_kid(cx, s2, e)
+        add_kid(cx, s2, p_expr(cx))
+        if is_place_expr(cx, e) == 0
+            diag_at(cx, 17, st)
+        end
+        end_line(cx)
+        ret s2
+    end
+    x := mk(cx, N_EXPR, st)
+    add_kid(cx, x, e)
+    end_line(cx)
+    ret x
+end
+
+-- Declarations -----------------------------------------------------------------
+
+proc clause_code(cx: ref Ctx) -> word
+    if at_kw(cx, KW_PERMIT)
+        ret C_PERMIT
+    end
+    if at_kw(cx, KW_CALLS)
+        ret C_CALLS
+    end
+    if at_kw(cx, KW_SECTION)
+        ret C_SECTION
+    end
+    if at_kw(cx, KW_ALIGN)
+        ret C_ALIGN
+    end
+    if at_kw(cx, KW_ENTRY)
+        ret C_ENTRY
+    end
+    if at_kw(cx, KW_EXPORT)
+        ret C_EXPORT
+    end
+    if at_kw(cx, KW_TRAPS)
+        ret C_TRAPS
+    end
+    ret 0
+end
+
+proc p_word_node(cx: ref Ctx) -> u64
+    i := tpos(cx)
+    n := mk(cx, N_MWORD, i)
+    if at_ident(cx)
+        eat_path(cx)
+    else
+        adv(cx)
+    end
+    nd := node_at(cx, n)
+    nd.t1 <- tpos(cx)
+    ret n
+end
+
+proc p_str_node(cx: ref Ctx) -> u64
+    i := tpos(cx)
+    n := mk(cx, N_MWORD, i)
+    nd := node_at(cx, n)
+    nd.t1 <- i + 1
+    adv(cx)
+    ret n
+end
+
+proc p_clause_decl(cx: ref Ctx, code: u64) -> u64
+    i := tpos(cx)
+    adv(cx)
+    n := mk(cx, N_CLAUSE, i)
+    nd := node_at(cx, n)
+    nd.sub <- code
+    if code == C_PERMIT
+        while 1
+            add_kid(cx, n, p_word_node(cx))
+            if eat_op(cx, OP_COMMA) == 0
+                break
+            end
+        end
+    end
+    if code == C_CALLS
+        w := tpos(cx)
+        ok := 0
+        if name_is(cx, w, "sysv")
+            ok <- 1
+        end
+        if name_is(cx, w, "c")
+            ok <- 1
+        end
+        if name_is(cx, w, "none")
+            ok <- 1
+        end
+        if name_is(cx, w, "interrupt")
+            ok <- 1
+        end
+        if ok == 0
+            diag_at(cx, 18, w)
+        end
+        add_kid(cx, n, p_word_node(cx))
+    end
+    if code == C_SECTION
+        if tkind(cx) == TK_STR
+            add_kid(cx, n, p_str_node(cx))
+        else
+            diag_at(cx, 18, tpos(cx))
+        end
+    end
+    if code == C_ALIGN
+        if tkind(cx) == TK_INT
+            t := ctok(cx, tpos(cx))
+            if is_pow2(t.val) == 0
+                diag_at(cx, 18, tpos(cx))
+            end
+            add_kid(cx, n, p_int(cx))
+        else
+            diag_at(cx, 18, tpos(cx))
+        end
+    end
+    if code == C_EXPORT
+        if tkind(cx) == TK_STR
+            add_kid(cx, n, p_str_node(cx))
+        end
+    end
+    end_line(cx)
+    ret n
+end
+
+proc p_place_clauses(cx: ref Ctx, parent: u64)
+    -- `section "name"` and `align N` lines after a constant or static.
+    while 1
+        skip_nl(cx)
+        code := 0
+        if at_kw(cx, KW_SECTION)
+            code <- C_SECTION
+        end
+        if at_kw(cx, KW_ALIGN)
+            code <- C_ALIGN
+        end
+        if code == 0
+            other := clause_code(cx)
+            if other > 0
+                -- `permit`, `calls`, `entry`, `export` and `traps` belong to a
+                -- procedure, never to a constant or static (E0018).
+                diag_at(cx, 18, tpos(cx))
+                skip_raw_line(cx)
+                continue
+            end
+            ret
+        end
+        add_kid(cx, parent, p_clause_decl(cx, code))
+    end
+end
+
+proc take_docs(cx: ref Ctx, target: u64)
+    d := cx.docs
+    if d == 0
+        ret
+    end
+    k := kid1(cx, d)
+    while k != 0
+        kn := node_at(cx, k)
+        nx := kn.next
+        kn.next <- 0
+        add_kid(cx, target, k)
+        k <- nx
+    end
+    cx.docs <- 0
+end
+
+proc p_params(cx: ref Ctx) -> u64
+    n := mk(cx, N_PARAMS, tpos(cx))
+    if at_op(cx, OP_LPAREN) == 0
+        ret n
+    end
+    open_bracket(cx)
+    while 1
+        if at_op(cx, OP_RPAREN)
+            break
+        end
+        if tkind(cx) == TK_EOF
+            break
+        end
+        nm := want_name(cx)
+        p := mk(cx, N_PARAM, nm)
+        if eat_op(cx, OP_COLON) == 0
+            diag_at(cx, 11, tpos(cx))
+        end
+        add_kid(cx, p, p_type(cx))
+        add_kid(cx, n, p)
+        if eat_op(cx, OP_COMMA) == 0
+            break
+        end
+    end
+    close_bracket(cx, OP_RPAREN)
+    ret n
+end
+
+proc p_proc(cx: ref Ctx, ispub: u64) -> u64
+    adv(cx)
+    nm := want_name(cx)
+    n := mk(cx, N_PROC, nm)
+    nd := node_at(cx, n)
+    nd.sub <- ispub
+    add_kid(cx, n, p_params(cx))
+    if at_op(cx, OP_ARROW)
+        adv(cx)
+        nd2 := node_at(cx, n)
+        nd2.val <- 1
+        add_kid(cx, n, p_type(cx))
+    end
+    end_line(cx)
+    take_docs(cx, n)
+    seen := 0
+    while 1
+        skip_nl(cx)
+        code := clause_code(cx)
+        if code == 0
+            break
+        end
+        if code != C_PERMIT
+            if seen_count(seen, code) > 0
+                diag_at(cx, 18, tpos(cx))
+            end
+        end
+        seen <- seen_add(seen, code)
+        add_kid(cx, n, p_clause_decl(cx, code))
+    end
+    add_kid(cx, n, p_body(cx))
+    expect_end(cx)
+    ret n
+end
+
+proc p_fielddecl(cx: ref Ctx) -> u64
+    nm := want_name(cx)
+    n := mk(cx, N_FIELDDECL, nm)
+    if eat_op(cx, OP_COLON) == 0
+        diag_at(cx, 11, tpos(cx))
+    end
+    add_kid(cx, n, p_type(cx))
+    if at_kw(cx, KW_ALIGN)
+        adv(cx)
+        if tkind(cx) == TK_INT
+            t := ctok(cx, tpos(cx))
+            nd := node_at(cx, n)
+            nd.val <- t.val
+            adv(cx)
+        else
+            diag_at(cx, 18, tpos(cx))
+        end
+    end
+    ret n
+end
+
+proc p_layout(cx: ref Ctx) -> u64
+    adv(cx)
+    nm := want_name(cx)
+    n := mk(cx, N_LAYOUT, nm)
+    nd := node_at(cx, n)
+    if eat_kw(cx, KW_PACKED)
+        nd.sub <- 1
+    end
+    if at_kw(cx, KW_ALIGN)
+        adv(cx)
+        if tkind(cx) == TK_INT
+            t := ctok(cx, tpos(cx))
+            nd2 := node_at(cx, n)
+            nd2.val <- t.val
+            adv(cx)
+        else
+            diag_at(cx, 18, tpos(cx))
+        end
+    end
+    end_line(cx)
+    take_docs(cx, n)
+    while 1
+        skip_nl(cx)
+        if tkind(cx) == TK_EOF
+            diag_at(cx, 14, tpos(cx) - 1)
+            ret n
+        end
+        if at_kw(cx, KW_END)
+            adv(cx)
+            end_line(cx)
+            ret n
+        end
+        add_kid(cx, n, p_fielddecl(cx))
+        end_line(cx)
+    end
+end
+
+proc p_variant(cx: ref Ctx) -> u64
+    nm := want_name(cx)
+    n := mk(cx, N_VARIANT, nm)
+    if at_op(cx, OP_LBRACE) == 0
+        ret n
+    end
+    open_bracket(cx)
+    while 1
+        if at_op(cx, OP_RBRACE)
+            break
+        end
+        if tkind(cx) == TK_EOF
+            break
+        end
+        add_kid(cx, n, p_fielddecl(cx))
+        if eat_op(cx, OP_COMMA) == 0
+            break
+        end
+    end
+    close_bracket(cx, OP_RBRACE)
+    ret n
+end
+
+proc p_choice(cx: ref Ctx) -> u64
+    adv(cx)
+    nm := want_name(cx)
+    n := mk(cx, N_CHOICE, nm)
+    end_line(cx)
+    take_docs(cx, n)
+    while 1
+        skip_nl(cx)
+        if tkind(cx) == TK_EOF
+            diag_at(cx, 14, tpos(cx) - 1)
+            ret n
+        end
+        if at_kw(cx, KW_END)
+            adv(cx)
+            end_line(cx)
+            ret n
+        end
+        add_kid(cx, n, p_variant(cx))
+        end_line(cx)
+    end
+end
+
+proc p_const(cx: ref Ctx) -> u64
+    nm := tpos(cx)
+    adv(cx)
+    ty := 0
+    if at_op(cx, OP_COLON)
+        adv(cx)
+        ty <- p_type(cx)
+    end
+    kind := N_STATIC
+    val := 0
+    if at_op(cx, OP_BIND)
+        kind <- N_CONST
+        adv_cont(cx)
+        val <- p_expr(cx)
+    else
+        if at_op(cx, OP_STORE)
+            adv_cont(cx)
+            val <- p_expr(cx)
+        end
+    end
+    n := mk(cx, kind, nm)
+    nd := node_at(cx, n)
+    if ty != 0
+        nd.val <- 2
+        add_kid(cx, n, ty)
+    end
+    if val != 0
+        nd.sub <- 1
+        add_kid(cx, n, val)
+    end
+    end_line(cx)
+    take_docs(cx, n)
+    p_place_clauses(cx, n)
+    ret n
+end
+
+proc p_decl(cx: ref Ctx, mod: u64)
+    if at_kw(cx, KW_PUB)
+        adv(cx)
+        if at_kw(cx, KW_PROC)
+            add_kid(cx, mod, p_proc(cx, 1))
+            cx.ndecl <- cx.ndecl + 1
+            ret
+        end
+        if at_kw(cx, KW_LAYOUT)
+            add_kid(cx, mod, p_layout(cx))
+            cx.ndecl <- cx.ndecl + 1
+            ret
+        end
+        if at_kw(cx, KW_CHOICE)
+            add_kid(cx, mod, p_choice(cx))
+            cx.ndecl <- cx.ndecl + 1
+            ret
+        end
+        add_kid(cx, mod, p_const(cx))
+        cx.ndecl <- cx.ndecl + 1
+        ret
+    end
+    if at_kw(cx, KW_PROC)
+        add_kid(cx, mod, p_proc(cx, 0))
+        cx.ndecl <- cx.ndecl + 1
+        ret
+    end
+    if at_kw(cx, KW_LAYOUT)
+        add_kid(cx, mod, p_layout(cx))
+        cx.ndecl <- cx.ndecl + 1
+        ret
+    end
+    if at_kw(cx, KW_CHOICE)
+        add_kid(cx, mod, p_choice(cx))
+        cx.ndecl <- cx.ndecl + 1
+        ret
+    end
+    if at_kw(cx, KW_IMPORT)
+        i := tpos(cx)
+        if cx.docs > 0
+            warn_at(cx, 1, kid_tok(cx, cx.docs))
+            cx.docs <- 0
+        end
+        adv(cx)
+        n := mk(cx, N_IMPORT, tpos(cx))
+        eat_path(cx)
+        nd := node_at(cx, n)
+        nd.t1 <- tpos(cx)
+        if cx.ndecl > 0
+            diag_at(cx, 23, i)
+        end
+        end_line(cx)
+        add_kid(cx, mod, n)
+        ret
+    end
+    if at_kw(cx, KW_MODULE)
+        i2 := tpos(cx)
+        diag_at(cx, 24, i2)
+        end_line(cx)
+        ret
+    end
+    if at_ident(cx)
+        add_kid(cx, mod, p_const(cx))
+        cx.ndecl <- cx.ndecl + 1
+        ret
+    end
+    if tkind(cx) == TK_KW
+        i3 := tpos(cx)
+        diag_at(cx, 10, i3)
+        adv(cx)
+        if at_op(cx, OP_BIND)
+            adv_cont(cx)
+            p_expr(cx)
+        end
+        end_line(cx)
+        ret
+    end
+    diag_at(cx, 15, tpos(cx))
+    end_line(cx)
+end
+
+proc p_docs(cx: ref Ctx)
+    while tkind(cx) == TK_DOC
+        if cx.docs == 0
+            cx.docs <- mk(cx, N_BODY, tpos(cx))
+        end
+        add_kid(cx, cx.docs, mk(cx, N_DOC, tpos(cx)))
+        adv(cx)
+        end_line(cx)
+        skip_nl(cx)
+    end
+end
+
+proc kid_tok(cx: ref Ctx, n: u64) -> u64
+    k := kid1(cx, n)
+    kn := node_at(cx, k)
+    ret kn.t0
+end
+
+proc p_module(cx: ref Ctx) -> u64
+    skip_nl(cx)
+    p_docs(cx)
+    n := mk(cx, N_MODULE, tpos(cx))
+    nd := node_at(cx, n)
+    if at_kw(cx, KW_MODULE)
+        -- Doc comments before the `module` line document the module; anywhere
+        -- else they stay pending for the declaration that follows (W0001).
+        take_docs(cx, n)
+        adv(cx)
+        nd2 := node_at(cx, n)
+        nd2.t0 <- tpos(cx)
+        eat_path(cx)
+        nd3 := node_at(cx, n)
+        nd3.t1 <- tpos(cx)
+        end_line(cx)
+    end
+    while 1
+        skip_nl(cx)
+        p_docs(cx)
+        if tkind(cx) == TK_EOF
+            if cx.docs > 0
+                warn_at(cx, 1, kid_tok(cx, cx.docs))
+                cx.docs <- 0
+            end
+            ret n
+        end
+        p_decl(cx, n)
+    end
+end

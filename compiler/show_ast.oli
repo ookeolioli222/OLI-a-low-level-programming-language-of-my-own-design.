@@ -1,0 +1,22 @@
+module olic.show_ast
+-- `olic --show-ast` of the genesis compiler: reads a source file on stdin,
+-- prints the S-expression tree of tests/snapshots/*.ast on stdout and the
+-- diagnostics on stderr; exit status 1 when any diagnostic was reported.
+
+proc start
+    entry
+    permit os.syscall
+    zone z 67108864
+        src := read_all(z, 1048576)
+        lx := lex_new(z, src, TOK_MAX)
+        lex_all(lx)
+        cx := ctx_new(z, src, lx.toks, lx.ntok)
+        cx.nerr <- lx.nerr
+        m := p_module(cx)
+        print_module(cx, m)
+        if cx.nerr + cx.nwarn > 0
+            ret 1
+        end
+        ret 0
+    end
+end
