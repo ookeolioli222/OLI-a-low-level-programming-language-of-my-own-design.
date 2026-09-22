@@ -30,13 +30,17 @@ is complete. The working directory has no `.git` metadata.
   are reproduced byte for byte, all fifteen `tests/parse/err` fixtures give
   exactly their expected diagnostics, and the layouts, choices, constants,
   statics, procedure signatures and complete local tables of all three
-  `tests/snapshots/*.sema` are reproduced line for line, and the capability,
-  not-implemented, constant-cycle, constant-range and recursive-layout checks
-  report exactly what `tests/sema/err/{items,permits,not_implemented}.oli`
-  expect. The rest of semantic analysis (typed statements and expressions,
-  regions, escape analysis, flow — the other eleven `tests/sema/err`
-  fixtures), OIR, the native backend, the standard-library implementation and
-  the kernel do not exist.
+  `tests/snapshots/*.sema` are reproduced line for line, and twelve of the
+  fourteen `tests/sema/err` fixtures report exactly their expected diagnostics
+  (capabilities, `E0900`, constants, layouts, scopes, definite assignment,
+  reachability, failures, exhaustiveness, read-only places and region escapes)
+  with no diagnostic on any positive fixture. Expression typing (the two
+  remaining fixtures, `literals.oli` and `mixed_addr.oli`), the typed body
+  printer of `--show-sema`, OIR, the native backend, the standard-library
+  implementation and the kernel do not exist. The checks also measured the
+  compiler's own source: it needs oli1 step 6e (typed places, `rw` field
+  types, `loop`) before it is valid V0, and the harness pins that gap at those
+  three codes.
 - README and ROADMAP originally disagreed with each other and with G2's code.
 
 The single-file reference for the language and the working commands is
