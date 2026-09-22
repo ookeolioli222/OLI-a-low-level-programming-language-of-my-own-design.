@@ -1,7 +1,18 @@
 # Freestanding Mode
 
+> **Status (2026-09-22).** This document is a *design* for milestone M3. None of
+> it is implemented: `olic` cannot generate code yet, there is no target-profile
+> reader and no `--freestanding` flag. What exists today is the front end
+> (`compiler/`, design 0022), which parses and analyses freestanding shapes:
+> `tests/sema/ok/freestanding.oli` and `tests/parse/ok/kernel_sketch.oli` are
+> checked by `sh genesis/test.sh`, including the `permit` rules of §7 below
+> (E0401) and the V1-only constructs they use (E0900). Every library name this
+> document mentions beyond `core.TrapKind`, `core.Site` and `core.CpuId` is
+> planned, not written; `lib/core.oli` and `lib/core/mem.oli` hold what is real.
+> See `docs/LANGUAGE.md` §13 and `docs/PROJECT_STATUS.md`.
+
 ```
-olic --freestanding kernel.oli
+olic --freestanding kernel.oli          # planned
 olic --target x86_64-freestanding kernel.oli
 ```
 
@@ -14,7 +25,7 @@ Freestanding mode produces a binary that assumes **no operating system**.
 | generated `_start` calling the `entry` procedure (`-> s32`) | **no generated code before `entry`**; the `entry` procedure (`-> never`) is the first instruction |
 | `os.syscall` permitted | `permit os.syscall` is a compile error: there is no kernel to call |
 | top-level `zone` gets memory from `mmap` | top-level `zone` needs `at ADDR` or `from SOURCE`; otherwise a compile error |
-| traps call `core.trap` (writes to fd 2, exits) | traps call the procedure declared with `traps`, or execute `ud2` |
+| traps print a message and exit (in the genesis compiler `oli1`: `oli: trap`, exit 3; in `olic` a `core` trap procedure, planned) | traps call the procedure declared with `traps`, or execute `ud2` |
 | `std` available | only `core` (no OS, no heap, no I/O) |
 | red zone available | red zone **disabled**: interrupts can arrive at any time |
 | base address `0x400000` | load address from the target profile |
@@ -130,7 +141,7 @@ current stack; it must not return (`-> never`).
 
 | Library | Depends on | Contents |
 |---------|-----------|----------|
-| `core` | nothing | integer helpers, `mem.copy/set/zero/secure_zero`, `view` helpers, `TrapKind`, `Site`, endian helpers, `InterruptFrame`, CPU intrinsics wrappers, minimal formatting into a `rw view u8` |
+| `core` | nothing | **today:** `TrapKind`, `Site`, `CpuId` (`lib/core.oli`) and `mem.equal` (`lib/core/mem.oli`). **Planned:** integer helpers, `mem.copy/set/zero/secure_zero`, `view` helpers, endian helpers, `InterruptFrame`, CPU intrinsics wrappers, minimal formatting into a `rw view u8` |
 | `std` | `core` + an OS | `os` (syscall numbers, `Error`), files, mapping-backed zones, process, threads, networking |
 
 A kernel imports `core` only. `olic --freestanding` rejects any import of `std`.
@@ -141,7 +152,8 @@ A kernel imports `core` only. `olic --freestanding` rejects any import of `std`.
    `--explain` does not list (prologues, checks, trap calls are listed).
 2. No symbol is required from outside the program: no libc, no `memcpy`
    (`mem.copy` is generated inline or as an internal `core` procedure that is
-   part of the binary).
+   part of the binary; the intrinsic itself is planned — `mem.mmio` and the
+   other `mem.*` intrinsics are currently `E0900`).
 3. No red-zone use, no stack probes, no TLS access, no floating point unless
    the program uses `f32`/`f64` (then SSE must be enabled by the program before use).
 4. The image is deterministic: identical input produces identical bytes.

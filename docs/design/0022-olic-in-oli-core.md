@@ -58,6 +58,13 @@ cannot read its command line, the root module is stdin and imports are read
 from `lib/`, which is what `--lib DIR` will select later; the loader uses
 `openat`/`read`/`close` directly, with no libc and no buffering.
 
+The checks that need no type graph — capabilities, unimplemented features,
+constant cycles and ranges, recursive layouts — are implemented before the
+type graph, because they are exactly the checks a kernel author relies on
+(`docs/KERNEL_PROGRAMMING.md` §2) and because each one is pinned by a fixture
+that already exists. Three of the fourteen `tests/sema/err` fixtures pass
+exactly; the other eleven need types, regions and flow.
+
 Writing the compiler in its own subset pays for itself here: `olic` lays out
 its own `Tok`, `Lex`, `Ctx`, `Node`, `Item` and `Prog` layouts, and the parser
 found every reserved word the compiler's own source used as a name.

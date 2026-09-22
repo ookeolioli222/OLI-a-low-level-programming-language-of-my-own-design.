@@ -1,0 +1,352 @@
+module olic.check
+-- Semantic checks that need no type graph: capabilities (E0401), features that
+-- V0 parses but does not implement (E0900), constant cycles (E0106), constant
+-- range (E0212) and recursive layouts (E0204). The walk carries the procedure
+-- whose `permit` clauses are in force, which is what makes `grep permit` over a
+-- kernel tree an honest list of everything that touches hardware.
+
+proc sdiag(pg: ref Prog, mi: u64, code: u64, tok: u64)
+    -- A semantic diagnostic in the format of spec/OLI_SYNTAX_V0.md §8.
+    cx := mod_ctx(pg, mi)
+    t := ctok(cx, tok)
+    tmp := pg.tmp
+    put(2, "error[E")
+    d := 1000
+    while d > 0
+        tmp[0] <- 48 + code / d % 10
+        put(2, tmp[..1])
+        d <- d / 10
+    end
+    put(2, "]: ")
+    put(2, smsg(code))
+    diag_head(cx.file, tmp, t.line, t.col)
+    excerpt(cx.src, tmp, t.line, t.col)
+    pg.nerr <- pg.nerr + 1
+end
+
+proc smsg(code: u64) -> view u8
+    if code == 106
+        ret "constant depends on itself"
+    end
+    if code == 204
+        ret "layout contains itself by value"
+    end
+    if code == 212
+        ret "value does not fit its type"
+    end
+    if code == 401
+        ret "capability not permitted here"
+    end
+    ret "feature not implemented"
+end
+
+proc first_tok(pg: ref Prog, mi: u64, n: u64) -> u64
+    -- The leftmost token of an expression: a binary node carries the operator,
+    -- so the position of a diagnostic comes from the subtree.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    best := nd.t0
+    k := kid1(cx, n)
+    while k != 0
+        t := first_tok(pg, mi, k)
+        if t < best
+            best <- t
+        end
+        k <- sibling(cx, k)
+    end
+    ret best
+end
+
+-- Capabilities --------------------------------------------------------------
+
+proc permitted(pg: ref Prog, mi: u64, name: view u8) -> word
+    cx := mod_ctx(pg, mi)
+    p := pg.curproc
+    if p == 0
+        ret 1
+    end
+    k := kid1(cx, p)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_PERMIT
+                c := kid1(cx, k)
+                while c != 0
+                    cn := node_at(cx, c)
+                    if view_eq(mod_text(cx, cn.t0, cn.t1), name)
+                        ret 1
+                    end
+                    c <- sibling(cx, c)
+                end
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    ret 0
+end
+
+proc need(pg: ref Prog, mi: u64, name: view u8, tok: u64)
+    if permitted(pg, mi, name)
+        ret
+    end
+    sdiag(pg, mi, 401, tok)
+end
+
+-- Types that V0 parses but does not implement -------------------------------
+
+proc check_type(pg: ref Prog, mi: u64, ty: u64)
+    -- `own` is reserved, `f32`/`f64` arrive in V2 (E0900).
+    if ty == 0
+        ret
+    end
+    cx := mod_ctx(pg, mi)
+    tn := node_at(cx, ty)
+    i := tn.t0
+    while i < tn.t1
+        t := ctok(cx, i)
+        if t.kind == TK_KW
+            if t.sub == KW_OWN
+                sdiag(pg, mi, 900, i)
+            end
+        end
+        if t.kind == TK_IDENT
+            txt := tok_text(cx, i)
+            if view_eq(txt, "f32")
+                sdiag(pg, mi, 900, i)
+            end
+            if view_eq(txt, "f64")
+                sdiag(pg, mi, 900, i)
+            end
+        end
+        i <- i + 1
+    end
+end
+
+proc type_head_is(pg: ref Prog, mi: u64, t0: u64, kw: u64) -> word
+    cx := mod_ctx(pg, mi)
+    t := ctok(cx, t0)
+    if t.kind != TK_KW
+        ret 0
+    end
+    if t.sub == kw
+        ret 1
+    end
+    ret 0
+end
+
+-- Expressions -----------------------------------------------------------------
+
+proc check_expr(pg: ref Prog, mi: u64, n: u64)
+    if n == 0
+        ret
+    end
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_RAWLOAD
+        need(pg, mi, "memory.raw", nd.t0)
+    end
+    if k == N_CONVERT
+        if type_head_is(pg, mi, nd.t0, KW_ADDR)
+            need(pg, mi, "memory.raw", nd.t0)
+        end
+        if type_head_is(pg, mi, nd.t0, KW_PORT)
+            sdiag(pg, mi, 900, nd.t0)
+        end
+    end
+    if k == N_TYPEARG
+        if type_head_is(pg, mi, nd.t0, KW_PORT)
+            sdiag(pg, mi, 900, nd.t0)
+        end
+    end
+    if k == N_CALL
+        callee := node_at(cx, kid1(cx, n))
+        if callee.kind == N_FIELD
+            base := node_at(cx, kid1(cx, kid1(cx, n)))
+            if base.kind == N_NAME
+                if view_eq(tok_text(cx, base.t0), "mem")
+                    if view_eq(tok_text(cx, callee.t0), "mmio")
+                        sdiag(pg, mi, 900, base.t0)
+                    end
+                end
+            end
+        end
+    end
+    c := kid1(cx, n)
+    while c != 0
+        check_expr(pg, mi, c)
+        c <- sibling(cx, c)
+    end
+end
+
+-- Statements ---------------------------------------------------------------------
+
+proc check_kids(pg: ref Prog, mi: u64, first: u64)
+    cx := mod_ctx(pg, mi)
+    k := first
+    while k != 0
+        check_stmt(pg, mi, k)
+        k <- sibling(cx, k)
+    end
+end
+
+proc check_body(pg: ref Prog, mi: u64, body: u64)
+    cx := mod_ctx(pg, mi)
+    check_kids(pg, mi, kid1(cx, body))
+end
+
+proc check_stmt(pg: ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_MOVE
+        -- `<~` belongs to `own`, which V0 does not implement.
+        sdiag(pg, mi, 900, nd.t0)
+    end
+    if k == N_MACHINE
+        need(pg, mi, "cpu.asm", nd.val)
+        ret
+    end
+    if k == N_PLACE
+        check_type(pg, mi, kid1(cx, n))
+        check_expr(pg, mi, kid2(cx, n))
+        ret
+    end
+    if k == N_BIND
+        v := kid1(cx, n)
+        if nd.val >= 2
+            check_type(pg, mi, v)
+            v <- sibling(cx, v)
+        end
+        check_expr(pg, mi, v)
+        ret
+    end
+    if k == N_ZONE
+        if nd.sub == 1
+            need(pg, mi, "memory.raw", nd.t0)
+        end
+        b := kid1(cx, n)
+        while b != 0
+            bn := node_at(cx, b)
+            if bn.kind == N_BODY
+                check_body(pg, mi, b)
+            else
+                check_expr(pg, mi, b)
+            end
+            b <- sibling(cx, b)
+        end
+        ret
+    end
+    if k == N_IF
+        check_expr(pg, mi, kid1(cx, n))
+        br := kid2(cx, n)
+        while br != 0
+            bn2 := node_at(cx, br)
+            if bn2.kind == N_ELIF
+                check_expr(pg, mi, kid1(cx, br))
+                check_kids(pg, mi, kid2(cx, br))
+            else
+                check_kids(pg, mi, kid1(cx, br))
+            end
+            br <- sibling(cx, br)
+        end
+        ret
+    end
+    if k == N_IFTHEN
+        check_expr(pg, mi, kid1(cx, n))
+        check_stmt(pg, mi, kid2(cx, n))
+        ret
+    end
+    if k == N_WHILE
+        check_expr(pg, mi, kid1(cx, n))
+        check_body(pg, mi, kid2(cx, n))
+        ret
+    end
+    if k == N_EACH
+        check_expr(pg, mi, kid1(cx, n))
+        check_body(pg, mi, kid2(cx, n))
+        ret
+    end
+    if k == N_LOOP
+        check_body(pg, mi, kid1(cx, n))
+        ret
+    end
+    if k == N_CASE
+        check_expr(pg, mi, kid1(cx, n))
+        arm := kid2(cx, n)
+        while arm != 0
+            an := node_at(cx, arm)
+            if an.kind == N_WHEN
+                check_kids(pg, mi, kid2(cx, arm))
+            else
+                check_kids(pg, mi, kid1(cx, arm))
+            end
+            arm <- sibling(cx, arm)
+        end
+        ret
+    end
+    if k == N_BODY
+        check_body(pg, mi, n)
+        ret
+    end
+    c := kid1(cx, n)
+    while c != 0
+        check_expr(pg, mi, c)
+        c <- sibling(cx, c)
+    end
+end
+
+proc check_proc(pg: ref Prog, mi: u64, node: u64)
+    cx := mod_ctx(pg, mi)
+    pg.curproc <- node
+    params := kid1(cx, node)
+    p := kid1(cx, params)
+    while p != 0
+        check_type(pg, mi, kid1(cx, p))
+        p <- sibling(cx, p)
+    end
+    k := sibling(cx, params)
+    nd := node_at(cx, node)
+    if nd.val == 1
+        check_type(pg, mi, k)
+        k <- sibling(cx, k)
+    end
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_CALLS
+                c := node_at(cx, kid1(cx, k))
+                if view_eq(mod_text(cx, c.t0, c.t1), "interrupt")
+                    sdiag(pg, mi, 900, kn.t0)
+                end
+            end
+        end
+        if kn.kind == N_BODY
+            check_body(pg, mi, k)
+        end
+        k <- sibling(cx, k)
+    end
+    pg.curproc <- 0
+end
+
+proc check_items(pg: ref Prog)
+    -- Field types of every layout and choice, then every procedure.
+    i := 0
+    while i < pg.nitem
+        it := item_at(pg, i)
+        cx := mod_ctx(pg, it.mod)
+        f := 0
+        while f < it.nfld
+            fr := fld_at(pg, it.first + f)
+            check_type(pg, fr.mod, kid1(cx, fr.node))
+            f <- f + 1
+        end
+        i <- i + 1
+    end
+    q := 0
+    while q < pg.nproc
+        v := proc_at(pg, q)
+        check_proc(pg, v.mod, v.node)
+        q <- q + 1
+    end
+end

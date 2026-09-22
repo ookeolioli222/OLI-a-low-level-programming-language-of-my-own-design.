@@ -48,7 +48,8 @@ deterministic and runs the acceptance tests below.
 | `olic.load` | `load.oli` | reading files (`openat`/`read`/`close`) and resolving imports under `lib/` | done |
 | `olic.items` | `items.oli` | modules, item collection, layout/choice layout (ABI §3), constant evaluation, the item section of `--show-sema` | done |
 | `olic.sema` | `sema.oli` | the local table of every procedure: parameters, places, bindings, zone handles and `case` patterns, with inferred types | done |
-| `olic.show_items` | `show_items.oli` | driver for the item, signature and local sections | done |
+| `olic.check` | `check.oli` | capabilities (E0401), unimplemented features (E0900), constant cycles (E0106), constant range (E0212), recursive layouts (E0204) | done |
+| `olic.show_items` | `show_items.oli` | driver for the item, signature and local sections, and for the checks | done |
 | `olic.bodies` | — | typed statements and expressions, regions, capabilities, flow — the rest of `--show-sema` | planned |
 | `olic.sema` | — | items, layouts, signatures, constants, bodies, program rules, `--show-sema` | planned |
 | `olic.oir`, `olic.x64`, `olic.elf` | — | back end | planned |
@@ -163,6 +164,32 @@ binding (the element type of the iterable), `ok x` in a `case` (the `T` of
 reduced to the item: `core.TrapKind` prints as `TrapKind`. An initialiser this
 stage cannot type yet — an arithmetic expression, a `checked(…)` fallback, an
 integer range in `each`, a compiler intrinsic such as `cpu.id` — prints `?`.
+
+## Checks (`check.oli`)
+
+The checks that need no type graph run after the items are laid out, over every
+layout field, procedure signature and body:
+
+- **E0401, capabilities.** A raw load or store (`[a]`), a raw address
+  conversion (`addr T (x)`) and `zone … at` require `permit memory.raw`; a
+  `machine` block requires `permit cpu.asm`. The walk carries the procedure
+  whose clauses are in force, so a capability granted to one procedure never
+  leaks into another.
+- **E0900, not implemented.** `own` in a type, `f32`/`f64`, the move operator
+  `<~`, `port T (x)`, `mem.mmio(…)` and `calls interrupt` are parsed, then
+  refused — the rule of `CONTRIBUTING.md`: no feature is approximated.
+- **E0106 / E0212, constants.** Constants are evaluated on demand, so a cycle
+  is caught at the constant that closes it; a value that does not fit an
+  annotated unsigned type is reported at the start of its expression.
+- **E0204, recursive layouts.** Resolving a layout that is already being
+  resolved reports at its declaration.
+
+Acceptance (`genesis/test.sh`, layer 4): `tests/sema/err/items.oli`,
+`permits.oli` and `not_implemented.oli` report exactly their expected codes and
+positions (twelve diagnostics), every `tests/sema/ok` fixture, library module
+and compiler source stays clean, and `tests/parse/ok/kernel_sketch.oli` — a
+file whose own header says it is rejected later — reports the missing
+`memory.raw` permit and the three V1 constructs it uses.
 
 Acceptance (`genesis/test.sh`, layer 4): every `(proc …)` and `(local …)` line
 of all three `tests/snapshots/*.sema` is reproduced exactly — 46 lines across

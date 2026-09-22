@@ -3,6 +3,17 @@
 How boot code, drivers and kernels are written in Oli--, and which language
 construct answers each system-programming requirement.
 
+> **Status (2026-09-22).** A design for milestone M4; nothing here generates
+> code yet. The "Version" column below is the plan, not the state: V0 rows are
+> accepted by the front end (`compiler/`), V1 and V2 rows report `E0900`
+> (`feature not implemented`) — `tests/sema/err/not_implemented.oli` pins that
+> behaviour, and `tests/parse/ok/kernel_sketch.oli` is checked to report
+> `E0900` for `mem.mmio`, `port u8 (…)` and `calls interrupt` and `E0401` for
+> the raw-address conversion it performs without `permit memory.raw`. Library
+> names such as `core.x64.InterruptFrame` and `core.x64.paging` are planned;
+> `lib/` holds what exists. See `docs/LANGUAGE.md` and
+> `docs/PROJECT_STATUS.md`.
+
 ## 1. Requirement → construct
 
 | Requirement | Oli-- construct | Version |

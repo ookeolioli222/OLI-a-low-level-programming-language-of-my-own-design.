@@ -1553,8 +1553,11 @@ proc pm_line(cx: ref Ctx, parent: u64)
 end
 
 proc p_machine(cx: ref Ctx) -> u64
+    kw := tpos(cx)
     adv(cx)
     n := mk(cx, N_MACHINE, tpos(cx))
+    kn := node_at(cx, n)
+    kn.val <- kw
     if at_ident(cx)
         adv(cx)
     end

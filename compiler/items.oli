@@ -64,6 +64,7 @@ layout Prog
     soff : u64
     locbase : u64
     curmod : u64
+    curproc : u64
     nitem : u64
     nfld : u64
     nval : u64
@@ -88,6 +89,7 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.soff <- 0
     pg.locbase <- 0
     pg.curmod <- 0
+    pg.curproc <- 0
     pg.nmod <- 0
     pg.nitem <- 0
     pg.nfld <- 0
@@ -429,10 +431,13 @@ proc resolve_item(pg: ref Prog, idx: u64)
         ret
     end
     if it.state == 1
-        -- A layout that contains itself by value (E0204).
-        put(2, "error[E0204]: recursive layout\n")
-        pg.nerr <- pg.nerr + 1
-        it.state <- 2
+        -- A layout that contains itself by value; the declaration keyword is
+        -- the token before the name.
+        cxr := mod_ctx(pg, it.mod)
+        ndr := node_at(cxr, it.node)
+        sdiag(pg, it.mod, 204, ndr.t0 - 1)
+        it2 := item_at(pg, idx)
+        it2.state <- 2
         ret
     end
     it.state <- 1
@@ -637,10 +642,7 @@ proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
             cx2 := mod_ctx(pg, v2.mod)
             vn := node_at(cx2, v2.node)
             if view_eq(tok_text(cx2, vn.t0), tok_text(cx, nd.t0))
-                if v2.has == 1
-                    ret v2.value
-                end
-                ret 0
+                ret const_of(pg, j)
             end
             j <- j + 1
         end
@@ -649,22 +651,90 @@ proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
     ret 0
 end
 
+proc int_limits(name: view u8) -> word
+    -- 1 + the largest value of an unsigned type, or 0 when the type is not a
+    -- bounded unsigned integer (signed types and words are checked elsewhere).
+    if view_eq(name, "u8")
+        ret 256
+    end
+    if view_eq(name, "byte")
+        ret 256
+    end
+    if view_eq(name, "bool")
+        ret 2
+    end
+    if view_eq(name, "u16")
+        ret 65536
+    end
+    if view_eq(name, "u32")
+        ret 4294967296
+    end
+    ret 0
+end
+
+proc check_val_range(pg: ref Prog, i: u64, e: u64)
+    v := val_at(pg, i)
+    cx := mod_ctx(pg, v.mod)
+    vn := node_at(cx, v.node)
+    if vn.val < 2
+        ret
+    end
+    ty := node_at(cx, kid1(cx, v.node))
+    if ty.t1 != ty.t0 + 1
+        ret
+    end
+    lim := int_limits(tok_text(cx, ty.t0))
+    if lim == 0
+        ret
+    end
+    v2 := val_at(pg, i)
+    if v2.value < lim
+        if v2.value >= 0
+            ret
+        end
+    end
+    sdiag(pg, v.mod, 212, first_tok(pg, v.mod, e))
+end
+
+proc const_of(pg: ref Prog, i: u64) -> u64
+    -- The value of constant `i`, evaluating it on demand; a cycle is E0106.
+    v := val_at(pg, i)
+    if v.has == 1
+        ret v.value
+    end
+    cx := mod_ctx(pg, v.mod)
+    vn := node_at(cx, v.node)
+    if v.has == 2
+        sdiag(pg, v.mod, 106, vn.t0)
+        v2 := val_at(pg, i)
+        v2.has <- 1
+        v2.value <- 0
+        ret 0
+    end
+    if vn.sub != 1
+        ret 0
+    end
+    v3 := val_at(pg, i)
+    v3.has <- 2
+    e := kid1(cx, v.node)
+    if vn.val >= 2
+        e <- sibling(cx, e)
+    end
+    val := const_value(pg, v.mod, e)
+    v4 := val_at(pg, i)
+    if v4.has == 2
+        v4.value <- val
+        v4.has <- 1
+        check_val_range(pg, i, e)
+    end
+    v5 := val_at(pg, i)
+    ret v5.value
+end
+
 proc eval_vals(pg: ref Prog)
     i := 0
     while i < pg.nval
-        v := val_at(pg, i)
-        cx := mod_ctx(pg, v.mod)
-        vn := node_at(cx, v.node)
-        if vn.sub == 1
-            e := kid1(cx, v.node)
-            if vn.val >= 2
-                e <- sibling(cx, e)
-            end
-            val := const_value(pg, v.mod, e)
-            v2 := val_at(pg, i)
-            v2.value <- val
-            v2.has <- 1
-        end
+        const_of(pg, i)
         i <- i + 1
     end
 end
@@ -1046,4 +1116,5 @@ proc analyze(pg: ref Prog, z: zone, src: view u8)
         i <- i + 1
     end
     resolve_all(pg)
+    check_items(pg)
 end

@@ -615,6 +615,13 @@ rejected rather than silently ignored (`E0019` in the front end, exit 1 in
 
 ## 13. Freestanding and kernel mode **[parses]**
 
+The capability rules of §11 are enforced today: a raw load or store, a raw
+address conversion and `zone … at` need `permit memory.raw`, and a `machine`
+block needs `permit cpu.asm` — without them the compiler reports `E0401` at the
+construct. Constructs the V0 front end accepts but does not implement — `own`,
+`f32`/`f64`, `<~`, `port T (…)`, `mem.mmio`, `calls interrupt` — report `E0900`
+rather than compiling to something approximate.
+
 With `--freestanding` there is no operating system: the program supplies its
 own entry point (`entry` with `-> never`), its own stack, and a `traps`
 procedure. `zone … at` and `zone … from` give memory without an allocator,
@@ -663,7 +670,11 @@ Implemented today **[runs]**:
 | E0024 | `module` line is not first |
 | E0031 | chained comparison |
 | E0032 | `{` at the end of a line used as a block opener |
-| E0204 | recursive layout |
+| E0106 | constant depends on itself |
+| E0204 | layout contains itself by value |
+| E0212 | value does not fit its type |
+| E0401 | capability not permitted here |
+| E0900 | feature not implemented |
 | W0001 | doc comment documents nothing |
 
 Specified and **[planned]**: E0013, E0015, E0021, E0030 (syntax) and the

@@ -30,10 +30,13 @@ is complete. The working directory has no `.git` metadata.
   are reproduced byte for byte, all fifteen `tests/parse/err` fixtures give
   exactly their expected diagnostics, and the layouts, choices, constants,
   statics, procedure signatures and complete local tables of all three
-  `tests/snapshots/*.sema` are reproduced line for line. The rest of semantic
-  analysis (typed statements and expressions, regions, capabilities, flow),
-  OIR, the native backend, the standard-library implementation and the kernel
-  do not exist.
+  `tests/snapshots/*.sema` are reproduced line for line, and the capability,
+  not-implemented, constant-cycle, constant-range and recursive-layout checks
+  report exactly what `tests/sema/err/{items,permits,not_implemented}.oli`
+  expect. The rest of semantic analysis (typed statements and expressions,
+  regions, escape analysis, flow — the other eleven `tests/sema/err`
+  fixtures), OIR, the native backend, the standard-library implementation and
+  the kernel do not exist.
 - README and ROADMAP originally disagreed with each other and with G2's code.
 
 The single-file reference for the language and the working commands is

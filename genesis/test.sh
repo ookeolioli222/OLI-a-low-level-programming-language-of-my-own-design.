@@ -973,7 +973,7 @@ for f in ../tests/parse/err/*.oli; do
     head -c 8 build/ast.out | grep -q '^(module' || fail "parser: $f produced no module after recovery"
 done
 echo "ok: olic parser reports exactly the E0001-E0032/W0001 diagnostics the parse/err fixtures expect, and recovers"
-cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli ../compiler/show_items.oli > build/show_items.oli
+cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli ../compiler/check.oli ../compiler/show_items.oli > build/show_items.oli
 ./build/oli1.bin < build/show_items.oli > build/show_items || fail "oli1 could not compile compiler/ (show_items)"
 chmod +x build/show_items
 ./build/oli1.bin < build/show_items.oli > build/show_items.again
@@ -990,10 +990,10 @@ for pair in "hello examples/hello.oli" "packet_demo examples/packet_demo.oli" "f
     [ "$n" -ge 5 ] || fail "items: $1 produced only $n lines"
 done
 echo "ok: olic item collection matches the layouts, choices, constants and statics of every tests/snapshots/*.sema"
-( cd .. && genesis/build/show_items < tests/parse/ok/kernel_sketch.oli > genesis/build/ks.items 2>/dev/null )
+( cd .. && genesis/build/show_items < tests/parse/ok/kernel_sketch.oli > genesis/build/ks.items 2>/dev/null ) || true
 grep -q '(layout GdtPointer#1 size=10 align=1 (limit u16 @0) (base addr u64 @2))' build/ks.items || fail "items: packed layout"
 grep -q '(layout Multiboot2Header#0 size=24 align=8 ' build/ks.items || fail "items: explicit layout alignment"
-( cd .. && genesis/build/show_items < tests/parse/ok/statements.oli > genesis/build/st.items 2>/dev/null )
+( cd .. && genesis/build/show_items < tests/parse/ok/statements.oli > genesis/build/st.items 2>/dev/null ) || true
 grep -q '(choice Shape#0 size=20 align=4 tag=1 payload@4 (dot) (line (a Point @4) (b Point @12)))' build/st.items || fail "items: choice with a layout payload"
 for f in ../tests/sema/ok/*.oli ../lib/*.oli ../lib/*/*.oli ../compiler/*.oli; do
     ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: diagnostics for $f: $(cat build/items.err)"
@@ -1009,5 +1009,18 @@ for pair in "hello examples/hello.oli" "packet_demo examples/packet_demo.oli" "f
     cmp build/$1.sigwant build/$1.sig || fail "signatures: $1 differs from tests/snapshots/$1.sema"
     [ -s build/$1.sig ] || fail "signatures: $1 produced nothing"
 done
+# Semantic checks that need no type graph: capabilities, unimplemented
+# features, constant cycles and ranges, recursive layouts.
+for f in ../tests/sema/err/items.oli ../tests/sema/err/permits.oli ../tests/sema/err/not_implemented.oli; do
+    want=$(grep -- '-- expect: ' "$f" | sed 's/-- expect: //' | sort)
+    set +e; ( cd .. && genesis/build/show_items < "${f#../}" > genesis/build/chk.out 2> genesis/build/chk.err ); st=$?; set -e
+    got=$(awk '/^error\[|^warning\[/ {code=substr($1,index($1,"[")+1,5)} /^ --> stdin:/ {split($2,a,":"); print code " @ " a[2] ":" a[3]}' build/chk.err | sort)
+    [ "$got" = "$want" ] || fail "checks: $f expected [$want] got [$got]"
+    [ "$st" = 1 ] || fail "checks: $f exit $st"
+done
+( cd .. && genesis/build/show_items < tests/parse/ok/kernel_sketch.oli > /dev/null 2> genesis/build/chk.err ) || true
+grep -q 'E0401' build/chk.err || fail "checks: kernel_sketch must report the missing memory.raw permit"
+grep -q 'E0900' build/chk.err || fail "checks: kernel_sketch must report the V1 features it uses"
+echo "ok: olic reports missing capabilities (E0401), unimplemented features (E0900), constant cycles (E0106), constant range (E0212) and recursive layouts (E0204) exactly where tests/sema/err expects them"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic lexer, parser and item collection) passed"
