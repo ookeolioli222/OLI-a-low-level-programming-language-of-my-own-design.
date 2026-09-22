@@ -424,7 +424,7 @@ proc p_callop(cx: ref Ctx, sub: u64) -> u64
     adv(cx)
     n := mk(cx, N_UNOP, i)
     nd := node_at(cx, n)
-    nd.sub <- sub
+    nd.sub <- u32.wrap(sub)
     add_kid(cx, n, p_paren_expr(cx))
     ret n
 end
@@ -1329,14 +1329,14 @@ proc pm_int(cx: ref Ctx) -> u64
     end
     n := p_int(cx)
     nd := node_at(cx, n)
-    nd.sub <- neg
+    nd.sub <- u32.wrap(neg)
     ret n
 end
 
 proc pm_term(cx: ref Ctx, sign: u64) -> u64
     n := mk(cx, N_MTERM, tpos(cx))
     nd := node_at(cx, n)
-    nd.sub <- sign
+    nd.sub <- u32.wrap(sign)
     if tkind(cx) == TK_INT
         add_kid(cx, n, p_int(cx))
     else
@@ -2044,7 +2044,7 @@ proc p_clause_decl(cx: ref Ctx, code: u64) -> u64
     adv(cx)
     n := mk(cx, N_CLAUSE, i)
     nd := node_at(cx, n)
-    nd.sub <- code
+    nd.sub <- u32.wrap(code)
     if code == C_PERMIT
         loop
             add_kid(cx, n, p_word_node(cx))
@@ -2175,7 +2175,7 @@ proc p_proc(cx: ref Ctx, ispub: u64) -> u64
     nm := want_name(cx)
     n := mk(cx, N_PROC, nm)
     nd := node_at(cx, n)
-    nd.sub <- ispub
+    nd.sub <- u32.wrap(ispub)
     add_kid(cx, n, p_params(cx))
     if at_op(cx, OP_ARROW)
         adv(cx)
@@ -2193,12 +2193,12 @@ proc p_proc(cx: ref Ctx, ispub: u64) -> u64
             break
         end
         if code != C_PERMIT
-            if seen_count(seen, code) > 0
+            if seen_count(seen, u64.bits(code)) > 0
                 diag_at(cx, 18, tpos(cx))
             end
         end
-        seen <- seen_add(seen, code)
-        add_kid(cx, n, p_clause_decl(cx, code))
+        seen <- seen_add(seen, u64.bits(code))
+        add_kid(cx, n, p_clause_decl(cx, u64.bits(code)))
     end
     add_kid(cx, n, p_body(cx))
     expect_end(cx)

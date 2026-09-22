@@ -215,7 +215,7 @@ proc carries_region(pg: ref Prog, t: view u8) -> word
     if idx < 0
         ret 0
     end
-    it := item_at(pg, idx)
+    it := item_at(pg, u64.bits(idx))
     cx := mod_ctx(pg, it.mod)
     f : u64 <- 0
     while f < it.nfld
@@ -251,12 +251,12 @@ proc loc_find(pg: ref Prog, name: view u8) -> word
         cx := mod_ctx(pg, l.mod)
         if view_eq(tok_text(cx, l.name), name)
             if fallback < 0
-                fallback <- i
+                fallback <- word.bits(i)
             end
             if l.dnode <= pg.curstmt
                 if l.dnode >= bnode
                     bnode <- l.dnode
-                    best <- i
+                    best <- word.bits(i)
                 end
             end
         end
@@ -296,7 +296,7 @@ proc val_find(pg: ref Prog, name: view u8) -> word
         cx := mod_ctx(pg, v.mod)
         vn := node_at(cx, v.node)
         if view_eq(tok_text(cx, vn.t0), name)
-            ret i
+            ret word.bits(i)
         end
         i <- i + 1
     end
@@ -322,7 +322,7 @@ proc proc_find(pg: ref Prog, name: view u8) -> word
         cx := mod_ctx(pg, v.mod)
         nd := node_at(cx, v.node)
         if view_eq(tok_text(cx, nd.t0), name)
-            ret q
+            ret word.bits(q)
         end
         q <- q + 1
     end
@@ -353,7 +353,7 @@ proc name_kind(pg: ref Prog, mi: u64, n: u64) -> word
     if vi < 0
         ret 0
     end
-    v := val_at(pg, vi)
+    v := val_at(pg, u64.bits(vi))
     if v.kind == 0
         ret 2
     end
@@ -706,7 +706,7 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
     if pi < 0
         ret b[0..0]
     end
-    pv := proc_at(pg, pi)
+    pv := proc_at(pg, u64.bits(pi))
     pcx := mod_ctx(pg, pv.mod)
     pn := node_at(pcx, pv.node)
     if pn.val != 1
@@ -814,14 +814,14 @@ proc field_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
             end
             vi := val_find(pg, m)
             if vi >= 0
-                v := val_at(pg, vi)
+                v := val_at(pg, u64.bits(vi))
                 if v.kind == 0
                     if int_bits(want) > 0
                         ret want
                     end
-                    ret val_type(pg, vi)
+                    ret val_type(pg, u64.bits(vi))
                 end
-                ret val_type(pg, vi)
+                ret val_type(pg, u64.bits(vi))
             end
         end
     end
@@ -848,8 +848,8 @@ proc name_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
     if vi < 0
         ret b[0..0]
     end
-    v := val_at(pg, vi)
-    t := val_type(pg, vi)
+    v := val_at(pg, u64.bits(vi))
+    t := val_type(pg, u64.bits(vi))
     if v.kind == 0
         if int_bits(want) > 0
             ret want
@@ -996,7 +996,7 @@ proc reg_raw(pg: ref Prog, mi: u64, n: u64) -> u64
         if li < 0
             ret 0
         end
-        l := loc_at(pg, li)
+        l := loc_at(pg, u64.bits(li))
         ret l.reg
     end
     if k == N_INDEX
@@ -1170,7 +1170,7 @@ proc is_place(pg: ref Prog, mi: u64, n: u64) -> word
             ret 0
         end
         li := loc_find(pg, tok_text(cx, nd.t0))
-        l := loc_at(pg, li)
+        l := loc_at(pg, u64.bits(li))
         if l.kind == L_PLACE
             ret 1
         end
@@ -1593,7 +1593,7 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
         if pi < 0
             put(1, tok_text(cx, cn.t0))
         else
-            pv := proc_at(pg, pi)
+            pv := proc_at(pg, u64.bits(pi))
             put_module_name(pg, pv.mod)
             put(1, ".")
             put(1, tok_text(cx, cn.t0))
@@ -1605,7 +1605,7 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
             if pi < 0
                 pexpr(pg, mi, a, b[0..0])
             else
-                pexpr(pg, mi, a, param_type(pg, pi, k))
+                pexpr(pg, mi, a, param_type(pg, u64.bits(pi), k))
             end
             k <- k + 1
             a <- sibling(cx, a)
@@ -1615,7 +1615,7 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
     end
     put(1, "(intrinsic ")
     mname := tok_text(cx, cn.t0)
-    pintrinsic_name(pg, ck, mname)
+    pintrinsic_name(pg, u64.bits(ck), mname)
     if ck == CK_SYSCALL
         s : u64 <- kid2(cx, n)
         while s != 0
@@ -1669,7 +1669,7 @@ proc variant_fields_of(pg: ref Prog, vname: view u8) -> word
             while vn != 0
                 v := node_at(cx, vn)
                 if view_eq(tok_text(cx, v.t0), vname)
-                    ret i
+                    ret word.bits(i)
                 end
                 vn <- sibling(cx, vn)
             end
@@ -1728,7 +1728,7 @@ proc plit(pg: ref Prog, mi: u64, n: u64)
     if idx >= 0
         put(1, "(layout ")
         put(1, name)
-        plit_fields(pg, mi, n, idx, b[0..0])
+        plit_fields(pg, mi, n, u64.bits(idx), b[0..0])
         put(1, ")")
         ret
     end
@@ -1736,7 +1736,7 @@ proc plit(pg: ref Prog, mi: u64, n: u64)
     put(1, "(variant ")
     put(1, name)
     if vi >= 0
-        plit_fields(pg, mi, n, vi, name)
+        plit_fields(pg, mi, n, u64.bits(vi), name)
     end
     put(1, ")")
 end
@@ -1846,7 +1846,7 @@ proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
                 put(1, "(int ")
                 ci := val_find(pg, m)
                 if ci >= 0
-                    bnum(pg, const_of(pg, ci))
+                    bnum(pg, const_of(pg, u64.bits(ci)))
                 else
                     bnum(pg, const_value(pg, mi, n))
                 end
@@ -2033,7 +2033,7 @@ proc place_type(pg: ref Prog, mi: u64, n: u64) -> view u8
         if name_kind(pg, mi, n) == 3
             vi := val_find(pg, tok_text(cx, nd.t0))
             if vi >= 0
-                ret val_type(pg, vi)
+                ret val_type(pg, u64.bits(vi))
             end
         end
     end
@@ -2146,7 +2146,7 @@ proc psym(pg: ref Prog, mi: u64, a: u64, b: u64)
     last := last_component(cx, a, b)
     pi := proc_find(pg, last)
     if pi >= 0
-        v := proc_at(pg, pi)
+        v := proc_at(pg, u64.bits(pi))
         put(1, "proc:")
         put_module_name(pg, v.mod)
         put(1, ".")
@@ -2155,7 +2155,7 @@ proc psym(pg: ref Prog, mi: u64, a: u64, b: u64)
     end
     vi := val_find(pg, last)
     if vi >= 0
-        vv := val_at(pg, vi)
+        vv := val_at(pg, u64.bits(vi))
         if vv.kind == 1
             put(1, "static:")
             put(1, last)
@@ -2325,7 +2325,7 @@ proc ppattern(pg: ref Prog, mi: u64, pat: u64)
             end
             sep <- 1
             fn := node_at(cx, f)
-            bnum(pg, variant_field_index(pg, vi, vname, tok_text(cx, fn.t0)))
+            bnum(pg, variant_field_index(pg, u64.bits(vi), vname, tok_text(cx, fn.t0)))
             put(1, "=")
             put(1, tok_text(cx, fn.t0))
             f <- sibling(cx, f)
@@ -2397,7 +2397,7 @@ proc pzone_stmt(pg: rw ref Prog, mi: u64, n: u64, ind: u64)
     save := pg.pzone
     li := loc_find(pg, tok_text(cx, nd.t0))
     if li >= 0
-        zl := loc_at(pg, li)
+        zl := loc_at(pg, u64.bits(li))
         pg.pzone <- zl.zord + 1
     end
     pbody_node(pg, mi, rest, ind + 2)
@@ -2644,12 +2644,6 @@ end
 -- same contexts and reports what the derivation found wrong. It is a separate
 -- walk because `--check` must report without printing anything.
 
--- Implicit narrowing of a computed value (`p <- e` where `e` is wider than
--- `p`) is a V0 error, but oli-core has no conversions, so the compiler's own
--- source still relies on it; reporting it is gated until `oli1` grows
--- `T.wrap(x)` (design 0022, the measurement below).
-NARROW_STRICT := 0
-
 proc lit_fits(t: view u8, v: u64, neg: u64) -> word
     -- Does this literal fit the type its context gives it?
     w := int_bits(t)
@@ -2854,7 +2848,7 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
         a : u64 <- kid2(cx, n)
         k : u64 <- 0
         while a != 0
-            texpr(pg, mi, a, param_type(pg, pi, k))
+            texpr(pg, mi, a, param_type(pg, u64.bits(pi), k))
             k <- k + 1
             a <- sibling(cx, a)
         end
@@ -2992,7 +2986,7 @@ proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
             if idx < 0
                 texpr(pg, mi, kid1(cx, f), b[0..0])
             else
-                texpr(pg, mi, kid1(cx, f), lit_field_type(pg, idx, lname, tok_text(cx, fn.t0)))
+                texpr(pg, mi, kid1(cx, f), lit_field_type(pg, u64.bits(idx), lname, tok_text(cx, fn.t0)))
             end
             f <- sibling(cx, f)
         end
@@ -3006,11 +3000,13 @@ proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
         end
         ret
     end
-    if NARROW_STRICT == 1
-        have := ety(pg, mi, n, want)
-        if coerce_kind(pg, have, want) == 5
-            terr(pg, mi, 202, n)
-        end
+    -- Anything that reaches here is a value in a context that wants a type:
+    -- narrowing a computed value is E0202, whatever the shape of the value.
+    -- The conversion has to be written (`T.wrap(x)`, `T.bits(x)`); oli-core
+    -- has had them since genesis step 6f.
+    have := ety(pg, mi, n, want)
+    if coerce_kind(pg, have, want) == 5
+        terr(pg, mi, 202, n)
     end
 end
 

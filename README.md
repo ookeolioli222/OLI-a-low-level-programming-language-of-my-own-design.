@@ -30,8 +30,11 @@ semantic analysis (`compiler/`), written in oli-core and built by `oli1`,
 tokenize every fixture, reproduce every `tests/snapshots/*.ast` **and every
 `tests/snapshots/*.sema` byte for byte** — items, signatures, locals and typed
 bodies with a type and a region on every expression — and report exactly the
-diagnostics of all fifteen negative parse fixtures and all fourteen negative
-semantic fixtures (`docs/design/0022`).**
+diagnostics of all fifteen negative parse fixtures and all fifteen negative
+semantic fixtures (`docs/design/0022`). Genesis step 6f then added explicit
+conversions (`T(x)`, `T.wrap(x)`, `T.bits(x)`) to oli-core and closed the last
+measured gap: `compiler/` is written in oli-core **and** satisfies every V0
+rule `olic` implements, with nothing gated.**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -40,8 +43,8 @@ semantic fixtures (`docs/design/0022`).**
 | G0 | `genesis/0-hex0`: hex listing → bytes, self-reproducing | **done** |
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
-| G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6e done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`), module constants, typed places, `rw` field types and `loop` |
-| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all fourteen `tests/sema/err` fixtures exact**); **`olic` analyses its own source without a single diagnostic**; reproduces every AST **and every semantic** snapshot byte for byte; OIR, x64 lowering and ELF next; fixpoint `stage2 == stage3` | **in progress** |
+| G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6f done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`), module constants, typed places, `rw` field types, `loop` and explicit conversions (`T(x)`, `T.wrap(x)`, `T.bits(x)`) |
+| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all fifteen `tests/sema/err` fixtures exact**); **`olic` analyses its own source without a single diagnostic, and that source is now valid V0 with no gated rule left**; reproduces every AST **and every semantic** snapshot byte for byte; OIR, x64 lowering and ELF next; fixpoint `stage2 == stage3` | **in progress** |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |
 | M3 | Freestanding binary with own entry point and own stack | not started |

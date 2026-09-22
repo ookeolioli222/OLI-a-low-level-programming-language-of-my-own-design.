@@ -32,7 +32,7 @@ proc read_file(z: zone, path: view u8, cap: u64) -> view u8
         if r <= 0
             break
         end
-        n <- n + r
+        n <- n + u64.bits(r)
     end
     os.syscall(3, fd)
     ret buf[..n]

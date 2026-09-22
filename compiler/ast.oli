@@ -211,7 +211,7 @@ proc new_node(cx: rw ref Ctx, kind: u64, t0: u64) -> rw ref Node
         os.syscall(60, 4)
     end
     nd := node_at(cx, n)
-    nd.kind <- kind
+    nd.kind <- u32.wrap(kind)
     nd.sub <- 0
     nd.val <- 0
     nd.t0 <- t0
@@ -277,7 +277,7 @@ end
 proc emit_byte(cx: rw ref Ctx, b: u64)
     out := cx.out
     n := cx.nout
-    out[n] <- b
+    out[n] <- u8.wrap(b)
     cx.nout <- n + 1
 end
 

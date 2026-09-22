@@ -112,10 +112,16 @@ procedure returned a status without declaring `-> s32`, a local called `at`
 (a reserved word), and a store into an immutable binding. It also produced the
 next measurement: with implicit narrowing reported, `compiler/` has **93**
 sites where a wider value is stored into a narrower place — and `lib/`,
-`examples/` and the fixture corpus have none. oli-core has no conversions, so
-those 93 sites are the specification of oli1 step 6f (`T(x)`, `T.wrap(x)`),
-and the check is written but gated (`NARROW_STRICT`) until the step lands.
-The same shape as step 6e: measure with the compiler, then grow the subset.
+`examples/` and the fixture corpus have none. oli-core had no conversions, so
+those 93 sites were the specification of oli1 step 6f (`T(x)`, `T.wrap(x)`,
+`T.bits(x)`), the same shape as step 6e: measure with the compiler, then grow
+the subset. Step 6f has since landed. Every one of the 93 sites now carries
+the conversion it actually performs — `u64.bits(idx)` where a `word` index is
+used as an offset, `word.bits(i)` for the reverse, `u8.wrap(…)` for a digit
+byte, `u32.wrap(…)` for a node field — `NARROW_STRICT` is gone, and E0202 on a
+computed value is reported like any other rule. Measuring the same source a
+third time found no further gap: **oli-core now expresses all of `compiler/`
+as valid V0.**
 
 Writing the compiler in its own subset pays for itself here: `olic` lays out
 its own `Tok`, `Lex`, `Ctx`, `Node`, `Item` and `Prog` layouts, and the parser

@@ -1,4 +1,4 @@
--- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 6c.
+-- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 6f.
 -- A real code generator: integer bindings are stack-frame locals, expressions
 -- are evaluated at run time (in rax, with push/pop for the right operand),
 -- control flow is compiled to rel32 branches with forward fixups, procedures
@@ -20,6 +20,9 @@
 --   r.f / r.f <- x              field load (zero/sign extended by the field type) / store
 --   NAME(args)                  call (statement or factor); up to six argument words in
 --                               rdi rsi rdx rcx r8 r9; result in rax (view: rax, rdx)
+--   T(x) / T.wrap(x) / T.bits(x)   explicit conversion: T(x) is lossless and emits
+--                               nothing, .wrap/.bits truncate to the width of T and
+--                               extend again with its signedness; .sat/.checked reject
 --   name := <expr>              bind a new local: one slot (int) or two (view)
 --   name := "text"              bind a name to a .rodata string (escapes of syntax §2.4)
 --   name <- <expr>              store into an existing local (same type)
@@ -2270,6 +2273,18 @@ proc start
         mov rax, [rsi]
         and rax, 255
         cmp rax, 40
+        je .pr_maybe_conv
+        cmp rax, 46
+        je .pr_maybe_conv
+        jmp .pr_after_conv
+.pr_maybe_conv:
+        call .conv_lookup
+        cmp rax, 1
+        je .pr_conv
+.pr_after_conv:
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
         je .pr_call
         call .lookup_opt
         cmp r11, 0
@@ -2414,6 +2429,130 @@ proc start
         call .e_movimm_rdx
         mov rax, 1
         mov [r14+0x1F0050], rax
+        ret
+.pr_conv:
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 46
+        je .pr_conv_mode
+        add rsi, 1
+        call .expr
+        call .need_int
+        mov rax, 41
+        call .expect
+        mov rax, 0
+        mov [r14+0x1F0050], rax
+        ret
+.pr_conv_mode:
+        add rsi, 1
+        push r9
+        push r10
+        call .word
+        cmp rcx, 0
+        je .err
+        mov rdx, kw_wrap
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .pr_conv_mode_ok
+        mov rdx, kw_bits
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+.pr_conv_mode_ok:
+        mov rax, 40
+        call .expect
+        call .expr
+        call .need_int
+        mov rax, 41
+        call .expect
+        pop r10
+        pop r9
+        call .e_trunc
+        mov rax, 0
+        mov [r14+0x1F0050], rax
+        ret
+.conv_lookup:
+        push rdx
+        mov rdx, convtab
+.cl_loop:
+        mov rax, [rdx]
+        and rax, 255
+        cmp rax, 0
+        je .cl_none
+        cmp rax, rcx
+        jne .cl_next
+        mov r9, 0
+.cl_char:
+        cmp r9, rcx
+        jae .cl_hit
+        mov rax, [r8+r9]
+        and rax, 255
+        mov r10, [rdx+r9+1]
+        and r10, 255
+        cmp rax, r10
+        jne .cl_next
+        add r9, 1
+        jmp .cl_char
+.cl_hit:
+        mov r9, [rdx+9]
+        and r9, 255
+        mov r10, [rdx+10]
+        and r10, 255
+        pop rdx
+        mov rax, 1
+        ret
+.cl_next:
+        add rdx, 12
+        jmp .cl_loop
+.cl_none:
+        pop rdx
+        mov rax, 0
+        ret
+.e_trunc:
+        cmp r9, 8
+        je .et_done
+        cmp r9, 4
+        je .et_4
+        cmp r9, 2
+        je .et_2
+        cmp r10, 1
+        je .et_s1
+        mov rdx, seq_wrap_u8
+        mov rcx, 3
+        call .ebytes
+        ret
+.et_s1:
+        mov rdx, seq_wrap_s8
+        mov rcx, 4
+        call .ebytes
+        ret
+.et_2:
+        cmp r10, 1
+        je .et_s2
+        mov rdx, seq_wrap_u16
+        mov rcx, 3
+        call .ebytes
+        ret
+.et_s2:
+        mov rdx, seq_wrap_s16
+        mov rcx, 4
+        call .ebytes
+        ret
+.et_4:
+        cmp r10, 1
+        je .et_s4
+        mov rdx, seq_wrap_u32
+        mov rcx, 2
+        call .ebytes
+        ret
+.et_s4:
+        mov rdx, seq_wrap_s32
+        mov rcx, 3
+        call .ebytes
+        ret
+.et_done:
         ret
 .pr_int:
         call .pint
@@ -3852,6 +3991,66 @@ rodata seq_st_64
 end
 rodata seq_st_64rdx
     byte 0x48, 0x89, 0x90
+end
+rodata kw_wrap
+    ascii "wrap"
+end
+rodata kw_bits
+    ascii "bits"
+end
+rodata convtab
+    byte 2
+    ascii "u8      "
+    byte 1, 0, 0
+    byte 2
+    ascii "s8      "
+    byte 1, 1, 0
+    byte 4
+    ascii "byte    "
+    byte 1, 0, 0
+    byte 3
+    ascii "u16     "
+    byte 2, 0, 0
+    byte 3
+    ascii "s16     "
+    byte 2, 1, 0
+    byte 3
+    ascii "u32     "
+    byte 4, 0, 0
+    byte 3
+    ascii "s32     "
+    byte 4, 1, 0
+    byte 3
+    ascii "u64     "
+    byte 8, 0, 0
+    byte 3
+    ascii "s64     "
+    byte 8, 1, 0
+    byte 4
+    ascii "word    "
+    byte 8, 1, 0
+    byte 5
+    ascii "uword   "
+    byte 8, 0, 0
+    byte 0
+end
+rodata seq_wrap_u8
+    byte 0x0f, 0xb6, 0xc0
+end
+rodata seq_wrap_s8
+    byte 0x48, 0x0f, 0xbe, 0xc0
+end
+rodata seq_wrap_u16
+    byte 0x0f, 0xb7, 0xc0
+end
+rodata seq_wrap_s16
+    byte 0x48, 0x0f, 0xbf, 0xc0
+end
+rodata seq_wrap_u32
+    byte 0x89, 0xc0
+end
+rodata seq_wrap_s32
+    byte 0x48, 0x63, 0xc0
 end
 rodata kw_os
     ascii "os"

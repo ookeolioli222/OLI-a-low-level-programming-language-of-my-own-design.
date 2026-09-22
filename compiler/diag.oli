@@ -81,7 +81,7 @@ proc excerpt(src: view u8, tmp: rw view u8, line: u64, col: u64)
                 c <- B_TAB
             end
         end
-        tmp[0] <- c
+        tmp[0] <- u8.wrap(c)
         put(2, tmp[..1])
         i <- i + 1
     end

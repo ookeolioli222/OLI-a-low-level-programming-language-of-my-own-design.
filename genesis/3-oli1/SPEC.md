@@ -42,6 +42,7 @@ observable result. Nothing is marked done without such a test.
 | 6e | `name : T` and `name : T <- expr` places, `rw`/`mmio` before a field type, `loop … end` | frame slots as for a binding; the type is checked for shape and otherwise ignored; `loop` is `while` with no condition | **done** |
 | 6d | `NAME := <decimal>` at module level: integer constants, visible in every procedure after the line; a local of the same name shadows one | `mov rax, imm64` | **done** |
 | 6c | `-> T or E` results, `fail [e]`, `e else fail` / `e else ret [v]` / `e else v`, `case e … when ok [x] … when fail [e] … end` (second arm may be `else`) | tag in `rax`, payload in `rdx`; `test`/`jcc` per resolution | **done** |
+| 6f | `T(x)`, `T.wrap(x)`, `T.bits(x)` for the integer types (`u8`…`s64`, `byte`, `word`, `uword`) | `T(x)` emits nothing; `.wrap`/`.bits` truncate to the width of `T` and extend again with its signedness (`movzx`/`movsx`/`movsxd`); `.sat`/`.checked` reject | **done** |
 
 Steps 2–6 grow oli-core until it can express `olic` (layer 4), at which point the
 compiler is ported into oli-core, `oli1` compiles it, and the fixpoint
@@ -332,6 +333,48 @@ Proven by `places.oli` in the harness (a place with and without an initial
 value, a view place, a `loop` left by `break`) and by the whole of
 `compiler/`, which oli1 compiles and `olic` then analyses without a single
 diagnostic.
+
+## Step 6f (implemented)
+
+The last gap between oli-core and V0. V0 has no implicit narrowing: where a
+wider value meets a narrower context the conversion has to be written, and
+`olic` reports `E0202` when it is not. Measuring `compiler/` with that check
+enabled named 93 such sites (and none in `lib/`, `examples/` or the fixtures),
+which is the specification this step implements — the same method as step 6e.
+
+`primary` gains one form. A word that names an integer type (`u8`, `s8`,
+`byte`, `u16`, `s16`, `u32`, `s32`, `u64`, `s64`, `word`, `uword`) and is
+followed by `(` or `.` is a conversion, not a call or a local: `T(expr)` is
+the lossless form and `T.wrap(expr)` / `T.bits(expr)` name what happens to the
+bits. The type table (`convtab`) carries each type's width and signedness.
+
+Since every oli-core value lives in a 64-bit slot, the lowering is exactly the
+re-extension the type demands, applied to the value in `rax`:
+
+| T | `.wrap` / `.bits` | bytes |
+|---|-------------------|-------|
+| `u8`, `byte` | `movzx eax, al` | `0f b6 c0` |
+| `s8` | `movsx rax, al` | `48 0f be c0` |
+| `u16` | `movzx eax, ax` | `0f b7 c0` |
+| `s16` | `movsx rax, ax` | `48 0f bf c0` |
+| `u32` | `mov eax, eax` | `89 c0` |
+| `s32` | `movsxd rax, eax` | `48 63 c0` |
+| `u64`, `s64`, `word`, `uword` | nothing (already 64 bits) | — |
+
+`T(x)` emits nothing at all: it is a promise checked by `olic`, and the value
+of a lossless conversion is the value itself. `.sat` and `.checked` are V0
+forms that oli-core does not implement, so oli1 rejects them rather than
+approximating them (`CONTRIBUTING.md`); so does a bare type name used as a
+value, an unknown mode and a non-integer operand.
+
+Proven by `convert.oli` in the harness — every width, both signs, the lossless
+form, `.bits` at full width and a conversion inside arithmetic — by a
+byte-exact check that each of the six sequences above is emitted, by six
+rejection programs, and by the whole of `compiler/`: its 93 sites now carry
+the conversion they actually perform, `olic` reports `E0202` everywhere with
+no gate left, and it still analyses its own source without a diagnostic.
+A third measurement of the same source found no further gap, so **oli-core
+expresses all of `compiler/` as valid V0**.
 
 ## Diagnostics
 

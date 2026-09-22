@@ -284,7 +284,7 @@ proc item_find(pg: ref Prog, name: view u8) -> word
         cx := mod_ctx(pg, it.mod)
         nd := node_at(cx, it.node)
         if view_eq(tok_text(cx, nd.t0), name)
-            ret i
+            ret word.bits(i)
         end
         i <- i + 1
     end
@@ -352,8 +352,8 @@ proc type_size(pg: rw ref Prog, mi: u64, a: u64, b: u64) -> u64
         txt := tok_text(cx, i)
         p := prim_size(txt)
         if p > 0
-            pg.lastalign <- p
-            ret p
+            pg.lastalign <- u64.bits(p)
+            ret u64.bits(p)
         end
         nm := last_component(cx, i, b)
         idx := item_find(pg, nm)
@@ -361,8 +361,8 @@ proc type_size(pg: rw ref Prog, mi: u64, a: u64, b: u64) -> u64
             pg.lastalign <- 8
             ret 8
         end
-        resolve_item(pg, idx)
-        it := item_at(pg, idx)
+        resolve_item(pg, u64.bits(idx))
+        it := item_at(pg, u64.bits(idx))
         pg.lastalign <- it.alignv
         ret it.size
     end
@@ -670,8 +670,8 @@ proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
         if base.kind == N_NAME
             idx := item_find(pg, tok_text(cx, base.t0))
             if idx >= 0
-                resolve_item(pg, idx)
-                it := item_at(pg, idx)
+                resolve_item(pg, u64.bits(idx))
+                it := item_at(pg, u64.bits(idx))
                 m := tok_text(cx, nd.t0)
                 if view_eq(m, "size")
                     ret it.size
@@ -736,7 +736,7 @@ proc check_val_range(pg: ref Prog, i: u64, e: u64)
         ret
     end
     v2 := val_at(pg, i)
-    if v2.value < lim
+    if v2.value < u64.bits(lim)
         if v2.value >= 0
             ret
         end
@@ -852,7 +852,7 @@ proc put_type_canon(pg: ref Prog, mi: u64, a: u64, b: u64)
         else
             put(1, tok_text(cx, i))
         end
-        prev <- w
+        prev <- u64.bits(w)
         i <- i + 1
     end
 end

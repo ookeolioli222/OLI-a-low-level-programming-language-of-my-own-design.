@@ -13,7 +13,7 @@ proc sdiag(pg: rw ref Prog, mi: u64, code: u64, tok: u64)
     put(2, "error[E")
     d : u64 <- 1000
     while d > 0
-        tmp[0] <- 48 + code / d % 10
+        tmp[0] <- u8.wrap(48 + code / d % 10)
         put(2, tmp[..1])
         d <- d / 10
     end
@@ -217,7 +217,7 @@ proc chk_find(pg: ref Prog, name: view u8) -> word
         c := chk_at(pg, i)
         cx := mod_ctx(pg, c.mod)
         if view_eq(tok_text(cx, c.name), name)
-            ret i
+            ret word.bits(i)
         end
     end
     ret -1
@@ -274,7 +274,7 @@ proc region_of(pg: ref Prog, mi: u64, n: u64) -> u64
         if idx < 0
             ret 0
         end
-        c := chk_at(pg, idx)
+        c := chk_at(pg, u64.bits(idx))
         ret c.vzd
     end
     if k == N_INDEX
@@ -334,7 +334,7 @@ proc frame_escape(pg: ref Prog, mi: u64, n: u64) -> word
     if idx < 0
         ret 0
     end
-    c := chk_at(pg, idx)
+    c := chk_at(pg, u64.bits(idx))
     if c.kind != 1
         ret 0
     end
@@ -413,7 +413,7 @@ proc chk_assign(pg: ref Prog, mi: u64, n: u64)
     if idx < 0
         ret
     end
-    c := chk_at(pg, idx)
+    c := chk_at(pg, u64.bits(idx))
     if c.assigned == 1
         if c.adepth <= pg.cdepth
             ret
@@ -429,7 +429,7 @@ proc chk_read(pg: ref Prog, mi: u64, tok: u64)
     if idx < 0
         ret
     end
-    c := chk_at(pg, idx)
+    c := chk_at(pg, u64.bits(idx))
     if c.kind != 1
         ret
     end
@@ -437,7 +437,7 @@ proc chk_read(pg: ref Prog, mi: u64, tok: u64)
         ret
     end
     sdiag(pg, mi, 220, tok)
-    c2 := chk_at(pg, idx)
+    c2 := chk_at(pg, u64.bits(idx))
     c2.assigned <- 1
 end
 
@@ -774,7 +774,7 @@ proc check_case_exhaustive(pg: ref Prog, mi: u64, n: u64)
             end
             ret
         end
-        if variants_covered(pg, mi, n, fi, 1) == 0
+        if variants_covered(pg, mi, n, u64.bits(fi), 1) == 0
             sdiag(pg, mi, 311, first_tok(pg, mi, subj))
         end
         ret
@@ -792,11 +792,11 @@ proc check_case_exhaustive(pg: ref Prog, mi: u64, n: u64)
         end
         ret
     end
-    it := item_at(pg, idx)
+    it := item_at(pg, u64.bits(idx))
     if it.kind != 1
         ret
     end
-    if variants_covered(pg, mi, n, idx, 0) == 0
+    if variants_covered(pg, mi, n, u64.bits(idx), 0) == 0
         sdiag(pg, mi, 311, first_tok(pg, mi, subj))
     end
 end
@@ -814,7 +814,7 @@ proc check_kids(pg: ref Prog, mi: u64, first: u64) -> word
         gone <- check_stmt(pg, mi, k)
         k <- sibling(cx, k)
     end
-    ret gone
+    ret word.bits(gone)
 end
 
 proc check_body(pg: ref Prog, mi: u64, body: u64) -> word
@@ -942,12 +942,12 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
             idx := chk_find(pg, tok_text(cx, ln.t0))
             tzd : u64 <- 0
             if idx >= 0
-                c := chk_at(pg, idx)
+                c := chk_at(pg, u64.bits(idx))
                 if c.kind != 1
                     -- A binding, a parameter or a zone handle is immutable.
                     sdiag(pg, mi, 110, nd.t0)
                 end
-                c2 := chk_at(pg, idx)
+                c2 := chk_at(pg, u64.bits(idx))
                 tzd <- c2.zd
             end
             if region_of(pg, mi, rhs) > tzd
@@ -1024,7 +1024,7 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
             clear_marks(pg)
         end
         if haselse == 1
-            ret alldiv
+            ret word.bits(alldiv)
         end
         ret 0
     end
@@ -1091,7 +1091,7 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
         if narm == 0
             ret 0
         end
-        ret alldiv2
+        ret word.bits(alldiv2)
     end
     if k == N_BODY
         ret check_body(pg, mi, n)

@@ -76,14 +76,14 @@ proc sput_toks(pg: ref Prog, mi: u64, a: u64, b: u64)
                 d <- d * 10
             end
             while d > 0
-                tmp[0] <- 48 + n / d % 10
+                tmp[0] <- u8.wrap(48 + n / d % 10)
                 sput(pg, tmp[..1])
                 d <- d / 10
             end
         else
             sput(pg, tok_text(cx, i))
         end
-        prev <- w
+        prev <- u64.bits(w)
         i <- i + 1
     end
 end
@@ -151,7 +151,7 @@ proc loc_type(pg: ref Prog, name: view u8) -> view u8
     if i < 0
         ret b[0..0]
     end
-    l := loc_at(pg, i)
+    l := loc_at(pg, u64.bits(i))
     ret b[l.t0..l.t1]
 end
 
@@ -192,7 +192,7 @@ proc field_type_text(pg: ref Prog, base: view u8, fname: view u8) -> view u8
     if idx < 0
         ret b[0..0]
     end
-    it := item_at(pg, idx)
+    it := item_at(pg, u64.bits(idx))
     cx := mod_ctx(pg, it.mod)
     f : u64 <- 0
     while f < it.nfld

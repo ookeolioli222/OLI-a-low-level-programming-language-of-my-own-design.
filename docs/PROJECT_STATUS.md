@@ -1,7 +1,8 @@
 # Oli-- completion plan and verified baseline
 
 Reviewed 2026-09-20; foreign oracle removed 2026-09-21; semantic analysis
-completed 2026-09-22. The requested scope is the entire roadmap, in order.
+completed and genesis step 6f (explicit conversions) landed 2026-09-22.
+The requested scope is the entire roadmap, in order.
 This document records actual implementation, not an assertion that the project
 is complete.
 
@@ -23,26 +24,30 @@ is complete.
   own front end (`compiler/`, built by `oli1`) parses and analyses high-level
   Oli-- and reproduces the whole corpus.
 - `genesis/3-oli1/` (the oli-core compiler `oli1`, written in `machine x64`)
-  exists and passes layer 3 of `genesis/test.sh` for steps 0–6e: locals,
+  exists and passes layer 3 of `genesis/test.sh` for steps 0–6f: locals,
   expressions, strings, control flow, syscalls, procedures, zones, views, raw
   memory, layouts, refs, fallible results, module constants, typed places,
-  `rw` field types and `loop`. `compiler/`
-  is the front end (design 0022): the V0 lexer, parser, §8 diagnostic renderer,
+  `rw` field types, `loop` and the explicit conversions `T(x)`, `T.wrap(x)`
+  and `T.bits(x)`. `compiler/` is the front end (design 0022): the V0 lexer, parser, §8 diagnostic renderer,
   module loader, item collection, signatures, local tables, expression typing
   and typed bodies in oli-core, built by `oli1`, pass the fixture corpus at
   layer 4 — all four `tests/snapshots/*.ast` **and all three
   `tests/snapshots/*.sema`** are reproduced byte for byte (items, signatures,
   locals, and a type and a region on every expression of every body), all
-  fifteen `tests/parse/err` fixtures and **all fourteen** `tests/sema/err`
+  fifteen `tests/parse/err` fixtures and **all fifteen** `tests/sema/err`
   fixtures give exactly their expected diagnostics (capabilities, `E0900`,
   constants, layouts, scopes, definite assignment, reachability, failures,
-  exhaustiveness, read-only places, region escapes, literal types and address
-  spaces) with no diagnostic on any positive fixture. OIR, the native backend,
+  exhaustiveness, read-only places, region escapes, literal types, address
+  spaces and implicit narrowing) with no diagnostic on any positive fixture,
+  and no semantic rule is gated any more. OIR, the native backend,
   the standard-library implementation and the kernel do not exist. The checks
-  measured the compiler's own source twice: the first measurement specified
-  oli1 step 6e (typed places, `rw` field types, `loop`) and the second, from
-  expression typing, specifies step 6f (explicit conversions — 93 narrowing
-  sites in `compiler/`, none in `lib/`, `examples/` or the fixtures). `olic`
+  measured the compiler's own source three times: the first measurement
+  specified oli1 step 6e (typed places, `rw` field types, `loop`), the second,
+  from expression typing, specified step 6f (explicit conversions — 93
+  narrowing sites in `compiler/`, none in `lib/`, `examples/` or the
+  fixtures), and the third, after step 6f landed and all 93 sites were
+  rewritten, found no further gap: every construct `compiler/` uses is both
+  oli-core and valid V0. `olic`
   analyses all eleven of its own modules as one program without a single
   diagnostic — the harness re-runs that self-analysis on every build.
 - README and ROADMAP originally disagreed with each other and with G2's code.
@@ -90,7 +95,30 @@ real defects in it (an untyped literal binding, three drivers whose `entry`
 procedure returned a value without declaring a result type, a reserved word
 used as a local name, a store into an immutable binding) and measured the one
 remaining gap between oli-core and V0: 93 implicit narrowing conversions,
-which is the specification of oli1 step 6f.
+which became the specification of oli1 step 6f — implemented below.
+
+## Implemented in genesis step 6f (2026-09-22)
+
+`oli1` gained one expression form — a word naming an integer type followed by
+`(` or `.` — and with it `T(x)`, `T.wrap(x)` and `T.bits(x)` for `u8`, `s8`,
+`byte`, `u16`, `s16`, `u32`, `s32`, `u64`, `s64`, `word` and `uword`. `T(x)`
+emits nothing; `.wrap` and `.bits` truncate to the width of `T` and extend
+again with its signedness, which for the 64-bit slots of oli-core is one
+`movzx`, `movsx`, `movsxd` or `mov eax, eax`. `.sat` and `.checked` are V0
+forms oli-core does not implement, so they are rejected rather than
+approximated. `genesis/3-oli1/tests/convert.oli` proves every width and both
+signs by execution, the harness checks the six emitted byte sequences exactly,
+and six rejection programs cover the refused forms.
+
+The 93 narrowing sites in `compiler/` were then rewritten to say what they
+actually do — `u64.bits(idx)` where a signed index is used as an offset,
+`word.bits(i)` for the reverse, `u8.wrap(…)` for a digit byte, `u32.wrap(…)`
+for a node field — and one was a genuine latent confusion (`digit_value` held
+its `-1` sentinel in a `u64`, so it is now a `word`). `NARROW_STRICT` was
+removed from `compiler/body.oli`: E0202 on a computed value is reported like
+every other rule, `tests/sema/err/narrow.oli` pins it and the accepted
+explicit forms to their exact positions, and `olic` still analyses all eleven
+of its own modules without a single diagnostic.
 
 ## Implemented during the G2 review
 

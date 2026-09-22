@@ -297,16 +297,23 @@ range contains it; `uN` to a wider `uN` and to `uword`; `sN` to a wider `sN`
 and to `word`; `rw view T` to `view T`, `rw ref T` to `ref T`; a `[N]T` place
 to a view. `mmio` is never dropped.
 
-Explicit forms **[parses]**:
+Explicit forms:
 
 ```oli
-u32(x)          -- lossless, verified statically
-u8.wrap(x)      -- wrapping
-u8.sat(x)       -- saturating
-u8.checked(x)   -- fallible: u8 or none
-u64.bits(x)     -- reinterpret the bits
-addr u8 (n)     -- integer to address; requires permit memory.raw
+u32(x)          -- lossless, verified statically           [runs]
+u8.wrap(x)      -- wrapping                                [runs]
+u64.bits(x)     -- reinterpret the bits                    [runs]
+u8.sat(x)       -- saturating                              [parses]
+u8.checked(x)   -- fallible: u8 or Overflow                [parses]
+addr u8 (n)     -- integer to address; permit memory.raw   [parses]
 ```
+
+`T(x)`, `T.wrap(x)` and `T.bits(x)` are compiled by `oli1` (genesis step 6f)
+and checked by `olic`: `T(x)` emits nothing, `.wrap`/`.bits` truncate to the
+width of `T` and extend again with its signedness. `.sat` and `.checked` parse
+and type-check but have no lowering yet, and `checked` is still typed as a
+plain `T` rather than `T or Overflow`, because the spec has not named the
+`Overflow` type (`compiler/SPEC.md`).
 
 ---
 
@@ -693,11 +700,12 @@ Implemented today **[runs]**:
 | W0001 | doc comment documents nothing |
 
 Specified and **[planned]**: E0013, E0015, E0021, E0030 (syntax); the E02xx
-codes for arguments and literals (E0205–E0209); E0602/E0603 and the rest of
-the program rules; and implicit narrowing of a computed value (E0202), which
-is written but gated until oli-core has conversions. The rule is absolute: an
-unimplemented feature reports `E0900` — no silent fallback, and the compiler
-never crashes on user input.
+codes for arguments and literals (E0205–E0209); and E0602/E0603 with the rest
+of the program rules. Implicit narrowing of a computed value (E0202) is no
+longer gated — it is reported everywhere, and `tests/sema/err/narrow.oli`
+holds it to its exact positions. The rule is absolute: an unimplemented
+feature reports `E0900` — no silent fallback, and the compiler never crashes
+on user input.
 
 ---
 

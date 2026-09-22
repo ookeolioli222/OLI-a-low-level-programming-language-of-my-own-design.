@@ -10,7 +10,7 @@ proc put(fd: u64, v: view u8)
         if w <= 0
             ret
         end
-        done <- done + w
+        done <- done + u64.bits(w)
     end
 end
 
@@ -24,7 +24,7 @@ proc put_uint(fd: u64, tmp: rw view u8, n: u64)
         r := n - HALF
         rem := 8 + r % 10
         put_uint(fd, tmp, r / 10 + 922337203685477580 + rem / 10)
-        tmp[0] <- 48 + rem % 10
+        tmp[0] <- u8.wrap(48 + rem % 10)
         put(fd, tmp[..1])
         ret
     end
@@ -36,7 +36,7 @@ proc put_uint(fd: u64, tmp: rw view u8, n: u64)
     end
     while m > 0
         i <- i - 1
-        tmp[i] <- 48 + m % 10
+        tmp[i] <- u8.wrap(48 + m % 10)
         m <- m / 10
     end
     put(fd, tmp[i..])
@@ -52,7 +52,7 @@ proc read_all(z: zone, cap: u64) -> view u8
         if r <= 0
             break
         end
-        n <- n + r
+        n <- n + u64.bits(r)
     end
     ret buf[..n]
 end

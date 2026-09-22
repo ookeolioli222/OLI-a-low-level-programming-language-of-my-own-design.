@@ -944,7 +944,48 @@ end'; do
     grep -q 'oli1: error' build/rj.err || fail "oli1: malformed program gave no diagnostic"
 done
 echo "ok: oli1 compiles module-level constants; rejects duplicates, non-literal values, stores and members"
-echo "genesis: layer 3 (oli-core compiler, steps 0-6e) passed"
+# step 6f: explicit conversions `T(x)`, `T.wrap(x)` and `T.bits(x)`
+./build/oli1.bin < 3-oli1/tests/convert.oli > build/o4.elf
+chmod +x build/o4.elf
+set +e; ./build/o4.elf; st=$?; set -e
+[ "$st" = 42 ] || fail "oli1: convert.oli expected exit 42 got $st"
+# The widths are the encoder's, not the interpreter's: check the emitted bytes.
+printf 'module w\nproc start\n entry\n n : u64 <- 1\n a : u64 <- u8.wrap(n)\n b : u64 <- s8.wrap(n)\n c : u64 <- u16.wrap(n)\n d : u64 <- s16.wrap(n)\n e : u64 <- u32.wrap(n)\n f : u64 <- s32.wrap(n)\n g : u64 <- u64.wrap(n)\n h : u64 <- u64(n)\n ret 0\nend\n' > build/cvw.oli
+./build/oli1.bin < build/cvw.oli > build/cvw.elf
+for want in 0fb6c0 480fbec0 0fb7c0 480fbfc0 89c0 4863c0; do
+    od -v -A n -t x1 build/cvw.elf | tr -d ' \n' | grep -q "$want" || fail "oli1: conversion bytes $want missing"
+done
+[ "$(od -v -A n -t x1 build/cvw.elf | tr -d ' \n' | grep -c '0fb6c0')" = 1 ] || fail "oli1: u8.wrap emitted more than once"
+for bad in 'proc start
+ entry
+ ret u8.sat(3)
+end' 'proc start
+ entry
+ ret u8.checked(3)
+end' 'proc start
+ entry
+ ret u8.nope(3)
+end' 'proc start
+ entry
+ ret u8 3
+end' 'proc start
+ entry
+ s := "hi"
+ ret u8.wrap(s)
+end' 'proc start
+ entry
+ ret u8.wrap(3
+end'; do
+    set +e
+    printf '%s\n' "$bad" | ./build/oli1.bin > build/rj.elf 2> build/rj.err
+    st=$?
+    set -e
+    [ "$st" = 2 ] || fail "oli1: malformed conversion exited $st instead of 2"
+    [ "$(wc -c < build/rj.elf)" -eq 0 ] || fail "oli1: malformed conversion produced output"
+    grep -q 'oli1: error' build/rj.err || fail "oli1: malformed conversion gave no diagnostic"
+done
+echo "ok: oli1 compiles T(x)/T.wrap(x)/T.bits(x) with the exact truncation bytes; rejects sat, checked, unknown modes, bare type names and view operands"
+echo "genesis: layer 3 (oli-core compiler, steps 0-6f) passed"
 
 # --- layer 4: olic (G4), written in oli-core and compiled by oli1 ---
 cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/show_tokens.oli > build/show_tokens.oli
@@ -1067,6 +1108,6 @@ grep -q 'E0900' build/chk.err || fail "checks: kernel_sketch must report the V1 
 for f in ../tests/sema/ok/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli; do
     ( cd .. && genesis/build/show_sema < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
 done
-echo "ok: olic reports exactly the diagnostics of all fourteen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types and address spaces - and none on any positive fixture"
+echo "ok: olic reports exactly the diagnostics of all fifteen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, address spaces and implicit narrowing - and none on any positive fixture"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic front end and semantic analysis) passed"

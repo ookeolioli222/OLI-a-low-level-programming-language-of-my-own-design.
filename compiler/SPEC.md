@@ -194,7 +194,12 @@ widening, `(bits x)` for an explicit same-width reinterpretation, `(inttoaddr
 x)` / `(inttophys x)` for an address, nothing at all when only `rw` is
 dropped or the representation is identical. `wrap(e)` / `sat(e)` /
 `checked(e)` set the mode of the arithmetic inside `e`, which prints as
-`(add/wrap …)`. `os.syscall` is special-cased the way the ABI is: an unsigned
+`(add/wrap …)`. Known gap: `checked(e)` and `T.checked(x)` are typed as plain
+`T`, not as `T or Overflow` — `spec/OLI_SEMANTICS_V0.md` defers naming the
+`Overflow` type, so there is no failure type for the checker to build, and
+`tests/sema/ok/flow.oli` resolves one with `else` today. It is recorded here
+rather than refused with `E0900`, because refusing it would reject a fixture
+the corpus accepts; it closes when the spec names the type. `os.syscall` is special-cased the way the ABI is: an unsigned
 argument is reinterpreted (`(bits …):word`), a signed one is widened.
 
 **Regions** (design 0014) are a bit set: bit `i` is `param#i`, bit 16 is the
@@ -211,12 +216,17 @@ as `(view-of [rw static heap_region])`. The `rw` of a place follows the base:
 a frame place and a static are writable, a field of a `ref` is not and a field
 of a `rw ref` is.
 
-Deviation to close: implicit narrowing of a *computed* value (`p <- e` where
-`e` is wider than `p`) is a V0 `E0202`, and the checker implements it, but it
-is gated behind `NARROW_STRICT` because oli-core has no conversions. Enabling
-it reports 93 sites in `compiler/` and **none** in `lib/`, `examples/` or the
-fixtures — that measurement is the specification of oli1 step 6f (`T(x)` and
-`T.wrap(x)`), exactly as the step 6e measurement was.
+Implicit narrowing of a *computed* value (`p <- e` where `e` is wider than
+`p`) is a V0 `E0202` and is reported like any other rule. It was the last
+deviation: the check was written but gated behind `NARROW_STRICT`, because
+enabling it reported 93 sites in `compiler/` itself (and **none** in `lib/`,
+`examples/` or the fixtures) and oli-core had no conversions to write instead.
+That measurement was the specification of oli1 step 6f (`T(x)`, `T.wrap(x)`,
+`T.bits(x)`), exactly as the step 6e measurement was. Step 6f landed, all 93
+sites now name the conversion they perform, the gate is gone, and
+`tests/sema/err/narrow.oli` holds the rule — with the accepted explicit forms
+beside it — to its exact positions. Re-measuring found no further gap: every
+construct `compiler/` uses is both oli-core and valid V0.
 
 ## Checks (`check.oli`)
 
