@@ -837,7 +837,11 @@ constant in `.rodata`).
   travels as its eightbytes in registers (SysV INTEGER class: `arg` per
   word, `call.word1` for the second word back), a wider parameter on the
   stack (MEMORY class), copied into the frame on entry so the local reads
-  like any other; a wider result would need `sret` and stays E0900.
+  like any other; a wider result goes through `sret` — the caller owns an
+  area of its frame and passes the address as a hidden first argument, the
+  callee copies the bytes there and hands the address back in rax. A view
+  or an array of layouts reaches an element by its address, so `v[i].f`,
+  `v[i] <- p` (a copy) and `each e in v` (a copy per element) all run.
 - **`case` over a `bool`, an integer or a plain `choice`**: the arms in the
   order written, each a compare and a jump past it — `true`/`false` and an
   integer against the value, a variant against the tag byte of the image
@@ -848,14 +852,14 @@ constant in `.rodata`).
   changed: the corpus has no such `case`.
 - **`each i in a..b`** counts from `a` while below `b` (both `uword`), the
   counter a place that becomes the phi at the head.
-- `tests/run/records.oli` pins seventeen checks over all of it.
+- `tests/run/records.oli` pins twenty-three checks over all of it.
 
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 23,795 lines) into
+compiles its own source (`compiler/`, seventeen modules, 23,852 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 885,904 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 887,951 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

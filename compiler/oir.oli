@@ -40,10 +40,9 @@ module olic.oir
 -- A `machine x64` block is `machine.in REG, %v` for each `in`, the block
 -- (`machine x64`, assembled by compiler/asm.oli) and `%n = machine.out REG`
 -- for each `out`, standing together in the stream.
--- Anything else is refused with E0900 rather than approximated: a view
--- whose element is a layout, a choice wider than a word, a layout result
--- wider than sixteen bytes (`sret`), a view inside a `T or E` of a
--- procedure and a machine line the encoder does not know.
+-- Anything else is refused with E0900 rather than approximated: a choice
+-- wider than a word, a view inside a `T or E` of a procedure and a machine
+-- line the encoder does not know.
 --
 -- Plain arithmetic traps on overflow (design 0006), so every `+ - * / %` and
 -- every `-x` carries the width of its type and the static that names its trap
@@ -385,6 +384,9 @@ layout Oir
     cont : u64
     nerr : u64
     callstk : u64
+    sretv : u64
+    sretslot : u64
+    sretsize : u64
     entryp : u64
     amode : u64
     ovfacc : u64
@@ -505,6 +507,9 @@ proc oir_reset(ob: rw ref Oir)
     ob.cont <- 0
     ob.nerr <- 0
     ob.callstk <- 0
+    ob.sretv <- 0
+    ob.sretslot <- 0
+    ob.sretsize <- 0
     ob.entryp <- 0
     ob.amode <- 0
     ob.ovfacc <- 0
@@ -1499,15 +1504,23 @@ end
 -- Expressions -----------------------------------------------------------------
 
 proc elem_bytes(pg: ref Prog, ob: rw ref Oir, mi: u64, t: view u8, n: u64) -> u64
-    -- The size of one element of a view or an array. Only an integer element
-    -- is lowered; a view of a layout needs the field offsets `layout` still
-    -- waits for.
-    b := int_bits(view_elem(t))
-    if b == 0
-        oir_err(ob, pg, mi, 900, n)
+    -- The size of one element of a view or an array: an integer's width, or
+    -- a layout's size — an element that is a layout is reached by its
+    -- address, like any layout held by value.
+    et := view_elem(t)
+    b := int_bits(et)
+    if b > 0
+        ret u64.bits(b) / 8
+    end
+    if view_eq(et, "bool")
         ret 1
     end
-    ret u64.bits(b) / 8
+    lp := layout_param(pg, et)
+    if lp > 0
+        ret lp
+    end
+    oir_err(ob, pg, mi, 900, n)
+    ret 1
 end
 
 proc scale_by(ob: rw ref Oir, v: u64, sz: u64) -> u64
@@ -1624,10 +1637,11 @@ end
 -- the lowest address. The two counters are locals of the walk, because an
 -- argument can be a call with arguments of its own.
 
-proc gen_call_args(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, pi: word) -> u64
+proc gen_call_args(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, pi: word, hidden: u64) -> u64
     -- Arguments in source order; each becomes an `arg` marker carrying the
     -- location it travels in, and a view argument becomes two. The count is
-    -- what `call` consumes; the stack words are left in `ob.callstk`.
+    -- what `call` consumes; the stack words are left in `ob.callstk`. With
+    -- `hidden`, the `sret` area's address goes first, in rdi.
     cx := mod_ctx(pg, mi)
     b := pg.sbuf
     regs : u64 <- 0
@@ -1635,6 +1649,11 @@ proc gen_call_args(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, pi: word) -
     a : u64 <- sibling(cx, kid1(cx, n))
     k : u64 <- 0
     nargs : u64 <- 0
+    if hidden == 1
+        emit_ins(ob, O_ARG, ob.sretv, 0, 0, 0)
+        nargs <- 1
+        regs <- 1
+    end
     while a != 0
         want : view u8 <- b[0..0]
         words : u64 <- 1
@@ -1825,20 +1844,27 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         oir_err(ob, pg, mi, 900, n)
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end
-    nargs := gen_call_args(pg, ob, mi, n, pi)
+    rt := proc_result(pg, tok_text(cx, cn.t0))
+    rl := layout_param(pg, rt)
+    hidden : u64 <- 0
+    if rl > 16
+        -- SysV `sret`: the caller owns an area for the result and passes
+        -- its address as a hidden first argument; the callee fills it and
+        -- hands the address back in rax.
+        ob.sretv <- tmp_area(ob, rl)
+        hidden <- 1
+    end
+    nargs := gen_call_args(pg, ob, mi, n, pi, hidden)
     r := emit_ins(ob, O_CALL, u64.bits(pi), nargs, ob.callstk, 0)
     ob.lastlen <- 0
     ob.lastpay <- 0
-    rt := proc_result(pg, tok_text(cx, cn.t0))
-    rl := layout_param(pg, rt)
+    if rl > 16
+        ret ob.sretv
+    end
     if rl > 0
         -- A layout of sixteen bytes or less comes back in rax and rdx
         -- (ABI.md §2); its words go to a fresh area of the frame, whose
-        -- address is the value. A wider one needs `sret`, not lowered.
-        if rl > 16
-            oir_err(ob, pg, mi, 900, n)
-            ret r
-        end
+        -- address is the value.
         w1 : u64 <- 0
         if rl > 8
             w1 <- emit_ins(ob, O_RDX, 0, 0, 2, 0)
@@ -2225,11 +2251,15 @@ proc gen_index(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     p := gen_index_addr(pg, ob, mi, n)
     sz := ob.lastlen
     et := view_elem(ety(pg, mi, kid1(cx, n), b[0..0]))
+    ob.lastlen <- 0
+    if layout_param(pg, et) > 0
+        -- A layout element is its address.
+        ret p
+    end
     sg : u64 <- 0
     if int_signed(et) == 1
         sg <- 1
     end
-    ob.lastlen <- 0
     ret emit_ins(ob, O_RLOAD, p, sz, sg, 0)
 end
 
@@ -2984,6 +3014,10 @@ proc gen_store_index(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     sz := ob.lastlen
     et := view_elem(ety(pg, mi, kid1(cx, tgt), b[0..0]))
     v := gen_expr(pg, ob, mi, kid2(cx, n), et)
+    if layout_param(pg, et) > 0
+        gen_copy(ob, p, v, sz)
+        ret
+    end
     emit_ins(ob, O_RSTORE, p, v, sz, 0)
 end
 
@@ -3021,13 +3055,22 @@ proc gen_ret_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, rv: u64)
     v2 := gen_expr(pg, ob, mi, rv, rt)
     ln := ob.lastlen
     rl := layout_param(pg, rt)
-    if rl > 0
-        -- A layout by value: its eightbytes in rax and rdx, sixteen bytes
-        -- at most; a wider one needs `sret`, not lowered.
-        if rl > 16
+    if rl > 16
+        -- `sret`: the bytes go to the caller's area, whose address comes
+        -- back in rax.
+        if ob.sretslot == 0
             oir_err(ob, pg, mi, 900, pg.curstmt)
             ret
         end
+        dst := emit_ins(ob, O_LOAD, ob.sretslot - 1, 0, 0, 0)
+        gen_copy(ob, dst, v2, rl)
+        gen_release_to(ob, 0)
+        emit_ins(ob, O_RET, dst, 0, 1, 0)
+        ret
+    end
+    if rl > 0
+        -- A layout by value: its eightbytes in rax and rdx, sixteen bytes
+        -- at most.
         w0 := emit_ins(ob, O_RLOAD, v2, 8, 0, 0)
         w1 : u64 <- 0
         if rl > 8
@@ -4027,7 +4070,10 @@ proc gen_each(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     ci := ins_at(ob, ck)
     ci.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
     p := addr_add(ob, a, scale_by(ob, i, sz))
-    e := emit_ins(ob, O_RLOAD, p, sz, sg, 0)
+    e : u64 <- p
+    if layout_param(pg, et) == 0
+        e <- emit_ins(ob, O_RLOAD, p, sz, sg, 0)
+    end
     ob.lastlen <- 0
     gen_store_local(pg, ob, mi, tok_text(cx, nd.t0), e)
     gen_block(pg, ob, mi, kid1(cx, kid2(cx, n)))
@@ -4270,6 +4316,16 @@ proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
     b := pg.sbuf
     regs : u64 <- 0
     stk : u64 <- 0
+    ob.sretslot <- 0
+    if ob.sretsize > 16
+        -- The `sret` pointer arrives in rdi and waits in a compiler-made
+        -- word for the `ret` that fills the area it names.
+        sp := emit_ins(ob, O_PARAM, 0, 0, 0, 0)
+        st := new_tmp(ob)
+        emit_ins(ob, O_STORE, st, sp, 0, 0)
+        ob.sretslot <- st + 1
+        regs <- 1
+    end
     i : u64 <- pg.locbase
     while i < pg.nloc
         l := loc_at(pg, i)
@@ -4384,6 +4440,7 @@ proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     ob.curp <- ob.nproc
     ob.brk <- 0
     ob.cont <- 0
+    ob.sretsize <- layout_param(pg, proc_result(pg, tok_text(cx, nd.t0)))
     gen_params(pg, ob, v.node)
     params := kid1(cx, v.node)
     k : u64 <- sibling(cx, params)

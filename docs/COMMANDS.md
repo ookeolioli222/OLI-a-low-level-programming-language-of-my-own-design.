@@ -133,7 +133,7 @@ if pkt.len < Header.size then fail too_short
 | Command | Meaning | Cost | Status |
 |---------|---------|------|--------|
 | `layout NAME [packed] [align N] ... end` | a record with a fixed, documented layout: integer, view, ref, address and by-value layout fields, `align N` on a field | — | **runs** (`tests/run/layouts.oli`) |
-| a layout held by value: `p : Name <- Name { f: e, … }`, `q : Name <- p`, `r.f <- p`, `f(p)`, `-> Name` | the bytes live in the frame (or the record); a literal is a fresh area written field by field; a copy is exact (words, then 4, 2, 1); a parameter or result of sixteen bytes or less travels in registers (SysV INTEGER class), a wider parameter on the stack and copied into the frame on entry; a wider result (`sret`) is E0900 | COPY / ZERO | **runs** (`tests/run/records.oli`) |
+| a layout held by value: `p : Name <- Name { f: e, … }`, `q : Name <- p`, `r.f <- p`, `f(p)`, `-> Name` | the bytes live in the frame (or the record); a literal is a fresh area written field by field; a copy is exact (words, then 4, 2, 1); a parameter or result of sixteen bytes or less travels in registers (SysV INTEGER class), a wider parameter on the stack and copied into the frame on entry, a wider result through `sret` (the caller's area, its address as a hidden first argument and back in rax); a view or array of layouts reaches an element by its address (`v[i]`, `v[i] <- p`, `each e in v`) | COPY / ZERO | **runs** (`tests/run/records.oli`) |
 | fields of type `be T` / `le T` | an integer stored in a given byte order | ZERO | analysed |
 | `T.size`, `T.align` | compile-time constants | ZERO | **runs** |
 | `T.at(v)` | a `ref T` over a view; `check.range` traps `bounds` when short, `check.align` traps `misaligned` when not aligned (unless `packed`) | CHECK | **runs** |
@@ -372,8 +372,7 @@ tool).
 
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
-review that is: a view of records, a `choice` wider than eight bytes, a
-layout result wider than sixteen bytes (`sret`), a view inside a `T or E` that a procedure returns,
+review that is: a `choice` wider than eight bytes, a view inside a `T or E` that a procedure returns,
 `be`/`le` fields, a `machine` line the encoder does not know (8/16-bit and segment registers, port I/O, `bytes`), `physaddr(n)`, the `cpu.*` and `mem.*`
 intrinsics, an `os.syscall` with more than seven words (the number and six
 arguments are all the registers a system call has) and aggregate constants.

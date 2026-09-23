@@ -1,9 +1,10 @@
 module records
 -- Layouts held by value — places, literals, copies, fields of layouts,
 -- parameters and results in registers (sixteen bytes or less) or in memory
--- (more), `case` over a `bool`, an integer and a plain `choice` with its
--- fields bound, and `each` over a range. The exit status is the number of
--- the check that failed; 42 when every one held.
+-- (more), results wider than sixteen bytes through `sret`, views and arrays
+-- of layouts, `case` over a `bool`, an integer and a plain `choice` with
+-- its fields bound, and `each` over a range. The exit status is the number
+-- of the check that failed; 42 when every one held.
 
 layout Small
     x : u16
@@ -46,6 +47,18 @@ end
 
 proc small_sum(s : Small) -> u32
     ret u32(s.x) + u32(s.y)
+end
+
+proc make_big(a : u64) -> Big
+    ret Big { a: a, b: a + 1, c: a + 2 }
+end
+
+proc total(v : view Pair) -> u64
+    t : u64 <- 0
+    each e in v
+        t <- t + u64(e.a) + e.b
+    end
+    ret t
 end
 
 proc area(s : Shape) -> u32
@@ -116,5 +129,17 @@ proc start -> s32
     ln9 := line { len: 9 }
     if area(ln9) != 9 then ret 16
     if area(dot) != 0 then ret 17
+    big := make_big(10)
+    if big.c != 12 then ret 18
+    if sum_big(big) != 33 then ret 19
+    pairs : [3]Pair
+    pairs[0] <- Pair { a: 1, b: 2 }
+    pairs[1] <- p
+    pairs[2] <- make_pair(3, 4)
+    if pairs[1].b != 37 then ret 20
+    if pairs[2].a != 3 then ret 21
+    if total(pairs) != 52 then ret 22
+    e2 := pairs[2]
+    if e2.b != 4 then ret 23
     ret 42
 end

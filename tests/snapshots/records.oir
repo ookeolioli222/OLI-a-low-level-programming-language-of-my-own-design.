@@ -3,8 +3,17 @@
   (static 1 len=27)
   (static 2 len=27)
   (static 3 len=27)
-  (static 4 len=27)
+  (static 4 len=25)
   (static 5 len=27)
+  (static 6 len=27)
+  (static 7 len=27)
+  (static 8 len=27)
+  (static 9 len=26)
+  (static 10 len=26)
+  (static 11 len=26)
+  (static 12 len=26)
+  (static 13 len=26)
+  (static 14 len=26)
   (proc sum_pair locals=1
     (bb0
       %0 = param 0
@@ -91,6 +100,103 @@
       %9 = add %4, %8
       check.overflow %9
       ret %9))
+  (proc make_big locals=1 temps=4
+    (bb0
+      %0 = param 0
+      store frame.1, %0
+      %2 = param 1
+      store frame.0, %2
+      %4 = addr.of frame.4
+      %5 = const 0
+      raw.store.64 %4, %5
+      %7 = const 8
+      %8 = add %4, %7
+      raw.store.64 %8, %5
+      %10 = const 16
+      %11 = add %4, %10
+      raw.store.64 %11, %5
+      %13 = load frame.0
+      raw.store.64 %4, %13
+      %15 = load frame.0
+      %16 = const 1
+      %17 = add %15, %16
+      check.overflow %17
+      %18 = const 8
+      %19 = add %4, %18
+      raw.store.64 %19, %17
+      %21 = load frame.0
+      %22 = const 2
+      %23 = add %21, %22
+      check.overflow %23
+      %24 = const 16
+      %25 = add %4, %24
+      raw.store.64 %25, %23
+      %27 = load frame.1
+      %28 = raw.load.64 %4
+      raw.store.64 %27, %28
+      %30 = const 8
+      %31 = add %4, %30
+      %32 = add %27, %30
+      %33 = raw.load.64 %31
+      raw.store.64 %32, %33
+      %35 = const 16
+      %36 = add %4, %35
+      %37 = add %27, %35
+      %38 = raw.load.64 %36
+      raw.store.64 %37, %38
+      ret %27))
+  (proc total locals=3 temps=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = const 0
+      store frame.2, %4
+      %6 = load frame.0
+      %7 = load frame.1
+      %8 = const 0
+      store frame.5, %8
+      jump bb1)
+    (bb1 preds bb0 bb3
+      %11 = load frame.5
+      %12 = cmp.lt %11, %7
+      branch %12, bb2, bb4)
+    (bb2 preds bb1
+      check.bounds %11, %7
+      %15 = const 16
+      %16 = mul %11, %15
+      %17 = add %6, %16
+      %18 = addr.of frame.4
+      %19 = raw.load.64 %17
+      raw.store.64 %18, %19
+      %21 = const 8
+      %22 = add %17, %21
+      %23 = add %18, %21
+      %24 = raw.load.64 %22
+      raw.store.64 %23, %24
+      %26 = load frame.2
+      %27 = addr.of frame.4
+      %28 = raw.load.32 %27
+      %29 = add %26, %28
+      check.overflow %29
+      %30 = addr.of frame.4
+      %31 = const 8
+      %32 = add %30, %31
+      %33 = raw.load.64 %32
+      %34 = add %29, %33
+      check.overflow %34
+      store frame.2, %34
+      jump bb3)
+    (bb3 preds bb2
+      %37 = load frame.5
+      %38 = const 1
+      %39 = add %37, %38
+      store frame.5, %39
+      jump bb1)
+    (bb4 preds bb1
+      %43 = load frame.2
+      ret %43))
   (proc area locals=5
     (bb0
       %0 = param 0
@@ -141,16 +247,16 @@
     (bb6 preds bb1 bb3 bb4 bb5
       %43 = load frame.1
       ret %43))
-  (proc start locals=16 temps=13 entry
+  (proc start locals=19 temps=21 entry
     (bb0
       %0 = const 0
       store frame.0, %0
       %2 = const 0
       %3 = const 5
-      store frame.23, %2
+      store frame.34, %2
       jump bb1)
     (bb1 preds bb0 bb3
-      %6 = load frame.23
+      %6 = load frame.34
       %7 = cmp.lt %6, %3
       branch %7, bb2, bb4)
     (bb2 preds bb1
@@ -162,10 +268,10 @@
       store frame.0, %12
       jump bb3)
     (bb3 preds bb2
-      %15 = load frame.23
+      %15 = load frame.34
       %16 = const 1
       %17 = add %15, %16
-      store frame.23, %17
+      store frame.34, %17
       jump bb1)
     (bb4 preds bb1
       %21 = load frame.0
@@ -182,10 +288,10 @@
       store frame.3, %30
       %32 = const 1
       %33 = load frame.2
-      store frame.24, %32
+      store frame.35, %32
       jump bb7)
     (bb7 preds bb6 bb9
-      %36 = load frame.24
+      %36 = load frame.35
       %37 = cmp.lt %36, %33
       branch %37, bb8, bb10)
     (bb8 preds bb7
@@ -197,10 +303,10 @@
       store frame.3, %42
       jump bb9)
     (bb9 preds bb8
-      %45 = load frame.24
+      %45 = load frame.35
       %46 = const 1
       %47 = add %45, %46
-      store frame.24, %47
+      store frame.35, %47
       jump bb7)
     (bb10 preds bb7
       %51 = load frame.3
@@ -273,7 +379,7 @@
       %111 = const 4
       ret %111)
     (bb25 preds bb23
-      %114 = addr.of frame.26
+      %114 = addr.of frame.37
       %115 = const 0
       raw.store.64 %114, %115
       %117 = const 8
@@ -359,7 +465,7 @@
       arg %192
       %194 = call make_pair/2
       %195 = call.word1
-      %196 = addr.of frame.28
+      %196 = addr.of frame.39
       raw.store.64 %196, %194
       %198 = const 8
       %199 = add %196, %198
@@ -387,7 +493,7 @@
       %220 = const 9
       ret %220)
     (bb35 preds bb33
-      %223 = addr.of frame.31
+      %223 = addr.of frame.42
       %224 = const 0
       raw.store.64 %223, %224
       %226 = const 8
@@ -438,7 +544,7 @@
       %270 = const 10
       ret %270)
     (bb37 preds bb35
-      %273 = addr.of frame.32
+      %273 = addr.of frame.43
       %274 = const 0
       raw.store.64 %273, %274
       %276 = const 40
@@ -461,7 +567,7 @@
       %292 = const 11
       ret %292)
     (bb39 preds bb37
-      %295 = addr.of frame.35
+      %295 = addr.of frame.46
       %296 = const 0
       raw.store.64 %295, %296
       %298 = const 8
@@ -591,5 +697,208 @@
       %416 = const 17
       ret %416)
     (bb51 preds bb49
-      %419 = const 42
-      ret %419)))
+      %419 = addr.of frame.49
+      arg %419
+      %421 = const 10
+      arg %421
+      %423 = call make_big/2
+      %424 = addr.of frame.25
+      %425 = raw.load.64 %419
+      raw.store.64 %424, %425
+      %427 = const 8
+      %428 = add %419, %427
+      %429 = add %424, %427
+      %430 = raw.load.64 %428
+      raw.store.64 %429, %430
+      %432 = const 16
+      %433 = add %419, %432
+      %434 = add %424, %432
+      %435 = raw.load.64 %433
+      raw.store.64 %434, %435
+      %437 = addr.of frame.25
+      %438 = const 16
+      %439 = add %437, %438
+      %440 = raw.load.64 %439
+      %441 = const 12
+      %442 = cmp.ne %440, %441
+      branch %442, bb52, bb53)
+    (bb52 preds bb51
+      %444 = const 18
+      ret %444)
+    (bb53 preds bb51
+      %447 = addr.of frame.25
+      %448 = raw.load.64 %447
+      arg.stack.0 %448
+      %450 = const 8
+      %451 = add %447, %450
+      %452 = raw.load.64 %451
+      arg.stack.1 %452
+      %454 = const 16
+      %455 = add %447, %454
+      %456 = raw.load.64 %455
+      arg.stack.2 %456
+      %458 = call sum_big/3
+      %459 = const 33
+      %460 = cmp.ne %458, %459
+      branch %460, bb54, bb55)
+    (bb54 preds bb53
+      %462 = const 19
+      ret %462)
+    (bb55 preds bb53
+      %465 = addr.of frame.31
+      %466 = const 6
+      %467 = const 0
+      store frame.50, %467
+      jump bb56)
+    (bb56 preds bb55 bb57
+      %470 = load frame.50
+      %471 = cmp.lt %470, %466
+      branch %471, bb57, bb58)
+    (bb57 preds bb56
+      %473 = const 8
+      %474 = mul %470, %473
+      %475 = add %465, %474
+      raw.store.64 %475, %467
+      %477 = const 1
+      %478 = add %470, %477
+      store frame.50, %478
+      jump bb56)
+    (bb58 preds bb56
+      %482 = addr.of frame.31
+      %483 = const 3
+      %484 = const 0
+      check.bounds %484, %483
+      %486 = const 16
+      %487 = mul %484, %486
+      %488 = add %482, %487
+      %489 = addr.of frame.52
+      %490 = const 0
+      raw.store.64 %489, %490
+      %492 = const 8
+      %493 = add %489, %492
+      raw.store.64 %493, %490
+      %495 = const 1
+      raw.store.32 %489, %495
+      %497 = const 2
+      %498 = const 8
+      %499 = add %489, %498
+      raw.store.64 %499, %497
+      %501 = raw.load.64 %489
+      raw.store.64 %488, %501
+      %503 = const 8
+      %504 = add %489, %503
+      %505 = add %488, %503
+      %506 = raw.load.64 %504
+      raw.store.64 %505, %506
+      %508 = addr.of frame.31
+      %509 = const 3
+      %510 = const 1
+      check.bounds %510, %509
+      %512 = const 16
+      %513 = mul %510, %512
+      %514 = add %508, %513
+      %515 = addr.of frame.9
+      %516 = raw.load.64 %515
+      raw.store.64 %514, %516
+      %518 = const 8
+      %519 = add %515, %518
+      %520 = add %514, %518
+      %521 = raw.load.64 %519
+      raw.store.64 %520, %521
+      %523 = addr.of frame.31
+      %524 = const 3
+      %525 = const 2
+      check.bounds %525, %524
+      %527 = const 16
+      %528 = mul %525, %527
+      %529 = add %523, %528
+      %530 = const 3
+      arg %530
+      %532 = const 4
+      arg %532
+      %534 = call make_pair/2
+      %535 = call.word1
+      %536 = addr.of frame.54
+      raw.store.64 %536, %534
+      %538 = const 8
+      %539 = add %536, %538
+      raw.store.64 %539, %535
+      %541 = raw.load.64 %536
+      raw.store.64 %529, %541
+      %543 = const 8
+      %544 = add %536, %543
+      %545 = add %529, %543
+      %546 = raw.load.64 %544
+      raw.store.64 %545, %546
+      %548 = addr.of frame.31
+      %549 = const 3
+      %550 = const 1
+      check.bounds %550, %549
+      %552 = const 16
+      %553 = mul %550, %552
+      %554 = add %548, %553
+      %555 = const 8
+      %556 = add %554, %555
+      %557 = raw.load.64 %556
+      %558 = const 37
+      %559 = cmp.ne %557, %558
+      branch %559, bb59, bb60)
+    (bb59 preds bb58
+      %561 = const 20
+      ret %561)
+    (bb60 preds bb58
+      %564 = addr.of frame.31
+      %565 = const 3
+      %566 = const 2
+      check.bounds %566, %565
+      %568 = const 16
+      %569 = mul %566, %568
+      %570 = add %564, %569
+      %571 = raw.load.32 %570
+      %572 = const 3
+      %573 = cmp.ne %571, %572
+      branch %573, bb61, bb62)
+    (bb61 preds bb60
+      %575 = const 21
+      ret %575)
+    (bb62 preds bb60
+      %578 = addr.of frame.31
+      %579 = const 3
+      arg %578
+      arg %579
+      %582 = call total/2
+      %583 = const 52
+      %584 = cmp.ne %582, %583
+      branch %584, bb63, bb64)
+    (bb63 preds bb62
+      %586 = const 22
+      ret %586)
+    (bb64 preds bb62
+      %589 = addr.of frame.31
+      %590 = const 3
+      %591 = const 2
+      check.bounds %591, %590
+      %593 = const 16
+      %594 = mul %591, %593
+      %595 = add %589, %594
+      %596 = addr.of frame.33
+      %597 = raw.load.64 %595
+      raw.store.64 %596, %597
+      %599 = const 8
+      %600 = add %595, %599
+      %601 = add %596, %599
+      %602 = raw.load.64 %600
+      raw.store.64 %601, %602
+      %604 = addr.of frame.33
+      %605 = const 8
+      %606 = add %604, %605
+      %607 = raw.load.64 %606
+      %608 = const 4
+      %609 = cmp.ne %607, %608
+      branch %609, bb65, bb66)
+    (bb65 preds bb64
+      %611 = const 23
+      ret %611)
+    (bb66 preds bb64
+      %614 = const 42
+      ret %614)))
