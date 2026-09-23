@@ -1,0 +1,63 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "oli: compile current file",
+            "type": "shell",
+            "command": "bin/olic \"${file}\"",
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": { "reveal": "silent", "revealProblems": "onProblem", "clear": true },
+            "problemMatcher": {
+                "owner": "oli",
+                "fileLocation": ["relative", "${workspaceFolder}"],
+                "pattern": [
+                    { "regexp": "^(error|warning)\\[(\\w+)\\]: (.*)$", "severity": 1, "code": 2, "message": 3 },
+                    { "regexp": "^ --> (\\S+):(\\d+):(\\d+)$", "file": 1, "line": 2, "column": 3 }
+                ]
+            }
+        },
+        {
+            "label": "oli: compile and run current file",
+            "type": "shell",
+            "command": "bin/olic \"${file}\" && \"${fileDirname}/${fileBasenameNoExtension}\"; echo \"[exit $?]\"",
+            "presentation": { "reveal": "always", "clear": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "oli: check current file (analyse only)",
+            "type": "shell",
+            "command": "bin/olic --check \"${file}\"",
+            "presentation": { "reveal": "silent", "revealProblems": "onProblem", "clear": true },
+            "problemMatcher": {
+                "owner": "oli",
+                "fileLocation": ["relative", "${workspaceFolder}"],
+                "pattern": [
+                    { "regexp": "^(error|warning)\\[(\\w+)\\]: (.*)$", "severity": 1, "code": 2, "message": 3 },
+                    { "regexp": "^ --> (\\S+):(\\d+):(\\d+)$", "file": 1, "line": 2, "column": 3 }
+                ]
+            }
+        },
+        {
+            "label": "oli: show OIR after the passes (current file)",
+            "type": "shell",
+            "command": "bin/olic --show-opt \"${file}\"",
+            "presentation": { "reveal": "always", "clear": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "oli: show semantic graph (current file)",
+            "type": "shell",
+            "command": "bin/olic --show-sema \"${file}\"",
+            "presentation": { "reveal": "always", "clear": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "oli: build toolchain and run every test",
+            "type": "shell",
+            "command": "./genesis/test.sh",
+            "group": { "kind": "test", "isDefault": true },
+            "presentation": { "reveal": "always", "clear": true },
+            "problemMatcher": []
+        }
+    ]
+}

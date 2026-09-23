@@ -1,0 +1,107 @@
+; hex0 - the Oli-- seed. Reads a hex listing on stdin, writes its bytes on stdout.
+; 322 bytes of hand-encoded x86-64 for Linux (ELF64, one RWX segment).
+; Grammar of a listing: two hex digits per byte; ';', '#' or '-' start a comment
+; running to the end of the line; every other character is ignored.
+; Registers: rbx = input cursor, r12 = bytes left in the input chunk,
+;            r13 = pending high nibble (-1 = none), r14 = inside a comment,
+;            r15 = bytes waiting in the output buffer.
+; Memory: 0x401000 input buffer (4096), 0x402000 output buffer (4096).
+
+; ---- ELF64 header (0x00-0x3f) ----
+7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00   ; ELF, 64-bit, little-endian, version 1, System V
+02 00                                             ; e_type = EXEC
+3e 00                                             ; e_machine = x86-64
+01 00 00 00                                       ; e_version
+78 00 40 00 00 00 00 00                           ; e_entry = 0x400078
+40 00 00 00 00 00 00 00                           ; e_phoff = 64
+00 00 00 00 00 00 00 00                           ; e_shoff = 0 (no sections)
+00 00 00 00                                       ; e_flags
+40 00 38 00 01 00 00 00 00 00 00 00               ; ehsize 64, phentsize 56, phnum 1, no section table
+
+; ---- program header (0x40-0x77) ----
+01 00 00 00 07 00 00 00                           ; PT_LOAD, flags R+W+X
+00 00 00 00 00 00 00 00                           ; p_offset = 0
+00 00 40 00 00 00 00 00                           ; p_vaddr = 0x400000
+00 00 40 00 00 00 00 00                           ; p_paddr
+42 01 00 00 00 00 00 00                           ; p_filesz = 0x142 (the whole file)
+00 30 00 00 00 00 00 00                           ; p_memsz = 0x3000 (code + two 4 KiB buffers, zero-filled)
+00 10 00 00 00 00 00 00                           ; p_align = 4096
+
+; ---- code (0x78-0x141), entry at 0x400078 ----
+49 c7 c5 ff ff ff ff        ; 078  mov r13, -1              ; no pending nibble
+45 31 f6                    ; 07f  xor r14d, r14d           ; not in a comment
+45 31 ff                    ; 082  xor r15d, r15d           ; output buffer empty
+; read_loop:
+31 ff                       ; 085  xor edi, edi             ; fd 0 = stdin
+be 00 10 40 00              ; 087  mov esi, 0x401000        ; input buffer
+ba 00 10 00 00              ; 08c  mov edx, 4096
+31 c0                       ; 091  xor eax, eax             ; read
+0f 05                       ; 093  syscall
+48 85 c0                    ; 095  test rax, rax
+7e 7d                       ; 098  jle done                 ; end of input (or error)
+49 89 c4                    ; 09a  mov r12, rax             ; bytes in this chunk
+bb 00 10 40 00              ; 09d  mov ebx, 0x401000        ; cursor
+; process:
+0f b6 03                    ; 0a2  movzx eax, byte [rbx]
+48 ff c3                    ; 0a5  inc rbx
+45 85 f6                    ; 0a8  test r14d, r14d
+74 09                       ; 0ab  jz not_comment
+3c 0a                       ; 0ad  cmp al, 10               ; newline ends a comment
+75 54                       ; 0af  jne next
+45 31 f6                    ; 0b1  xor r14d, r14d
+eb 4f                       ; 0b4  jmp next
+; not_comment:
+3c 3b                       ; 0b6  cmp al, ';'
+74 55                       ; 0b8  je set_comment
+3c 23                       ; 0ba  cmp al, '#'
+74 51                       ; 0bc  je set_comment
+3c 2d                       ; 0be  cmp al, '-'
+74 4d                       ; 0c0  je set_comment
+2c 30                       ; 0c2  sub al, '0'
+3c 09                       ; 0c4  cmp al, 9
+76 0e                       ; 0c6  jbe digit                ; '0'..'9'
+2c 11                       ; 0c8  sub al, 0x11             ; al = c - 'A'
+3c 05                       ; 0ca  cmp al, 5
+76 06                       ; 0cc  jbe upper                ; 'A'..'F'
+2c 20                       ; 0ce  sub al, 0x20             ; al = c - 'a'
+3c 05                       ; 0d0  cmp al, 5
+77 31                       ; 0d2  ja next                  ; not a hex digit: ignore
+; upper:
+04 0a                       ; 0d4  add al, 10
+; digit:
+45 85 ed                    ; 0d6  test r13d, r13d
+78 27                       ; 0d9  js first                 ; no pending nibble yet
+41 c1 e5 04                 ; 0db  shl r13d, 4
+41 09 c5                    ; 0df  or r13d, eax             ; byte = high << 4 | low
+45 88 af 00 20 40 00        ; 0e2  mov [r15 + 0x402000], r13b
+49 ff c7                    ; 0e9  inc r15
+41 bd ff ff ff ff           ; 0ec  mov r13d, -1
+49 81 ff 00 10 00 00        ; 0f2  cmp r15, 4096
+72 0a                       ; 0f9  jb next
+e8 25 00 00 00              ; 0fb  call flush
+eb 03                       ; 100  jmp next
+; first:
+41 89 c5                    ; 102  mov r13d, eax
+; next:
+49 ff cc                    ; 105  dec r12
+75 98                       ; 108  jnz process
+e9 76 ff ff ff              ; 10a  jmp read_loop
+; set_comment:
+41 be 01 00 00 00           ; 10f  mov r14d, 1
+eb ee                       ; 115  jmp next
+; done:
+e8 09 00 00 00              ; 117  call flush
+31 ff                       ; 11c  xor edi, edi
+b8 3c 00 00 00              ; 11e  mov eax, 60              ; exit(0)
+0f 05                       ; 123  syscall
+; flush:
+4d 85 ff                    ; 125  test r15, r15
+74 17                       ; 128  jz flush_ret
+bf 01 00 00 00              ; 12a  mov edi, 1               ; fd 1 = stdout
+be 00 20 40 00              ; 12f  mov esi, 0x402000        ; output buffer
+4c 89 fa                    ; 134  mov rdx, r15
+b8 01 00 00 00              ; 137  mov eax, 1               ; write
+0f 05                       ; 13c  syscall
+45 31 ff                    ; 13e  xor r15d, r15d
+; flush_ret:
+c3                          ; 141  ret

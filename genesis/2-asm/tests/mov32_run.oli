@@ -1,0 +1,28 @@
+module genesis.mov32_run
+proc main
+    entry
+    calls none
+    machine x64
+        mov rax, -1
+        mov eax, 6
+        mov r8, -1
+        mov r8d, 7
+        imul rax, r8
+        sub rsp, 16
+        mov [rsp], -1
+        mov [rsp], eax
+        mov r9, [rsp]
+        shr r9, 32
+        mov r10, 4294967295
+        cmp r9, r10
+        jne .bad
+        mov edi, [rsp]
+        add rsp, 16
+        mov eax, 60
+        syscall
+    .bad:
+        mov edi, 99
+        mov eax, 60
+        syscall
+    end
+end

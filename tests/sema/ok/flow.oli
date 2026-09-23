@@ -1,0 +1,57 @@
+-- Definite assignment, reachability, fallible values, case exhaustiveness.
+module flow
+
+choice Err
+    small
+    big { by : u32 }
+end
+
+proc clamp(x : u32) -> u32 or Err
+    if x < 10 then fail small
+    if x > 100 then fail big { by: x - 100 }
+    ret x
+end
+
+proc pick(flag : bool) -> u8
+    v : u8
+    if flag
+        v <- 1
+    else
+        v <- 2
+    end
+    ret v
+end
+
+proc spin(n : u32) -> u32
+    acc : u32 <- 0
+    i : u32 <- 0
+    loop
+        if i == n then break
+        acc <- wrap(acc + i)
+        i <- i + 1
+    end
+    ret acc
+end
+
+proc main -> s32
+    entry
+    a := clamp(50) else 0
+    b := clamp(5) else ret 1
+    case clamp(500)
+    when ok v
+        _q := v
+    when fail small
+        ret 2
+    when fail big { by }
+        if by > 1000 then ret 3
+    end
+    total := checked(a + b) else ret 4
+    _p := pick(total > 3)
+    _s := spin(10)
+    x := true
+    case x
+    when true
+    when false
+    end
+    ret 0
+end

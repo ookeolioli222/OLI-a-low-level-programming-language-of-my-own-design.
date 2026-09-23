@@ -1,0 +1,14 @@
+proc f -> view u8
+    a : [4]u8
+    ret a
+end
+proc g -> ref u32
+    x : u32 <- 1
+    ret ref x
+end
+proc main -> s32
+    entry
+    ret 0
+end
+-- expect: E0300 @ 3:9
+-- expect: E0300 @ 7:9

@@ -1,0 +1,6 @@
+proc start
+    entry
+    greeting := "Hello Oli--\n"
+    extra := 30
+    ret greeting.len + extra
+end

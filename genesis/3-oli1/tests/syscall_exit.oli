@@ -1,0 +1,5 @@
+proc start
+    entry
+    permit os.syscall
+    os.syscall(60, 42)
+end

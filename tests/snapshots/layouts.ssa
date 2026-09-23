@@ -1,0 +1,522 @@
+(oir
+  (static 0 len=33)
+  (static 1 len=27)
+  (static 2 len=33)
+  (static 3 len=33)
+  (static 4 len=25)
+  (static 5 len=29)
+  (static 6 len=25)
+  (static 7 len=25)
+  (static 8 len=25)
+  (static 9 len=34)
+  (static 10 len=26)
+  (static 11 len=30)
+  (static 12 len=28)
+  (static 13 len=28)
+  (static 14 len=28)
+  (static 15 len=28)
+  (static 16 len=28)
+  (static 17 len=34)
+  (static 18 len=5)
+  (static 19 len=26)
+  (static 20 len=28)
+  (static 21 len=34)
+  (static 22 len=34)
+  (static 23 len=26)
+  (static 24 len=26)
+  (static 25 len=34)
+  (static 26 len=28)
+  (proc make_rect locals=4
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = param 2
+      %3 = const 8
+      %4 = zone.alloc %0, %3
+      %5 = trunc.32 %1
+      raw.store.32 %4, %5
+      %7 = const 4
+      %8 = add %4, %7
+      %9 = trunc.32 %2
+      raw.store.32 %8, %9
+      ret %4))
+  (proc area locals=1
+    (bb0
+      %0 = param 0
+      %1 = raw.load.32 %0
+      %2 = const 4
+      %3 = add %0, %2
+      %4 = raw.load.32 %3
+      %5 = mul %1, %4
+      check.overflow %5
+      ret %5))
+  (proc text_len locals=2
+    (bb0
+      %0 = param 0
+      %1 = const 8
+      %2 = add %0, %1
+      %3 = raw.load.64 %2
+      %4 = const 8
+      %5 = add %2, %4
+      %6 = raw.load.64 %5
+      ret %6))
+  (proc start locals=16 entry
+    (bb0
+      %0 = addr.of frame.0
+      %1 = const 65536
+      zone.new %0, %1
+      %3 = addr.of frame.0
+      %4 = const 64
+      %5 = zone.alloc %3, %4
+      %6 = const 0
+      %7 = const 16
+      check.range %6, %7, %4
+      check.align %5, 8
+      %10 = const 305419896
+      raw.store.32 %5, %10
+      %12 = const 4
+      %13 = add %5, %12
+      %14 = const 513
+      raw.store.16 %13, %14
+      %16 = const 6
+      %17 = add %5, %16
+      %18 = const 7
+      raw.store.16 %17, %18
+      %20 = const 8
+      %21 = add %5, %20
+      %22 = const 1000000
+      raw.store.64 %21, %22
+      %24 = const 0
+      check.bounds %24, %4
+      %26 = add %5, %24
+      %27 = raw.load.8 %26
+      %28 = const 120
+      %29 = cmp.ne %27, %28
+      branch %29, bb1, bb2)
+    (bb1 preds bb0
+      %30 = const 1
+      ret %30)
+    (bb2 preds bb0
+      %31 = const 4
+      check.bounds %31, %4
+      %33 = add %5, %31
+      %34 = raw.load.8 %33
+      %35 = const 1
+      %36 = cmp.ne %34, %35
+      branch %36, bb3, bb4)
+    (bb3 preds bb2
+      %37 = const 2
+      ret %37)
+    (bb4 preds bb2
+      %38 = const 6
+      check.bounds %38, %4
+      %40 = add %5, %38
+      %41 = raw.load.8 %40
+      %42 = const 7
+      %43 = cmp.ne %41, %42
+      branch %43, bb5, bb6)
+    (bb5 preds bb4
+      %44 = const 3
+      ret %44)
+    (bb6 preds bb4
+      %45 = const 8
+      %46 = add %5, %45
+      %47 = raw.load.64 %46
+      %48 = const 1000000
+      %49 = cmp.ne %47, %48
+      branch %49, bb7, bb8)
+    (bb7 preds bb6
+      %50 = const 4
+      ret %50)
+    (bb8 preds bb6
+      %51 = const 16
+      %52 = const 16
+      %53 = cmp.ne %51, %52
+      branch %53, bb9, bb10)
+    (bb9 preds bb8
+      %54 = const 5
+      ret %54)
+    (bb10 preds bb8
+      %55 = const 4294967295
+      %56 = addr.of frame.0
+      %57 = const 24
+      %58 = zone.alloc %56, %57
+      %59 = const 0
+      %60 = const 24
+      check.range %59, %60, %57
+      check.align %58, 8
+      %63 = trunc.8.s %55
+      raw.store.8 %58, %63
+      %65 = const 1
+      %66 = add %58, %65
+      %67 = const 255
+      raw.store.8 %66, %67
+      %69 = const 2
+      %70 = add %58, %69
+      %71 = trunc.16.s %55
+      raw.store.16 %70, %71
+      %73 = const 4
+      %74 = add %58, %73
+      %75 = const 65535
+      raw.store.16 %74, %75
+      %77 = const 8
+      %78 = add %58, %77
+      %79 = trunc.32.s %55
+      raw.store.32 %78, %79
+      %81 = const 12
+      %82 = add %58, %81
+      %83 = const 4294967295
+      raw.store.32 %82, %83
+      %85 = const 16
+      %86 = add %58, %85
+      %87 = const 0
+      %88 = const 1
+      %89 = sub.s %87, %88
+      check.overflow %89
+      raw.store.64 %86, %89
+      %91 = raw.load.8.s %58
+      %92 = const 0
+      %93 = const 1
+      %94 = sub.s %92, %93
+      check.overflow %94
+      %95 = cmp.ne.s %91, %94
+      branch %95, bb11, bb12)
+    (bb11 preds bb10
+      %96 = const 6
+      ret %96)
+    (bb12 preds bb10
+      %97 = const 1
+      %98 = add %58, %97
+      %99 = raw.load.8 %98
+      %100 = const 255
+      %101 = cmp.ne %99, %100
+      branch %101, bb13, bb14)
+    (bb13 preds bb12
+      %102 = const 7
+      ret %102)
+    (bb14 preds bb12
+      %103 = const 2
+      %104 = add %58, %103
+      %105 = raw.load.16.s %104
+      %106 = const 0
+      %107 = const 1
+      %108 = sub.s %106, %107
+      check.overflow %108
+      %109 = cmp.ne.s %105, %108
+      branch %109, bb15, bb16)
+    (bb15 preds bb14
+      %110 = const 8
+      ret %110)
+    (bb16 preds bb14
+      %111 = const 4
+      %112 = add %58, %111
+      %113 = raw.load.16 %112
+      %114 = const 65535
+      %115 = cmp.ne %113, %114
+      branch %115, bb17, bb18)
+    (bb17 preds bb16
+      %116 = const 9
+      ret %116)
+    (bb18 preds bb16
+      %117 = const 8
+      %118 = add %58, %117
+      %119 = raw.load.32.s %118
+      %120 = const 0
+      %121 = const 1
+      %122 = sub.s %120, %121
+      check.overflow %122
+      %123 = cmp.ne.s %119, %122
+      branch %123, bb19, bb20)
+    (bb19 preds bb18
+      %124 = const 10
+      ret %124)
+    (bb20 preds bb18
+      %125 = const 12
+      %126 = add %58, %125
+      %127 = raw.load.32 %126
+      %128 = const 4294967295
+      %129 = cmp.ne %127, %128
+      branch %129, bb21, bb22)
+    (bb21 preds bb20
+      %130 = const 11
+      ret %130)
+    (bb22 preds bb20
+      %131 = const 16
+      %132 = add %58, %131
+      %133 = raw.load.64.s %132
+      %134 = const 0
+      %135 = const 1
+      %136 = sub.s %134, %135
+      check.overflow %136
+      %137 = cmp.ne.s %133, %136
+      branch %137, bb23, bb24)
+    (bb23 preds bb22
+      %138 = const 12
+      ret %138)
+    (bb24 preds bb22
+      %139 = const 24
+      %140 = const 24
+      %141 = cmp.ne %139, %140
+      branch %141, bb25, bb26)
+    (bb25 preds bb24
+      %142 = const 13
+      ret %142)
+    (bb26 preds bb24
+      %143 = addr.of frame.0
+      %144 = const 24
+      %145 = zone.alloc %143, %144
+      %146 = const 3
+      raw.store.8 %145, %146
+      %148 = const 8
+      %149 = add %145, %148
+      %150 = addr.of static.18
+      %151 = len.of static.18
+      raw.store.64 %149, %150
+      %153 = const 8
+      %154 = add %149, %153
+      raw.store.64 %154, %151
+      arg %145
+      %157 = call text_len/1
+      %158 = const 5
+      %159 = cmp.ne %157, %158
+      branch %159, bb27, bb28)
+    (bb27 preds bb26
+      %160 = const 14
+      ret %160)
+    (bb28 preds bb26
+      %161 = const 8
+      %162 = add %145, %161
+      %163 = raw.load.64 %162
+      %164 = const 8
+      %165 = add %162, %164
+      %166 = raw.load.64 %165
+      %167 = const 1
+      check.bounds %167, %166
+      %169 = add %163, %167
+      %170 = raw.load.8 %169
+      %171 = const 101
+      %172 = cmp.ne %170, %171
+      branch %172, bb29, bb30)
+    (bb29 preds bb28
+      %173 = const 15
+      ret %173)
+    (bb30 preds bb28
+      %174 = raw.load.8 %145
+      %175 = const 3
+      %176 = cmp.ne %174, %175
+      branch %176, bb31, bb32)
+    (bb31 preds bb30
+      %177 = const 16
+      ret %177)
+    (bb32 preds bb30
+      %178 = addr.of frame.0
+      arg %178
+      %180 = const 6
+      arg %180
+      %182 = const 7
+      arg %182
+      %184 = call make_rect/3
+      %185 = addr.of frame.0
+      arg %185
+      %187 = const 2
+      arg %187
+      %189 = const 3
+      arg %189
+      %191 = call make_rect/3
+      arg %184
+      %193 = call area/1
+      arg %191
+      %195 = call area/1
+      %196 = sub %193, %195
+      check.overflow %196
+      %197 = const 36
+      %198 = cmp.ne %196, %197
+      branch %198, bb33, bb34)
+    (bb33 preds bb32
+      %199 = const 17
+      ret %199)
+    (bb34 preds bb32
+      %200 = const 8
+      %201 = const 8
+      %202 = cmp.ne %200, %201
+      branch %202, bb35, bb36)
+    (bb35 preds bb34
+      %203 = const 18
+      ret %203)
+    (bb36 preds bb34
+      %204 = addr.of frame.0
+      %205 = const 24
+      %206 = zone.alloc %204, %205
+      %207 = const 4
+      raw.store.32 %206, %207
+      %209 = const 4
+      %210 = add %206, %209
+      %211 = const 5
+      raw.store.32 %210, %211
+      %213 = const 8
+      %214 = add %206, %213
+      %215 = const 1
+      raw.store.32 %214, %215
+      %217 = const 8
+      %218 = add %206, %217
+      %219 = const 4
+      %220 = add %218, %219
+      %221 = const 1
+      raw.store.32 %220, %221
+      %223 = const 16
+      %224 = add %206, %223
+      raw.store.64 %224, %184
+      arg %206
+      %227 = call area/1
+      %228 = const 20
+      %229 = cmp.ne %227, %228
+      branch %229, bb37, bb38)
+    (bb37 preds bb36
+      %230 = const 19
+      ret %230)
+    (bb38 preds bb36
+      %231 = const 16
+      %232 = add %206, %231
+      %233 = raw.load.64 %232
+      arg %233
+      %235 = call area/1
+      %236 = const 42
+      %237 = cmp.ne %235, %236
+      branch %237, bb39, bb40)
+    (bb39 preds bb38
+      %238 = const 20
+      ret %238)
+    (bb40 preds bb38
+      %239 = const 24
+      %240 = const 24
+      %241 = cmp.ne %239, %240
+      branch %241, bb41, bb42)
+    (bb41 preds bb40
+      %242 = const 21
+      ret %242)
+    (bb42 preds bb40
+      %243 = addr.of frame.0
+      %244 = const 64
+      %245 = zone.alloc %243, %244
+      %246 = const 1
+      check.range %246, %244, %244
+      %248 = add %245, %246
+      %249 = sub %244, %246
+      %250 = const 0
+      %251 = const 5
+      check.range %250, %251, %249
+      %253 = const 1
+      %254 = add %248, %253
+      %255 = const 258
+      raw.store.32 %254, %255
+      %257 = const 2
+      check.bounds %257, %244
+      %259 = add %245, %257
+      %260 = raw.load.8 %259
+      %261 = const 2
+      %262 = cmp.ne %260, %261
+      branch %262, bb43, bb44)
+    (bb43 preds bb42
+      %263 = const 22
+      ret %263)
+    (bb44 preds bb42
+      %264 = const 5
+      %265 = const 5
+      %266 = cmp.ne %264, %265
+      branch %266, bb45, bb46)
+    (bb45 preds bb44
+      %267 = const 23
+      ret %267)
+    (bb46 preds bb44
+      %268 = const 1
+      %269 = const 1
+      %270 = cmp.ne %268, %269
+      branch %270, bb47, bb48)
+    (bb47 preds bb46
+      %271 = const 24
+      ret %271)
+    (bb48 preds bb46
+      %272 = const 32
+      %273 = const 32
+      %274 = cmp.ne %272, %273
+      branch %274, bb49, bb50)
+    (bb49 preds bb48
+      %275 = const 25
+      ret %275)
+    (bb50 preds bb48
+      %276 = const 32
+      %277 = const 32
+      %278 = cmp.ne %276, %277
+      branch %278, bb51, bb52)
+    (bb51 preds bb50
+      %279 = const 26
+      ret %279)
+    (bb52 preds bb50
+      %280 = addr.of frame.0
+      %281 = const 32
+      %282 = zone.alloc %280, %281 align=32
+      %283 = const 1
+      raw.store.8 %282, %283
+      %285 = raw.load.8 %282
+      %286 = const 1
+      %287 = cmp.ne %285, %286
+      branch %287, bb53, bb54)
+    (bb53 preds bb52
+      %288 = const 30
+      ret %288)
+    (bb54 preds bb52
+      %289 = const 8
+      %290 = const 8
+      %291 = cmp.ne %289, %290
+      branch %291, bb55, bb56)
+    (bb55 preds bb54
+      %292 = const 27
+      ret %292)
+    (bb56 preds bb54
+      %293 = const 8
+      %294 = add %206, %293
+      %295 = const 9
+      raw.store.32 %294, %295
+      %297 = const 8
+      %298 = add %206, %297
+      %299 = const 4
+      %300 = add %298, %299
+      %301 = const 2
+      raw.store.32 %300, %301
+      %303 = const 8
+      %304 = add %206, %303
+      arg %304
+      %306 = call area/1
+      %307 = const 18
+      %308 = cmp.ne %306, %307
+      branch %308, bb57, bb58)
+    (bb57 preds bb56
+      %309 = const 28
+      ret %309)
+    (bb58 preds bb56
+      %310 = raw.load.32 %304
+      %311 = const 4
+      %312 = add %304, %311
+      %313 = raw.load.32 %312
+      %314 = add %310, %313
+      check.overflow %314
+      %315 = const 11
+      %316 = cmp.ne %314, %315
+      branch %316, bb59, bb60)
+    (bb59 preds bb58
+      %317 = const 29
+      ret %317)
+    (bb60 preds bb58
+      %318 = const 3
+      raw.store.32 %206, %318
+      arg %206
+      %321 = call area/1
+      %322 = const 15
+      %323 = cmp.ne %321, %322
+      branch %323, bb61, bb62)
+    (bb61 preds bb60
+      %324 = const 31
+      ret %324)
+    (bb62 preds bb60
+      %325 = const 42
+      ret %325)))

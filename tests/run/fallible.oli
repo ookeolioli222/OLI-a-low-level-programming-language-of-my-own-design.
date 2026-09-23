@@ -1,0 +1,168 @@
+module fallible
+-- M2: `T or E` results (design 0007, ABI.md §2) — `fail e` and bare `fail`
+-- with `none`, `else` with a default, `else ret` in a non-fallible caller
+-- and in the entry procedure, `else fail` propagating through two levels,
+-- `case` with the arms in either order and with an `else` arm, a ref
+-- payload, and a fallible call as a statement. The exit status is the number
+-- of the check that failed, or 42.
+
+layout Pair
+    a : u32
+    b : u32
+end
+
+proc digit(c: u8) -> word or word
+    if c < 48
+        fail 1
+    end
+    if c > 57
+        fail 2
+    end
+    ret word(c) - 48
+end
+
+proc two_digits(v: view u8) -> word or word
+    -- Too short is failure 1; a non-digit is failure 2, passed on from
+    -- `digit` by `else fail`.
+    if v.len < 2
+        fail 1
+    end
+    hi := digit(v[0]) else fail
+    lo := digit(v[1]) else fail
+    ret hi * 10 + lo
+end
+
+proc value_or(v: view u8, dflt: word) -> word
+    ret two_digits(v) else dflt
+end
+
+proc find(v: view u8, want: u8) -> uword or none
+    i : uword <- 0
+    while i < v.len
+        if v[i] == want
+            ret i
+        end
+        i <- i + 1
+    end
+    fail
+end
+
+proc make(z: zone, n: u64) -> ref Pair or none
+    if n == 0
+        fail
+    end
+    p := z.make(Pair)
+    p.a <- u32.wrap(n)
+    p.b <- u32.wrap(n * 2)
+    ret p
+end
+
+proc sum(z: zone, n: u64) -> u64
+    p := make(z, n) else ret 0
+    ret u64(p.a) + u64(p.b)
+end
+
+proc code_of(v: view u8) -> word
+    -- Which channel arrived, by number.
+    case two_digits(v)
+    when ok n
+        ret n
+    when fail
+        ret 0 - 1
+    end
+end
+
+proc start -> s32
+    entry
+    -- A default, on the ok and on the fail path.
+    a := digit(55) else 100
+    if a != 7
+        ret 1
+    end
+    b := digit(65) else 100
+    if b != 100
+        ret 2
+    end
+    -- `case`, both orders, the ok name bound to the payload.
+    c : word <- 0
+    case digit(57)
+    when ok v
+        c <- v * 2
+    when fail
+        c <- 1
+    end
+    if c != 18
+        ret 3
+    end
+    d : word <- 0
+    case digit(32)
+    when fail
+        d <- 5
+    when ok v
+        d <- 1
+    end
+    if d != 5
+        ret 4
+    end
+    -- Propagation through two levels, then a default at the top.
+    if value_or("42", 9) != 42
+        ret 5
+    end
+    if value_or("x1", 9) != 9
+        ret 6
+    end
+    if value_or("4", 9) != 9
+        ret 7
+    end
+    if code_of("42") != 42
+        ret 8
+    end
+    if code_of("4x") != 0 - 1
+        ret 9
+    end
+    -- `or none`: bare `fail`, `when fail` without a binding, an `else` arm.
+    s := "hello"
+    x := find(s, 108) else 99
+    if x != 2
+        ret 10
+    end
+    y := find(s, 122) else 99
+    if y != 99
+        ret 11
+    end
+    r : uword <- 0
+    case find(s, 111)
+    when ok i
+        r <- i
+    when fail
+        r <- 50
+    end
+    if r != 4
+        ret 12
+    end
+    q : uword <- 0
+    case find(s, 113)
+    when ok i
+        q <- 1
+    else
+        q <- 20
+    end
+    if q != 20
+        ret 13
+    end
+    -- A ref payload, and `else ret` in a non-fallible procedure.
+    zone z 4096
+        if sum(z, 5) != 15
+            ret 14
+        end
+        if sum(z, 0) != 0
+            ret 15
+        end
+    end
+    -- `else ret` in the entry procedure: the exit status.
+    e := find(s, 104) else ret 16
+    if e != 0
+        ret 17
+    end
+    ret 42
+end

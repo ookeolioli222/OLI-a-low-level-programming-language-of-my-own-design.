@@ -1,0 +1,11 @@
+module trap_div_zero
+-- expect: trap: div_zero at stdin:7
+proc start -> s32
+    entry
+    a : u64 <- 10
+    b : u64 <- 0
+    if a / b > 0
+        ret 1
+    end
+    ret 0
+end

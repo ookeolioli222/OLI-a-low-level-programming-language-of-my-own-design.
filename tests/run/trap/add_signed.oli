@@ -1,0 +1,11 @@
+module trap_add_signed
+-- expect: trap: overflow at stdin:7
+proc start -> s32
+    entry
+    a : word <- 9223372036854775807
+    b : word <- 1
+    if a + b > 0
+        ret 1
+    end
+    ret 0
+end

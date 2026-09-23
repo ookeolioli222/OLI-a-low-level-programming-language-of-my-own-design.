@@ -1,0 +1,23 @@
+choice C
+    a
+    b
+    c
+end
+proc pick(x : u8) -> C
+    if x == 0 then ret a
+    ret C.b
+end
+proc main -> s32
+    entry
+    case pick(1)
+    when a
+    when b
+    end
+    n := u8(3)
+    case n
+    when 1
+    end
+    ret 0
+end
+-- expect: E0311 @ 12:10
+-- expect: E0311 @ 17:10

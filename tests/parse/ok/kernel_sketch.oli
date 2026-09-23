@@ -1,0 +1,148 @@
+-- Freestanding constructs from docs/KERNEL_PROGRAMMING.md and docs/FREESTANDING.md.
+-- Parses in V0; several constructs are rejected later by the semantic phase (E0900).
+module kernel
+import core.mem
+
+layout Multiboot2Header align 8
+    magic         : u32
+    architecture  : u32
+    header_length : u32
+    checksum      : u32
+    end_tag_type  : u16
+    end_tag_flags : u16
+    end_tag_size  : u32
+end
+
+layout GdtPointer packed
+    limit : u16
+    base  : addr u64
+end
+
+mb_header : Multiboot2Header := Multiboot2Header {
+        magic: 0xE85250D6, architecture: 0,
+        header_length: Multiboot2Header.size,
+        checksum: wrap(0 - (0xE85250D6 + 0 + u32(Multiboot2Header.size))),
+        end_tag_type: 0, end_tag_flags: 0, end_tag_size: 8 }
+    section ".text.boot"
+
+boot_stack : [16K]u8
+    section ".bss.boot"
+    align 16
+
+gdt : [3]u64 := { 0, 0x00AF9A000000FFFF, 0x00CF92000000FFFF }
+    align 16
+
+heap_region : [4M]u8
+    section ".bss"
+    align 4096
+
+COM1 : port u8 := 0x3F8
+HHDM : uword := 0xFFFF800000000000
+ticks : u64 <- 0
+
+pub proc start -> never
+    entry
+    calls none
+    section ".text.boot"
+    permit cpu.asm
+    machine x64
+        lea  rsp, [boot_stack + 16K]
+        xor  ebp, ebp
+        call kernel.main
+        hlt
+    end
+end
+
+proc virt_of(p : physaddr) -> addr u8
+    ret addr u8 (uword(p) + HHDM)
+end
+
+proc vga_put(col : uword, row : uword, ch : u8, attr : u8)
+permit memory.mmio
+    vga := mem.mmio(u16, 0xB8000, 80 * 25)
+    vga[row * 80 + col] <- u16(attr) << 8 | u16(ch)
+end
+
+proc serial_put(b : u8)
+permit io.port
+    while (port u8 (0x3FD)).in() & 0x20 == 0
+        cpu.pause()
+    end
+    COM1.out(b)
+end
+
+proc load_gdt
+permit cpu.control, cpu.asm
+    p : GdtPointer <- GdtPointer { limit: 3 * 8 - 1, base: addr gdt }
+    cpu.lgdt(ref p)
+    machine x64
+        mov  ax, 0x10
+        mov  ds, ax
+        mov  es, ax
+        mov  ss, ax
+        push 0x08
+        lea  rax, [.next]
+        push rax
+        retfq
+    .next:
+        mov  qword [rbp - 8], rax
+        mov  rcx, [rax + rcx*8 + 16]
+        in   al, dx
+        out  dx, al
+        and  rax, -1
+        clobber rax, memory
+    end
+end
+
+proc on_timer(frame : ref core.x64.InterruptFrame)
+    calls interrupt
+permit memory.mmio, cpu.interrupt
+    ticks <- wrap(ticks + 1)
+    pic.end_of_interrupt(0)
+end
+
+proc on_trap(kind : core.TrapKind, site : core.Site) -> never
+    traps
+permit cpu.halt, memory.mmio
+    serial_put('!')
+    loop
+        cpu.halt()
+    end
+end
+
+proc main -> never
+permit cpu.halt, memory.raw
+    zone boot 1M at addr u8 (0x200000)
+        tables := boot.make(Multiboot2Header)
+        tables.magic <- 1
+    end
+    zone kheap 4M from heap_region
+        buf := kheap.bytes(256)
+        each i in 0..buf.len
+            buf[i] <- u8.wrap(i)
+        end
+        v := buf[8..]
+    end
+    load_gdt()
+    x : s64 <- -5
+    if x < -1
+        x <- ~x
+    elif x == 0 or not (x > 3 and x < 9)
+        x <- x * 2 + 1
+    else
+        x <- sat(x - 1)
+    end
+    r := checked(x + 1) else 0
+    q := u8.checked(x) else fail
+    case x
+    when 0
+        serial_put('0')
+    when -1
+        serial_put('-')
+    else
+        serial_put('?')
+    end
+    loop
+        cpu.halt()
+    end
+end

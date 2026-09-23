@@ -1,0 +1,13 @@
+proc start
+    entry
+    permit os.syscall
+    zone z 8192
+        buf := z.bytes(16)
+        buf[0] <- 72
+        buf[1] <- 105
+        buf[2] <- 10
+        os.syscall(1, 1, buf.addr, 3)
+        more := z.bytes(100)
+        ret buf.len + more.len
+    end
+end

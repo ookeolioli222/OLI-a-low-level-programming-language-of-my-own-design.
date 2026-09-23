@@ -1,0 +1,14 @@
+proc peek(a : addr u8) -> u8
+    ret [a]
+end
+proc main -> s32
+    entry
+    _p := addr u8 (0x1000)
+    machine x64
+        nop
+    end
+    ret 0
+end
+-- expect: E0401 @ 2:9
+-- expect: E0401 @ 6:11
+-- expect: E0401 @ 7:5

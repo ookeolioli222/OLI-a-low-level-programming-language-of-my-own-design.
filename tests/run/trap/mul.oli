@@ -1,0 +1,11 @@
+module trap_mul
+-- expect: trap: overflow at stdin:7
+proc start -> s32
+    entry
+    a : u64 <- 4294967296
+    b : u64 <- 4294967296
+    if a * b > 0
+        ret 1
+    end
+    ret 0
+end

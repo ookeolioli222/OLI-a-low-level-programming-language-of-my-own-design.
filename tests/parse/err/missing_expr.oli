@@ -1,0 +1,4 @@
+proc main -> s32
+    total <-
+end
+-- expect: E0012 @ 2:13

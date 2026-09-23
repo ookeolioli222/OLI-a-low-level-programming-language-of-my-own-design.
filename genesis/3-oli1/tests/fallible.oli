@@ -1,0 +1,31 @@
+module fallible
+-- digit(c) -> word or word: the value of an ASCII digit, or fail with the byte.
+proc digit(c: u8) -> word or word
+    if c < 48
+        fail c
+    end
+    if c > 57
+        fail c
+    end
+    ret c - 48
+end
+proc start
+    entry
+    a := digit(55) else 100          -- ok: 7
+    b := digit(65) else 100          -- fail: default 100
+    c := 0
+    case digit(57)
+    when ok v
+        c <- v * 2                   -- 18
+    when fail e
+        c <- 1
+    end
+    d := 0
+    case digit(32)
+    when fail e
+        d <- e                       -- 32
+    when ok v
+        d <- 1
+    end
+    ret a + b + c + d                -- 7 + 100 + 18 + 32 = 157
+end

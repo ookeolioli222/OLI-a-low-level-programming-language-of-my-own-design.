@@ -1,0 +1,4 @@
+proc start
+    entry
+    ret 42
+end

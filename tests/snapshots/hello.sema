@@ -1,0 +1,17 @@
+(program entry=hello.start
+  (layout Site#0 size=24 align=8 (file view u8 @0) (line u32 @16))
+  (layout CpuId#1 size=16 align=4 (a u32 @0) (b u32 @4) (c u32 @8) (d u32 @12))
+  (layout Error#2 size=8 align=8 (code word @0))
+  (choice TrapKind#0 size=1 align=1 tag=1 payload@1 (bounds) (overflow) (div_zero) (misaligned) (zone_exhausted) (unreachable) (assert))
+  (const READ : word = 0)
+  (const WRITE : word = 1)
+  (const MMAP : word = 9)
+  (const MUNMAP : word = 11)
+  (const EXIT : word = 60)
+  (const EXIT_GROUP : word = 231)
+  (proc hello.start -> s32 permits=[os.syscall] entry
+    (local 0 msg bind view u8)
+    (body
+      (bind msg (str "Hello Oli--\n"):view u8)
+      (expr (intrinsic OsSyscall (int 1):word (int 1):word (addr (local msg):view u8):addr u8 (bits (len (local msg):view u8):uword):word):word)
+      (ret (int 0):s32))))

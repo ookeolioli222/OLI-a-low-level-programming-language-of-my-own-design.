@@ -1,0 +1,23 @@
+-- a zone inside a loop: created and released on every iteration
+proc fill(v: view u8, b: u64)
+    i := 0
+    while i < v.len
+        v[i] <- b
+        i <- i + 1
+    end
+end
+proc start
+    entry
+    permit os.syscall
+    i := 0
+    total := 0
+    while i < 3
+        zone z 4096
+            v := z.bytes(10)
+            fill(v, i + 1)
+            total <- total + v[9]
+        end
+        i <- i + 1
+    end
+    ret total
+end

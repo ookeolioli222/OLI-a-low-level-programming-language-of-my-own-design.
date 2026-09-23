@@ -1,0 +1,3 @@
+; undefined.hex2 - refers to a label that does not exist
+:a
+e8 %nowhere

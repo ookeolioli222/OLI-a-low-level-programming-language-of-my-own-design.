@@ -1,0 +1,18 @@
+module trap_at_short
+-- `Name.at` over a view shorter than the layout.
+layout Header
+    magic : u32
+    payload : u64
+end
+proc start -> s32
+    entry
+    zone z 4096
+        b := z.bytes(64)
+        h := Header.at(b[..8])
+        if h.magic == 1
+            ret 1
+        end
+    end
+    ret 0
+end
+-- expect: trap: bounds at stdin:11

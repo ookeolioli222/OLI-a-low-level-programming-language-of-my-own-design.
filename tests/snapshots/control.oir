@@ -1,0 +1,188 @@
+(oir
+  (static 0 len=27)
+  (static 1 len=27)
+  (static 2 len=27)
+  (static 3 len=27)
+  (static 4 len=27)
+  (proc classify locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 10
+      %4 = cmp.lt %2, %3
+      branch %4, bb1, bb3)
+    (bb1 preds bb0
+      %6 = const 1
+      ret %6)
+    (bb2
+      jump bb10)
+    (bb3 preds bb0
+      %10 = load frame.0
+      %11 = const 100
+      %12 = cmp.lt %10, %11
+      branch %12, bb4, bb6)
+    (bb4 preds bb3
+      %14 = const 2
+      ret %14)
+    (bb5
+      jump bb10)
+    (bb6 preds bb3
+      %18 = load frame.0
+      %19 = const 1000
+      %20 = cmp.lt %18, %19
+      branch %20, bb7, bb9)
+    (bb7 preds bb6
+      %22 = const 3
+      ret %22)
+    (bb8
+      jump bb10)
+    (bb9 preds bb6
+      %26 = const 4
+      ret %26)
+    (bb10 preds bb2 bb5 bb8
+      ret))
+  (proc sum_to locals=3
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = const 0
+      store frame.3, %2
+      %4 = const 1
+      store frame.6, %4
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %7 = load frame.6
+      %8 = load frame.0
+      %9 = cmp.le %7, %8
+      branch %9, bb2, bb3)
+    (bb2 preds bb1
+      %11 = load frame.3
+      %12 = load frame.6
+      %13 = add %11, %12
+      check.overflow %13
+      store frame.3, %13
+      %15 = load frame.6
+      %16 = const 1
+      %17 = add %15, %16
+      check.overflow %17
+      store frame.6, %17
+      jump bb1)
+    (bb3 preds bb1
+      %21 = load frame.3
+      ret %21))
+  (proc first_square_over locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = const 0
+      store frame.3, %2
+      jump bb1)
+    (bb1 preds bb0 bb2 bb6
+      %5 = load frame.3
+      %6 = const 1
+      %7 = add %5, %6
+      check.overflow %7
+      store frame.3, %7
+      %9 = load frame.3
+      %10 = const 3
+      %11 = rem %9, %10
+      check.div_zero %10
+      %12 = const 0
+      %13 = cmp.eq %11, %12
+      branch %13, bb2, bb4)
+    (bb2 preds bb1
+      jump bb1)
+    (bb3
+      jump bb4)
+    (bb4 preds bb1 bb3
+      %19 = load frame.3
+      %20 = load frame.3
+      %21 = mul %19, %20
+      check.overflow %21
+      %22 = load frame.0
+      %23 = cmp.gt %21, %22
+      branch %23, bb5, bb6)
+    (bb5 preds bb4
+      jump bb7)
+    (bb6 preds bb4
+      jump bb1)
+    (bb7 preds bb5
+      %29 = load frame.3
+      ret %29))
+  (proc start locals=0 entry
+    (bb0
+      %0 = const 5
+      arg %0
+      %2 = call classify/1
+      %3 = const 1
+      %4 = cmp.ne %2, %3
+      branch %4, bb1, bb3)
+    (bb1 preds bb0
+      %6 = const 1
+      ret %6)
+    (bb2
+      jump bb3)
+    (bb3 preds bb0 bb2
+      %11 = const 55
+      arg %11
+      %13 = call classify/1
+      %14 = const 2
+      %15 = cmp.ne %13, %14
+      branch %15, bb4, bb6)
+    (bb4 preds bb3
+      %17 = const 2
+      ret %17)
+    (bb5
+      jump bb6)
+    (bb6 preds bb3 bb5
+      %22 = const 555
+      arg %22
+      %24 = call classify/1
+      %25 = const 3
+      %26 = cmp.ne %24, %25
+      branch %26, bb7, bb9)
+    (bb7 preds bb6
+      %28 = const 3
+      ret %28)
+    (bb8
+      jump bb9)
+    (bb9 preds bb6 bb8
+      %33 = const 5555
+      arg %33
+      %35 = call classify/1
+      %36 = const 4
+      %37 = cmp.ne %35, %36
+      branch %37, bb10, bb12)
+    (bb10 preds bb9
+      %39 = const 4
+      ret %39)
+    (bb11
+      jump bb12)
+    (bb12 preds bb9 bb11
+      %44 = const 10
+      arg %44
+      %46 = call sum_to/1
+      %47 = const 55
+      %48 = cmp.ne %46, %47
+      branch %48, bb13, bb15)
+    (bb13 preds bb12
+      %50 = const 5
+      ret %50)
+    (bb14
+      jump bb15)
+    (bb15 preds bb12 bb14
+      %55 = const 20
+      arg %55
+      %57 = call first_square_over/1
+      %58 = const 5
+      %59 = cmp.ne %57, %58
+      branch %59, bb16, bb18)
+    (bb16 preds bb15
+      %61 = const 6
+      ret %61)
+    (bb17
+      jump bb18)
+    (bb18 preds bb15 bb17
+      %66 = const 42
+      ret %66)))

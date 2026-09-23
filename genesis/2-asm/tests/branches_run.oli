@@ -1,0 +1,32 @@
+module genesis.branches_run
+proc main
+    calls none
+    entry
+    machine x64
+        mov rax, 0
+        mov rcx, 6
+    .loop:
+        add rax, 7
+        dec rcx
+        jne .loop
+        call helper
+        mov r8, helper
+        call r8
+        cmp rdi, 42
+        jne .bad
+        jmp .exit
+    .bad:
+        mov rdi, 99
+    .exit:
+        mov rax, 60
+        syscall
+    end
+end
+proc helper
+    calls none
+    machine x64
+    .loop:
+        mov rdi, rax
+        ret
+    end
+end

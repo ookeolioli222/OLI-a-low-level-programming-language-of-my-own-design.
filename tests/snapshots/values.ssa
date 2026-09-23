@@ -1,0 +1,199 @@
+(oir
+  (static 0 len=27)
+  (static 1 len=27)
+  (static 2 len=27)
+  (static 3 len=27)
+  (static 4 len=27)
+  (static 5 len=27)
+  (static 6 len=27)
+  (static 7 len=27)
+  (static 8 len=27)
+  (proc clamp locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 100
+      %2 = cmp.gt %0, %1
+      branch %2, bb1, bb2)
+    (bb1 preds bb0
+      %3 = const 100
+      ret %3)
+    (bb2 preds bb0
+      ret %0))
+  (proc start locals=8 temps=2 entry
+    (bb0
+      %0 = const 30
+      arg %0
+      %2 = call clamp/1
+      %3 = const 30
+      %4 = cmp.ne %2, %3
+      branch %4, bb1, bb2)
+    (bb1 preds bb0
+      %5 = const 1
+      ret %5)
+    (bb2 preds bb0
+      %6 = const 300
+      arg %6
+      %8 = call clamp/1
+      %9 = const 100
+      %10 = cmp.ne %8, %9
+      branch %10, bb3, bb4)
+    (bb3 preds bb2
+      %11 = const 2
+      ret %11)
+    (bb4 preds bb2
+      %12 = const 100
+      %13 = const 7
+      %14 = div %12, %13
+      check.div_zero %13
+      check.overflow %14
+      %15 = const 14
+      %16 = cmp.ne %14, %15
+      branch %16, bb5, bb6)
+    (bb5 preds bb4
+      %17 = const 3
+      ret %17)
+    (bb6 preds bb4
+      %18 = const 65
+      %19 = const 65
+      %20 = cmp.ne %18, %19
+      branch %20, bb7, bb8)
+    (bb7 preds bb6
+      %21 = const 4
+      ret %21)
+    (bb8 preds bb6
+      %22 = const 122
+      %23 = const 97
+      %24 = sub %22, %23
+      check.overflow %24
+      %25 = sub %18, %18
+      check.overflow %25
+      %26 = const 25
+      %27 = add %25, %26
+      check.overflow %27
+      %28 = cmp.ne %24, %27
+      branch %28, bb9, bb10)
+    (bb9 preds bb8
+      %29 = const 5
+      ret %29)
+    (bb10 preds bb8
+      %30 = const 1
+      %31 = const 0
+      %32 = not %31
+      %33 = cmp.ne %32, %30
+      branch %33, bb11, bb12)
+    (bb11 preds bb10
+      %34 = const 6
+      ret %34)
+    (bb12 preds bb10
+      branch %30, bb13, bb14)
+    (bb13 preds bb12
+      jump bb14)
+    (bb14 preds bb12 bb13
+      %35 = phi [bb12 %30] [bb13 %31]
+      branch %35, bb15, bb16)
+    (bb15 preds bb14
+      %36 = const 7
+      ret %36)
+    (bb16 preds bb14
+      %37 = not %30
+      branch %37, bb17, bb18)
+    (bb17 preds bb16
+      jump bb18)
+    (bb18 preds bb16 bb17
+      %38 = phi [bb16 %30] [bb17 %31]
+      %39 = not %38
+      branch %39, bb19, bb20)
+    (bb19 preds bb18
+      %40 = const 8
+      ret %40)
+    (bb20 preds bb18
+      %41 = const 0
+      %42 = const 5
+      %43 = sub.s %41, %42
+      check.overflow %43
+      %44 = const 0
+      %45 = cmp.gt.s %43, %44
+      branch %45, bb21, bb22)
+    (bb21 preds bb20
+      %46 = const 9
+      ret %46)
+    (bb22 preds bb20
+      %47 = const 0
+      %48 = sub.s %47, %43
+      check.overflow %48
+      %49 = const 5
+      %50 = cmp.ne.s %48, %49
+      branch %50, bb23, bb24)
+    (bb23 preds bb22
+      %51 = const 10
+      ret %51)
+    (bb24 preds bb22
+      %52 = const 3
+      %53 = mul.s %43, %52
+      check.overflow %53
+      %54 = const 0
+      %55 = const 15
+      %56 = sub.s %54, %55
+      check.overflow %56
+      %57 = cmp.ne.s %53, %56
+      branch %57, bb25, bb26)
+    (bb25 preds bb24
+      %58 = const 11
+      ret %58)
+    (bb26 preds bb24
+      %59 = const 200
+      %60 = const 200
+      %61 = cmp.ne %59, %60
+      branch %61, bb27, bb28)
+    (bb27 preds bb26
+      %62 = const 12
+      ret %62)
+    (bb28 preds bb26
+      %63 = const 100
+      %64 = add %59, %63
+      check.overflow %64
+      %65 = trunc.8 %64
+      %66 = const 44
+      %67 = cmp.ne %65, %66
+      branch %67, bb29, bb30)
+    (bb29 preds bb28
+      %68 = const 13
+      ret %68)
+    (bb30 preds bb28
+      %69 = const 18446744073709551611
+      %70 = cmp.ne %43, %69
+      branch %70, bb31, bb32)
+    (bb31 preds bb30
+      %71 = const 14
+      ret %71)
+    (bb32 preds bb30
+      %72 = cmp.ne.s %43, %43
+      branch %72, bb33, bb34)
+    (bb33 preds bb32
+      %73 = const 15
+      ret %73)
+    (bb34 preds bb32
+      %74 = const 65000
+      %75 = const 1000
+      %76 = add %74, %75
+      check.overflow %76
+      %77 = const 66000
+      %78 = cmp.ne %76, %77
+      branch %78, bb35, bb36)
+    (bb35 preds bb34
+      %79 = const 16
+      ret %79)
+    (bb36 preds bb34
+      %80 = const 1000
+      %81 = add %74, %80
+      check.overflow %81
+      %82 = trunc.16 %81
+      %83 = const 464
+      %84 = cmp.ne %82, %83
+      branch %84, bb37, bb38)
+    (bb37 preds bb36
+      %85 = const 17
+      ret %85)
+    (bb38 preds bb36
+      %86 = const 42
+      ret %86)))

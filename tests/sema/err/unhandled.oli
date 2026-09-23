@@ -1,0 +1,13 @@
+proc f -> u8 or none
+    fail
+end
+proc main -> s32
+    entry
+    f()
+    x := f()
+    _y := x
+    _z := f() else fail
+    ret 0
+end
+-- expect: E0310 @ 6:5
+-- expect: E0200 @ 9:11

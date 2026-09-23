@@ -1,0 +1,6 @@
+proc f
+    x = 1;
+end
+-- expect: E0001 @ 2:7
+-- expect: E0001 @ 2:10
+-- expect: E0020 @ 2:9

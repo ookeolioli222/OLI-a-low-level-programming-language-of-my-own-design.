@@ -1,0 +1,28 @@
+module slurp
+proc slurp(z: zone) -> view u8
+    buf := z.bytes(4096)
+    n := os.syscall(0, 0, buf.addr, buf.len)
+    ret buf[..n]
+end
+proc upper(v: view u8)
+    i := 0
+    while i < v.len
+        c := v[i]
+        if c >= 97
+            if c <= 122
+                v[i] <- c - 32
+            end
+        end
+        i <- i + 1
+    end
+end
+proc start
+    entry
+    permit os.syscall
+    zone z 65536
+        line := slurp(z)
+        upper(line)
+        os.syscall(1, 1, line.addr, line.len)
+        ret line.len
+    end
+end

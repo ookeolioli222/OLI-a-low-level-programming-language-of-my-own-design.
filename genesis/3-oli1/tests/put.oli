@@ -1,0 +1,20 @@
+module put
+proc write_all(fd: u64, p: addr u8, n: u64)
+    done := 0
+    while done < n
+        w := os.syscall(1, fd, p + done, n - done)
+        if w <= 0
+            ret 1
+        end
+        done <- done + w
+    end
+    ret 0
+end
+proc start
+    entry
+    permit os.syscall
+    a := "first "
+    b := "second\n"
+    fails := write_all(1, a.addr, a.len) + write_all(1, b.addr, b.len)
+    ret fails
+end

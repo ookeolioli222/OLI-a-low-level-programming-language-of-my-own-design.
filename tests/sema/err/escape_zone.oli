@@ -1,0 +1,23 @@
+g : view u8 <- "x"
+proc f -> rw view u8
+permit os.syscall
+    zone z 4K
+        ret z.bytes(8)
+    end
+end
+proc main -> s32
+    entry
+permit os.syscall
+    zone a 4K
+        p : view u8
+        zone b 1K
+            p <- b.bytes(8)
+        end
+        g <- a.bytes(8)
+        _q := p
+    end
+    ret 0
+end
+-- expect: E0300 @ 5:13
+-- expect: E0300 @ 14:18
+-- expect: E0300 @ 16:14

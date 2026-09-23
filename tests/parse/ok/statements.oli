@@ -1,0 +1,55 @@
+-- Every V0 statement and expression form in one file (parses cleanly).
+module statements
+
+layout Point
+    x : s32
+    y : s32
+end
+
+choice Shape
+    dot
+    line { a : Point, b : Point }
+end
+
+ORIGIN : Point := Point { x: 0, y: 0 }
+LIMIT := 100
+
+proc area(s : ref Shape) -> u64 or none
+    case s
+    when dot
+        ret 0
+    when line { a, b }
+        dx := wrap(u64.bits(s64(b.x) - s64(a.x)))
+        ret dx
+    else
+        fail
+    end
+end
+
+proc demo(v : rw view u8, n : uword) -> u8
+    i : uword <- 0
+    acc : u8 <- 0
+    while i < n
+        acc <- wrap(acc + v[i])
+        i <- i + 1
+    end
+    each b in v[1..n]
+        if b == 0 then continue
+        if b == 255 then break
+        acc <- sat(acc + b)
+    end
+    each k in 0..LIMIT
+        acc <- acc ^ u8.wrap(k)
+    end
+    loop
+        if acc > 200
+            acc <- acc - 100
+        elif acc > 100
+            acc <- acc - 50
+        else
+            break
+        end
+    end
+    total := checked(acc * 2) else 0
+    ret total
+end

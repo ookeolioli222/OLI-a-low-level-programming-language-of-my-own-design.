@@ -1,0 +1,1090 @@
+-- Oli-- G2 assembler, hand-encoded x86-64. Built only with hex2.
+-- Input: 0x410000 (1MiB); output: 0x510000 (1MiB).
+-- State: 0x40f000 calls flag; +8 entry count; +16 machine count.
+-- rbx cursor, r10 end, r15 output size, r9 state, r14 descriptor.
+-- Two passes: symbols at 0x610000, then rel32/absolute resolution.
+-- Output is a single RX segment; data/bss and narrower operands are pending.
+7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+02 00 3e 00 01 00 00 00
+78 00 40 00 00 00 00 00
+40 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00
+40 00 38 00 01 00 00 00 00 00 00 00
+01 00 00 00 07 00 00 00
+00 00 00 00 00 00 00 00
+00 00 40 00 00 00 00 00
+00 00 40 00 00 00 00 00
+2f 20 00 00 00 00 00 00 -- p_filesz = 8239
+00 00 22 00 00 00 00 00 -- p_memsz
+00 10 00 00 00 00 00 00
+:start
+bb 00 00 41 00             -- mov ebx,input
+:read
+ba 00 00 51 00 48 29 da    -- edx=input_limit-cursor
+0f 84 %limit
+31 ff 48 89 de 31 c0 0f 05 -- read(0,cursor,remaining)
+48 83 f8 fc 0f 84 %read    -- retry EINTR
+48 85 c0 0f 88 %ioerror
+0f 84 %read_done
+48 01 c3 e9 %read
+:read_done
+49 89 da                   -- r10=input_end
+bf 00 00 51 00 48 be @template
+b9 78 00 00 00 f3 a4       -- copy ELF header
+41 bf 78 00 00 00 bb 00 00 41 00 45 31 c9
+48 c7 04 25 08 f0 40 00 00 00 00 00
+48 c7 04 25 c0 f0 40 00 00 00 00 00
+:line
+ e8 %space
+4c 39 d3 0f 83 %done
+80 3b 0a 0f 84 %newline
+66 81 3b 2d 2d 0f 84 %comment
+80 3b 2e 0f 84 %local_label
+ e8 %token
+48 83 fa 07 0f 87 %syntax
+49 be @instructions
+:lookup
+41 80 3e 00 0f 84 %syntax
+49 89 f4 4c 89 f7 48 89 d1 f3 a6 4c 89 e6
+0f 85 %lookup_next
+41 80 3c 16 00 0f 85 %lookup_next
+41 ff 56 08 e9 %tail       -- call descriptor handler
+:lookup_next
+49 83 c6 20 e9 %lookup
+:tail
+ e8 %space
+4c 39 d3 0f 83 %done
+80 3b 0a 0f 84 %newline
+66 81 3b 2d 2d 0f 85 %syntax
+:comment
+4c 39 d3 0f 83 %done
+80 3b 0a 0f 84 %newline
+48 ff c3 e9 %comment
+:newline
+48 ff c3 e9 %line
+:done
+41 83 f9 01 0f 85 %syntax
+48 83 3c 25 08 f0 40 00 01 0f 85 %entry_error
+48 83 3c 25 b0 f0 40 00 00 0f 85 %write_image
+48 ff 04 25 b0 f0 40 00
+e9 %read_done
+:write_image
+bf 00 00 51 00 4c 89 7f 60 4c 89 7f 68
+be 00 00 51 00 4c 89 fa
+:write
+bf 01 00 00 00 b8 01 00 00 00 0f 05
+48 83 f8 fc 0f 84 %write
+48 85 c0 0f 8e %ioerror
+48 01 c6 48 29 c2 0f 85 %write
+31 ff e9 %exit
+-- Structural state: 0 initial, 1 module, 2 procedure, 3 machine.
+:module
+45 85 c9 0f 85 %syntax
+ e8 %identifier
+41 b9 01 00 00 00 c3
+:procedure
+41 83 f9 01 0f 85 %syntax
+ e8 %identifier
+48 ff 04 25 c0 f0 40 00
+ e8 %define_symbol
+48 c7 04 25 00 f0 40 00 00 00 00 00
+48 c7 04 25 10 f0 40 00 00 00 00 00
+41 b9 02 00 00 00 c3
+:calls
+ e8 %proc_state
+48 83 3c 25 00 f0 40 00 00 0f 85 %syntax
+ e8 %token
+48 83 fa 04 0f 85 %syntax
+81 3e 6e 6f 6e 65 0f 85 %syntax
+48 ff 04 25 00 f0 40 00 c3
+:entry
+ e8 %proc_state
+48 ff 04 25 08 f0 40 00
+48 83 3c 25 08 f0 40 00 01 0f 85 %entry_error
+49 8d 87 00 00 40 00 48 89 04 25 18 00 51 00 c3
+:machine
+41 83 f9 02 0f 85 %syntax
+48 83 3c 25 00 f0 40 00 01 0f 85 %syntax
+ e8 %token
+48 83 fa 03 0f 85 %syntax
+66 81 3e 78 36 0f 85 %syntax
+80 7e 02 34 0f 85 %syntax
+48 ff 04 25 10 f0 40 00
+41 b9 03 00 00 00 c3
+:end
+41 83 f9 04 0f 84 %end_data
+41 83 f9 03 0f 84 %end_machine
+41 83 f9 02 0f 85 %syntax
+48 83 3c 25 10 f0 40 00 00 0f 84 %syntax
+:end_data
+41 b9 01 00 00 00 c3
+:end_machine
+41 b9 02 00 00 00 c3
+:proc_state
+41 83 f9 02 0f 85 %syntax
+48 83 3c 25 10 f0 40 00 00 0f 85 %syntax
+c3
+:machine_state
+41 83 f9 03 0f 85 %syntax
+c3
+:rodata
+41 83 f9 01 0f 85 %syntax
+ e8 %identifier
+ e8 %define_symbol
+41 b9 04 00 00 00 c3
+:data_state
+41 83 f9 04 0f 85 %syntax
+c3
+:data_integer
+ e8 %data_state
+:data_integer_next
+ e8 %integer
+41 83 7e 10 01 0f 85 %data_integer_emit
+48 3d ff 00 00 00 0f 87 %overflow
+:data_integer_emit
+41 8b 4e 10 e8 %emit_word
+ e8 %space
+4c 39 d3 0f 83 %data_integer_done
+80 3b 2c 0f 85 %data_integer_done
+48 ff c3 e9 %data_integer_next
+:data_integer_done
+c3
+:data_address
+ e8 %data_state
+ e8 %token
+ e8 %resolve
+48 05 00 00 40 00 b9 08 00 00 00 e8 %emit_word
+c3
+:data_reserve
+ e8 %data_state
+ e8 %integer
+ba 00 00 10 00 4c 29 fa
+48 39 d0 0f 87 %limit
+48 89 c1 31 c0
+:reserve_loop
+48 85 c9 0f 84 %reserve_done
+ e8 %emit
+48 ff c9 e9 %reserve_loop
+:reserve_done
+c3
+:data_string
+ e8 %data_state
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 22 0f 85 %syntax
+48 ff c3
+:string_loop
+4c 39 d3 0f 83 %syntax
+0f b6 03 48 ff c3
+3c 22 0f 84 %string_done
+3c 0a 0f 84 %syntax
+3c 0d 0f 84 %syntax
+3c 5c 0f 85 %string_emit
+4c 39 d3 0f 83 %syntax
+0f b6 03 48 ff c3
+3c 22 0f 84 %string_emit
+3c 5c 0f 84 %string_emit
+3c 6e 0f 84 %string_lf
+3c 74 0f 84 %string_tab
+3c 30 0f 84 %string_zero
+3c 78 0f 85 %syntax
+ e8 %nibble
+c1 e0 04 41 89 c0
+ e8 %nibble
+44 09 c0 e9 %string_emit
+:string_lf
+b8 0a 00 00 00 e9 %string_emit
+:string_tab
+b8 09 00 00 00 e9 %string_emit
+:string_zero
+31 c0
+:string_emit
+ e8 %emit
+e9 %string_loop
+:string_done
+41 83 7e 10 00 0f 84 %string_return
+31 c0 e8 %emit
+:string_return
+c3
+-- bytes: exact hex pairs, whitespace separated, at least one byte.
+:bytes
+ e8 %machine_state
+31 ed
+:bytes_next
+ e8 %space
+4c 39 d3 0f 83 %bytes_done
+80 3b 0a 0f 84 %bytes_done
+66 81 3b 2d 2d 0f 84 %bytes_done
+ e8 %nibble
+c1 e0 04 41 89 c0
+ e8 %nibble
+44 09 c0 e8 %emit
+ff c5
+4c 39 d3 0f 83 %bytes_done
+0f b6 03
+3c 20 0f 84 %bytes_next
+3c 09 0f 84 %bytes_next
+3c 0d 0f 84 %bytes_next
+3c 0a 0f 84 %bytes_done
+66 81 3b 2d 2d 0f 85 %syntax
+:bytes_done
+85 ed 0f 84 %syntax
+c3
+:nibble
+4c 39 d3 0f 83 %syntax
+0f b6 03 48 ff c3
+3c 30 0f 82 %syntax
+3c 39 0f 86 %decimal_digit
+0c 20 3c 61 0f 82 %syntax
+3c 66 0f 87 %syntax
+2c 57 c3
+:decimal_digit
+2c 30 c3
+-- Fixed opcodes packed little endian at descriptor+16.
+:fixed
+ e8 %machine_state
+41 8b 46 10 e8 %emit
+c1 e8 08 85 c0 0f 84 %fixed_done
+ e8 %emit
+:fixed_done
+c3
+-- MOV dispatch: narrow-register path (8/16/32) or r64 path.
+:mov_dispatch
+ e8 %machine_state
+ e8 %space
+4c 39 d3 0f 83 %syntax
+53
+80 3b 5b 0f 84 %mov_probe_memory
+ e8 %token
+ e8 %reg32_match
+5b 85 c0 0f 88 %binary
+e9 %mov32
+:mov_probe_memory
+ e8 %operand
+41 89 c5 e8 %comma
+ e8 %space
+4c 39 d3 0f 83 %syntax
+0f b6 03
+3c 2d 0f 84 %mov_probe_fallback
+3c 5b 0f 84 %mov_probe_fallback
+3c 30 0f 82 %mov_probe_register
+3c 39 0f 86 %mov_probe_fallback
+:mov_probe_register
+ e8 %token
+ e8 %reg32_match
+85 c0 0f 88 %mov_probe_fallback
+48 83 c4 08                -- discard saved cursor; operands already consumed
+8b 0c 25 d0 f0 40 00 89 0c 25 c8 f0 40 00
+41 89 c4 b8 89 00 00 00
+e9 %mov32_pair
+:mov_probe_fallback
+5b e9 %binary
+:mov32
+48 c7 04 25 40 f0 40 00 00 00 00 00
+ e8 %token
+ e8 %reg32_match
+8b 0c 25 d0 f0 40 00 89 0c 25 c8 f0 40 00
+41 89 c5 e8 %comma
+ e8 %space
+4c 39 d3 0f 83 %syntax
+0f b6 03
+3c 5b 0f 84 %mov32_memory
+3c 2d 0f 84 %mov32_integer
+3c 30 0f 82 %mov32_register
+3c 39 0f 86 %mov32_integer
+:mov32_register
+ e8 %token
+ e8 %reg32_match
+85 c0 0f 88 %syntax
+8b 0c 25 d0 f0 40 00 3b 0c 25 c8 f0 40 00 0f 85 %syntax
+41 89 c4 b8 89 00 00 00
+e9 %mov32_pair
+:mov32_memory
+41 55 e8 %operand 41 5c
+41 89 c5 b8 8b 00 00 00
+:mov32_pair
+50                         -- save opcode
+83 3c 25 c8 f0 40 00 10 0f 85 %narrow_pair_rex
+b8 66 00 00 00 e8 %emit
+:narrow_pair_rex
+44 89 e0 c1 e8 03 c1 e0 02
+44 89 e9 c1 e9 03
+48 83 3c 25 40 f0 40 00 00 0f 84 %mov32_rex
+8b 0c 25 80 f0 40 00
+:mov32_rex
+09 c8
+83 3c 25 c8 f0 40 00 08 0f 85 %narrow_rex_test
+41 83 fc 04 0f 83 %narrow_rex_emit
+48 83 3c 25 40 f0 40 00 00 0f 85 %narrow_rex_test
+41 83 fd 04 0f 83 %narrow_rex_emit
+:narrow_rex_test
+85 c0 0f 84 %mov32_opcode
+:narrow_rex_emit
+0c 40 e8 %emit
+:mov32_opcode
+58
+83 3c 25 c8 f0 40 00 08 0f 85 %narrow_opcode_emit
+ff c8
+:narrow_opcode_emit
+ e8 %emit
+44 89 e0 83 e0 07 c1 e0 03
+44 89 e9 83 e1 07 80 c9 c0
+48 83 3c 25 40 f0 40 00 00 0f 84 %rr_modrm
+8b 0c 25 70 f0 40 00
+e9 %rr_modrm
+:mov32_integer
+ e8 %integer
+8b 0c 25 c8 f0 40 00
+85 ed 0f 84 %mov32_unsigned
+ff c9
+48 c7 c2 ff ff ff ff 48 d3 e2 -- minimum signed value for this width
+48 39 d0 0f 8c %overflow
+e9 %mov32_immediate
+:mov32_unsigned
+48 89 c2 48 d3 ea 48 85 d2 0f 85 %overflow
+:mov32_immediate
+49 89 c4
+83 3c 25 c8 f0 40 00 10 0f 85 %narrow_imm_rex
+b8 66 00 00 00 e8 %emit
+:narrow_imm_rex
+44 89 e8 c1 e8 03
+83 3c 25 c8 f0 40 00 08 0f 85 %narrow_imm_rex_test
+41 83 fd 04 0f 83 %narrow_imm_rex_emit
+:narrow_imm_rex_test
+85 c0 0f 84 %mov32_imm_opcode
+:narrow_imm_rex_emit
+0c 40 e8 %emit
+:mov32_imm_opcode
+44 89 e8 83 e0 07 0c b8
+83 3c 25 c8 f0 40 00 08 0f 85 %narrow_imm_opcode_emit
+2c 08
+:narrow_imm_opcode_emit
+ e8 %emit
+44 89 e0 8b 0c 25 c8 f0 40 00 c1 e9 03 e8 %emit_word
+c3
+-- Token in rsi/rdx; table index supplies the register number.
+:reg32_match
+48 83 fa 04 0f 87 %not_reg
+45 31 db 48 bf @registers32
+:reg32_loop
+49 89 f0 49 89 fc 48 89 d1 f3 a6
+4c 89 c6 4c 89 e7 0f 85 %reg32_next
+80 3c 17 00 0f 85 %reg32_next
+44 89 d8 83 e0 0f
+41 83 fb 10 0f 83 %syntax           -- 16/8-bit regs unsupported (SPEC 8): reject exit 1
+b9 20 00 00 00
+89 0c 25 d0 f0 40 00 c3
+:reg32_next
+48 83 c7 08 41 ff c3
+41 83 fb 30 0f 82 %reg32_loop
+e9 %not_reg
+-- r64,r64 and r64,immediate. r13=dest, r12=source/value.
+:binary
+ e8 %machine_state
+48 c7 04 25 98 f0 40 00 00 00 00 00
+ e8 %operand
+41 89 c5 e8 %comma
+ e8 %space
+4c 39 d3 0f 83 %syntax
+0f b6 03
+3c 5b 0f 84 %memory_source
+3c 2d 0f 84 %immediate
+3c 30 0f 82 %register_source
+3c 39 0f 86 %immediate
+:register_source
+ e8 %token
+ e8 %reg_match
+85 c0 0f 88 %symbol_source
+41 89 c4 e8 %rr
+c3
+:symbol_source
+41 81 7e 10 89 00 00 00 0f 85 %syntax
+48 83 3c 25 40 f0 40 00 00 0f 85 %syntax
+ e8 %resolve
+48 05 00 00 40 00
+49 89 c4 e9 %mov_immediate
+:memory_source
+48 83 3c 25 40 f0 40 00 00 0f 85 %syntax
+41 55 e8 %operand 41 5c
+41 89 c5
+48 c7 04 25 98 f0 40 00 01 00 00 00
+ e8 %rr
+c3
+:lea
+ e8 %machine_state
+ e8 %reg
+41 89 c5 e8 %comma
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 5b 0f 85 %syntax
+48 c7 04 25 40 f0 40 00 00 00 00 00
+ e9 %memory_source
+:rr
+44 89 e0 c1 e8 03 c1 e0 02
+44 89 e9 c1 e9 03
+48 83 3c 25 40 f0 40 00 00 0f 84 %rr_rex
+8b 0c 25 80 f0 40 00
+:rr_rex
+09 c8 0c 48 e8 %emit
+41 8b 46 10
+48 83 3c 25 98 f0 40 00 00 0f 84 %rr_opcode
+3d 85 00 00 00 0f 84 %rr_opcode
+83 c0 02
+:rr_opcode
+ e8 %emit
+44 89 e0 83 e0 07 c1 e0 03
+44 89 e9 83 e1 07 80 c9 c0
+48 83 3c 25 40 f0 40 00 00 0f 84 %rr_modrm
+8b 0c 25 70 f0 40 00
+:rr_modrm
+09 c8 e8 %emit
+ e8 %suffix
+c3
+:immediate
+ e8 %integer
+49 89 c4
+41 81 7e 10 89 00 00 00 0f 85 %signed_immediate
+48 83 3c 25 40 f0 40 00 00 0f 84 %mov_immediate
+:signed_immediate
+ e8 %signed32
+ e8 %rex_dest
+b8 81 00 00 00
+41 81 7e 10 89 00 00 00 0f 85 %test_immediate
+b8 c7 00 00 00 e9 %alu_opcode
+:test_immediate
+41 81 7e 10 85 00 00 00 0f 85 %alu_opcode
+b8 f7 00 00 00
+:alu_opcode
+ e8 %emit
+ e8 %group_modrm
+44 89 e0 b9 04 00 00 00 e8 %emit_word
+c3
+:mov_immediate
+ e8 %rex_dest
+44 89 e8 83 e0 07 0c b8 e8 %emit
+4c 89 e0 b9 08 00 00 00 e8 %emit_word
+c3
+:rex_dest
+44 89 e8 c1 e8 03
+48 83 3c 25 40 f0 40 00 00 0f 84 %rex_dest_emit
+8b 04 25 80 f0 40 00
+:rex_dest_emit
+0c 48 e8 %emit
+c3
+:group_modrm
+41 8b 46 18 c1 e0 03
+44 89 e9 83 e1 07 80 c9 c0
+48 83 3c 25 40 f0 40 00 00 0f 84 %group_emit
+8b 0c 25 70 f0 40 00
+:group_emit
+09 c8 e8 %emit
+ e8 %suffix
+c3
+:unary
+ e8 %machine_state
+ e8 %operand
+41 89 c5 e8 %rex_dest
+41 8b 46 10 e8 %emit
+ e8 %group_modrm
+c3
+:multiply
+ e8 %machine_state
+ e8 %operand
+41 89 c5 e8 %space
+48 83 3c 25 40 f0 40 00 00 0f 85 %multiply_one
+4c 39 d3 0f 83 %multiply_one
+80 3b 2c 0f 85 %multiply_one
+48 ff c3 e8 %operand
+41 89 c4 e8 %space
+31 ed
+4c 39 d3 0f 83 %multiply_regs
+80 3b 2c 0f 85 %multiply_regs
+48 ff c3
+41 54 e8 %integer 41 5c     -- preserve source reg across integer parser
+ e8 %signed32
+48 89 04 25 18 f0 40 00
+bd 01 00 00 00
+:multiply_regs
+44 89 e8 c1 e8 03 c1 e0 02
+44 89 e1 c1 e9 03
+48 83 3c 25 40 f0 40 00 00 0f 84 %multiply_rex
+8b 0c 25 80 f0 40 00
+:multiply_rex
+09 c8 0c 48 e8 %emit
+85 ed 0f 85 %multiply_imm
+b8 0f 00 00 00 e8 %emit
+b8 af 00 00 00 e9 %multiply_modrm
+:multiply_imm
+b8 69 00 00 00
+:multiply_modrm
+ e8 %emit
+44 89 e8 83 e0 07 c1 e0 03
+44 89 e1 83 e1 07 80 c9 c0
+48 83 3c 25 40 f0 40 00 00 0f 84 %multiply_rm
+8b 0c 25 70 f0 40 00
+:multiply_rm
+09 c8 e8 %emit
+ e8 %suffix
+85 ed 0f 84 %multiply_ret
+48 8b 04 25 18 f0 40 00 b9 04 00 00 00 e8 %emit_word
+:multiply_ret
+c3
+:multiply_one
+ e8 %rex_dest
+b8 f7 00 00 00 e8 %emit
+ e8 %group_modrm
+c3
+:shift
+ e8 %machine_state
+ e8 %operand
+41 89 c5 e8 %comma
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 63 0f 84 %shift_cl
+ e8 %integer
+48 3d ff 00 00 00 0f 87 %overflow
+49 89 c4 e8 %rex_dest
+b8 c1 00 00 00 e8 %emit
+ e8 %group_modrm
+44 89 e0 e8 %emit
+c3
+:shift_cl
+ e8 %token
+48 83 fa 02 0f 85 %syntax
+66 81 3e 63 6c 0f 85 %syntax
+ e8 %rex_dest
+b8 d3 00 00 00 e8 %emit
+ e8 %group_modrm
+c3
+:indirect
+ e8 %machine_state
+ e8 %operand
+41 89 c5 c1 e8 03
+48 83 3c 25 40 f0 40 00 00 0f 84 %indirect_rex
+8b 04 25 80 f0 40 00
+:indirect_rex
+85 c0 0f 84 %indirect_opcode
+0c 40 e8 %emit
+:indirect_opcode
+b8 ff 00 00 00 e8 %emit
+ e8 %group_modrm
+c3
+:branch
+ e8 %machine_state
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 5b 0f 84 %indirect
+ e8 %token
+ e8 %reg_match
+85 c0 0f 88 %direct_branch
+48 c7 04 25 40 f0 40 00 00 00 00 00
+41 89 c5 c1 e8 03 e9 %indirect_rex
+:direct_branch
+ e8 %resolve
+49 89 c4
+b8 e8 00 00 00
+41 83 7e 18 04 0f 85 %branch_emit
+b8 e9 00 00 00
+:branch_emit
+ e8 %emit
+44 89 e0 44 29 f8 83 e8 04
+b9 04 00 00 00 e8 %emit_word
+c3
+:conditional
+ e8 %machine_state
+ e8 %token
+ e8 %resolve
+49 89 c4
+b8 0f 00 00 00 e8 %emit
+41 8b 46 18 0c 80 e9 %branch_emit
+:stack
+ e8 %machine_state
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 5b 0f 84 %stack_memory
+41 83 7e 10 50 0f 85 %stack_register
+ e8 %space
+4c 39 d3 0f 83 %syntax
+0f b6 03 3c 2d 0f 84 %push_immediate
+3c 30 0f 82 %stack_register
+3c 39 0f 86 %push_immediate
+:stack_register
+ e8 %reg
+41 89 c5 83 f8 08 0f 82 %stack_opcode
+b8 41 00 00 00 e8 %emit
+:stack_opcode
+44 89 e8 83 e0 07 41 0b 46 10 e8 %emit
+c3
+:push_immediate
+ e8 %integer
+ e8 %signed32
+49 89 c4 b8 68 00 00 00 e8 %emit
+4c 89 e0 b9 04 00 00 00 e8 %emit_word
+c3
+:stack_memory
+ e8 %operand
+8b 04 25 80 f0 40 00
+85 c0 0f 84 %stack_memory_opcode
+0c 40 e8 %emit
+:stack_memory_opcode
+41 83 7e 10 50 0f 85 %pop_memory
+b8 ff 00 00 00 e8 %emit
+8b 04 25 70 f0 40 00 0c 30 e9 %stack_memory_rm
+:pop_memory
+b8 8f 00 00 00 e8 %emit
+8b 04 25 70 f0 40 00
+:stack_memory_rm
+ e8 %emit
+ e8 %suffix
+c3
+-- r64 or [base + index*scale + signed displacement]. Memory scratch:
+-- +40 kind, +48 base, +50 index (4 means absent), +58 scale bits,
+-- +60 displacement, +68 explicit displacement, +70 ModRM, +78 SIB/-1,
+-- +80 REX.XB, +a0 displacement byte count. Addresses relative to 0x40f000.
+:operand
+48 c7 04 25 40 f0 40 00 00 00 00 00
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 5b 0f 85 %reg
+48 ff c3
+48 c7 04 25 40 f0 40 00 01 00 00 00
+48 c7 04 25 50 f0 40 00 04 00 00 00
+48 c7 04 25 58 f0 40 00 00 00 00 00
+48 c7 04 25 60 f0 40 00 00 00 00 00
+48 c7 04 25 68 f0 40 00 00 00 00 00
+ e8 %reg
+48 89 04 25 48 f0 40 00
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 5d 0f 84 %mem_close
+80 3b 2d 0f 84 %mem_disp
+80 3b 2b 0f 85 %syntax
+48 ff c3 e8 %space
+4c 39 d3 0f 83 %syntax
+0f b6 03
+3c 2d 0f 84 %mem_disp
+3c 30 0f 82 %mem_index
+3c 39 0f 86 %mem_disp
+:mem_index
+ e8 %reg
+83 f8 04 0f 84 %syntax      -- rsp cannot be an index; r12 can
+48 89 04 25 50 f0 40 00
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 2a 0f 85 %mem_after_index
+48 ff c3 e8 %integer
+48 83 f8 01 0f 84 %mem_scale0
+48 83 f8 02 0f 84 %mem_scale1
+48 83 f8 04 0f 84 %mem_scale2
+48 83 f8 08 0f 85 %syntax
+b8 03 00 00 00 e9 %mem_scale_save
+:mem_scale0
+31 c0 e9 %mem_scale_save
+:mem_scale1
+b8 01 00 00 00 e9 %mem_scale_save
+:mem_scale2
+b8 02 00 00 00
+:mem_scale_save
+48 89 04 25 58 f0 40 00
+:mem_after_index
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 5d 0f 84 %mem_close
+80 3b 2d 0f 84 %mem_disp
+80 3b 2b 0f 85 %syntax
+48 ff c3
+:mem_disp
+ e8 %integer
+ e8 %signed32
+48 89 04 25 60 f0 40 00
+48 c7 04 25 68 f0 40 00 01 00 00 00
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 5d 0f 85 %syntax
+:mem_close
+48 ff c3
+8b 04 25 48 f0 40 00
+c1 e8 03                   -- base high bit -> REX.B
+8b 0c 25 50 f0 40 00
+c1 e9 03 d1 e1 09 c8       -- index high bit -> REX.X
+48 89 04 25 80 f0 40 00
+8b 04 25 48 f0 40 00 83 e0 07
+48 c7 04 25 78 f0 40 00 ff ff ff ff
+83 f8 04 0f 84 %mem_sib
+48 83 3c 25 50 f0 40 00 04 0f 84 %mem_mod
+:mem_sib
+8b 0c 25 50 f0 40 00 83 e1 07 c1 e1 03 09 c8
+8b 0c 25 58 f0 40 00 c1 e1 06 09 c8
+48 89 04 25 78 f0 40 00
+b8 04 00 00 00
+:mem_mod
+48 c7 04 25 a0 f0 40 00 00 00 00 00
+48 83 3c 25 68 f0 40 00 00 0f 85 %mem_disp32
+8b 0c 25 48 f0 40 00 83 e1 07
+83 f9 05 0f 85 %mem_save
+0c 40
+48 c7 04 25 a0 f0 40 00 01 00 00 00
+e9 %mem_save
+:mem_disp32
+0c 80
+48 c7 04 25 a0 f0 40 00 04 00 00 00
+:mem_save
+48 89 04 25 70 f0 40 00
+31 c0 c3
+:suffix
+48 83 3c 25 40 f0 40 00 00 0f 84 %suffix_done
+48 8b 04 25 78 f0 40 00
+48 83 f8 ff 0f 84 %suffix_disp
+ e8 %emit
+:suffix_disp
+8b 0c 25 a0 f0 40 00
+85 c9 0f 84 %suffix_done
+48 8b 04 25 60 f0 40 00
+ e8 %emit_word
+:suffix_done
+c3
+-- Register table index equals the hardware encoding (r64).
+:reg
+ e8 %token
+ e8 %reg_match
+85 c0 0f 88 %syntax
+c3
+:reg_match
+48 83 fa 03 0f 87 %not_reg
+45 31 db 48 bf @registers
+:reg_loop
+49 89 f0 49 89 fc 48 89 d1 f3 a6
+4c 89 c6 4c 89 e7 0f 85 %reg_next
+80 3c 17 00 0f 85 %reg_next
+44 89 d8 c3
+:reg_next
+48 83 c7 04 41 ff c3
+41 83 fb 10 0f 82 %reg_loop
+:not_reg
+b8 ff ff ff ff c3
+-- Integer parser: r8 accumulator, r11 base, ebp sign, rsi digit count.
+:integer
+ e8 %space
+31 ed 45 31 c0 31 f6 41 bb 0a 00 00 00
+4c 39 d3 0f 83 %syntax
+80 3b 2d 0f 85 %number_base
+bd 01 00 00 00 48 ff c3
+:number_base
+4c 39 d3 0f 83 %syntax
+66 81 3b 30 78 0f 85 %number_loop
+41 bb 10 00 00 00 48 83 c3 02
+:number_loop
+4c 39 d3 0f 83 %number_done
+0f b6 0b
+80 f9 30 0f 82 %number_done
+80 f9 39 0f 86 %number_decimal
+80 c9 20 80 f9 61 0f 82 %number_done
+80 f9 66 0f 87 %number_done
+80 e9 57 e9 %number_digit
+:number_decimal
+80 e9 30
+:number_digit
+44 39 d9 0f 83 %syntax
+4c 89 c0 49 f7 e3             -- unsigned rdx:rax = accumulator*base
+48 85 d2 0f 85 %overflow
+48 01 c8 0f 82 %overflow
+49 89 c0 48 ff c6 48 ff c3 e9 %number_loop
+:number_done
+48 85 f6 0f 84 %syntax
+4c 89 c0 85 ed 0f 84 %number_return
+48 b9 00 00 00 00 00 00 00 80
+48 39 c8 0f 87 %overflow
+48 f7 d8
+:number_return
+c3
+:signed32
+85 ed 0f 85 %signed32_compare
+48 85 c0 0f 88 %overflow    -- positive u64 must not masquerade as negative s32
+:signed32_compare
+48 63 c8 48 39 c8 0f 85 %overflow
+c3
+-- Dotted ASCII identifier. Each component has 1..31 characters.
+:identifier
+ e8 %token
+:id_validate
+31 c9 31 ed
+:id_loop
+48 39 d1 0f 83 %id_done
+0f b6 04 0e
+3c 2e 0f 84 %id_dot
+3c 5f 0f 84 %id_good
+3c 41 0f 82 %id_digit
+3c 5a 0f 86 %id_good
+3c 61 0f 82 %syntax
+3c 7a 0f 86 %id_good
+ e9 %syntax
+:id_digit
+85 ed 0f 84 %syntax
+3c 30 0f 82 %syntax
+3c 39 0f 87 %syntax
+:id_good
+ff c5 83 fd 1f 0f 87 %syntax
+48 ff c1 e9 %id_loop
+:id_dot
+85 ed 0f 84 %syntax
+31 ed 48 ff c1 e9 %id_loop
+:id_done
+85 ed 0f 84 %syntax
+c3
+:token
+ e8 %space
+48 89 de
+:token_loop
+4c 39 d3 0f 83 %token_done
+0f b6 03 3c 20 0f 86 %token_done
+3c 2c 0f 84 %token_done
+3c 5b 0f 84 %token_done
+3c 5d 0f 84 %token_done
+3c 2b 0f 84 %token_done
+3c 2a 0f 84 %token_done
+3c 2d 0f 84 %token_done
+48 ff c3 e9 %token_loop
+:token_done
+48 89 da 48 29 f2 0f 84 %syntax
+c3
+:comma
+ e8 %space
+4c 39 d3 0f 83 %syntax
+80 3b 2c 0f 85 %syntax
+48 ff c3 c3
+:space
+4c 39 d3 0f 83 %space_done
+0f b6 03
+3c 20 0f 84 %space_next
+3c 09 0f 84 %space_next
+3c 0d 0f 85 %space_done
+:space_next
+48 ff c3 e9 %space
+:space_done
+c3
+:emit
+49 81 ff 00 00 10 00 0f 83 %limit
+41 88 87 00 00 51 00 49 ff c7 c3
+:emit_word
+ e8 %emit
+48 c1 e8 08 ff c9 0f 85 %emit_word
+c3
+:syntax
+bf 01 00 00 00 e9 %error
+:undefined
+56 52
+bf 02 00 00 00 48 be @undefined_text
+ba 16 00 00 00 b8 01 00 00 00 0f 05
+5a 5e
+bf 02 00 00 00 b8 01 00 00 00 0f 05
+bf 02 00 00 00 48 be @newline_text
+ba 01 00 00 00 b8 01 00 00 00 0f 05
+bf 02 00 00 00 e9 %exit
+:overflow
+bf 04 00 00 00 e9 %error
+:entry_error
+bf 05 00 00 00 e9 %error
+:limit
+bf 06 00 00 00 e9 %error
+:ioerror
+bf 07 00 00 00
+:error
+57 bf 02 00 00 00 48 be @error_text
+ba 0b 00 00 00 b8 01 00 00 00 0f 05 5f
+:exit
+b8 3c 00 00 00 0f 05
+-- Two-pass symbol table: 819 records at 0x610000, 80 bytes each.
+-- name[64], scope u64 (0 global, procedure ordinal for .local), offset u64.
+-- +b0 pass, +b8 symbol count, +c0 current procedure ordinal.
+:local_label
+ e8 %machine_state
+ e8 %token
+48 83 fa 03 0f 82 %syntax
+80 7c 16 ff 3a 0f 85 %syntax
+48 ff ca
+ e8 %define_symbol
+e9 %tail
+:symbol_name
+48 83 fa 3f 0f 87 %syntax
+56 52
+80 3e 2e 0f 85 %symbol_global
+41 83 f9 03 0f 85 %syntax
+48 ff c6 48 ff ca
+ e8 %id_validate
+5a 5e
+4c 8b 04 25 c0 f0 40 00
+4d 85 c0 0f 84 %syntax
+c3
+:symbol_global
+ e8 %id_validate
+5a 5e 45 31 c0 c3
+:find_symbol
+41 55 49 89 f5             -- preserve r13; r13=name start
+41 bc 00 00 61 00
+4c 8b 1c 25 b8 f0 40 00
+:symbol_loop
+4d 85 db 0f 84 %symbol_absent
+4d 39 44 24 40 0f 85 %symbol_next
+41 80 3c 14 00 0f 85 %symbol_next
+4c 89 e7                   -- rdi=record
+4c 89 ee 48 89 d1 f3 a6
+4c 89 ee 0f 85 %symbol_next
+49 8b 44 24 48 41 5d c3
+:symbol_next
+49 83 c4 50 49 ff cb e9 %symbol_loop
+:symbol_absent
+48 c7 c0 ff ff ff ff 4c 89 ee 41 5d c3
+:define_symbol
+ e8 %symbol_name
+48 83 3c 25 b0 f0 40 00 00 0f 85 %symbol_defined
+ e8 %find_symbol
+48 83 f8 ff 0f 85 %syntax
+48 81 3c 25 b8 f0 40 00 33 03 00 00 0f 83 %limit
+4c 89 e7 31 c0 b9 08 00 00 00 f3 48 ab
+4d 89 44 24 40 4d 89 7c 24 48
+4c 89 e7 48 89 d1 f3 a4
+48 ff 04 25 b8 f0 40 00
+:symbol_defined
+c3
+:resolve
+ e8 %symbol_name
+48 83 3c 25 b0 f0 40 00 00 0f 85 %resolve_second
+31 c0 c3
+:resolve_second
+ e8 %find_symbol
+48 83 f8 ff 0f 84 %undefined
+c3
+:undefined_text
+61 73 6d 3a 20 75 6e 64 65 66 69 6e 65 64 20 73 79 6d 62 6f 6c 20
+:newline_text
+0a
+:registers
+72 61 78 00 72 63 78 00 72 64 78 00 72 62 78 00
+72 73 70 00 72 62 70 00 72 73 69 00 72 64 69 00
+72 38 00 00 72 39 00 00 72 31 30 00 72 31 31 00
+72 31 32 00 72 31 33 00 72 31 34 00 72 31 35 00
+:registers32
+65 61 78 00 00 00 00 00
+65 63 78 00 00 00 00 00
+65 64 78 00 00 00 00 00
+65 62 78 00 00 00 00 00
+65 73 70 00 00 00 00 00
+65 62 70 00 00 00 00 00
+65 73 69 00 00 00 00 00
+65 64 69 00 00 00 00 00
+72 38 64 00 00 00 00 00
+72 39 64 00 00 00 00 00
+72 31 30 64 00 00 00 00
+72 31 31 64 00 00 00 00
+72 31 32 64 00 00 00 00
+72 31 33 64 00 00 00 00
+72 31 34 64 00 00 00 00
+72 31 35 64 00 00 00 00
+61 78 00 00 00 00 00 00
+63 78 00 00 00 00 00 00
+64 78 00 00 00 00 00 00
+62 78 00 00 00 00 00 00
+73 70 00 00 00 00 00 00
+62 70 00 00 00 00 00 00
+73 69 00 00 00 00 00 00
+64 69 00 00 00 00 00 00
+72 38 77 00 00 00 00 00
+72 39 77 00 00 00 00 00
+72 31 30 77 00 00 00 00
+72 31 31 77 00 00 00 00
+72 31 32 77 00 00 00 00
+72 31 33 77 00 00 00 00
+72 31 34 77 00 00 00 00
+72 31 35 77 00 00 00 00
+61 6c 00 00 00 00 00 00
+63 6c 00 00 00 00 00 00
+64 6c 00 00 00 00 00 00
+62 6c 00 00 00 00 00 00
+73 70 6c 00 00 00 00 00
+62 70 6c 00 00 00 00 00
+73 69 6c 00 00 00 00 00
+64 69 6c 00 00 00 00 00
+72 38 62 00 00 00 00 00
+72 39 62 00 00 00 00 00
+72 31 30 62 00 00 00 00
+72 31 31 62 00 00 00 00
+72 31 32 62 00 00 00 00
+72 31 33 62 00 00 00 00
+72 31 34 62 00 00 00 00
+72 31 35 62 00 00 00 00
+:error_text
+61 73 6d 3a 20 65 72 72 6f 72 0a
+-- Descriptor = name[8], handler u64, opcode u64, group u64.
+:instructions
+6d 6f 64 75 6c 65 00 00 @module    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+70 72 6f 63 00 00 00 00 @procedure 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+63 61 6c 6c 73 00 00 00 @calls     00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+65 6e 74 72 79 00 00 00 @entry     00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+6d 61 63 68 69 6e 65 00 @machine   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+65 6e 64 00 00 00 00 00 @end       00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+62 79 74 65 73 00 00 00 @bytes     00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+72 6f 64 61 74 61 00 00 @rodata    00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+62 79 74 65 00 00 00 00 @data_integer 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+77 6f 72 64 00 00 00 00 @data_integer 08 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+61 64 64 72 00 00 00 00 @data_address 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+72 65 73 00 00 00 00 00 @data_reserve 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+61 73 63 69 69 00 00 00 @data_string 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+61 73 63 69 69 7a 00 00 @data_string 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+73 79 73 63 61 6c 6c 00 @fixed     0f 05 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+72 65 74 00 00 00 00 00 @fixed     c3 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+63 71 6f 00 00 00 00 00 @fixed     48 99 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+6d 6f 76 00 00 00 00 00 @mov_dispatch 89 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+6c 65 61 00 00 00 00 00 @lea       8b 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+61 64 64 00 00 00 00 00 @binary    01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+6f 72 00 00 00 00 00 00 @binary    09 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00
+61 6e 64 00 00 00 00 00 @binary    21 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00
+73 75 62 00 00 00 00 00 @binary    29 00 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+78 6f 72 00 00 00 00 00 @binary    31 00 00 00 00 00 00 00 06 00 00 00 00 00 00 00
+63 6d 70 00 00 00 00 00 @binary    39 00 00 00 00 00 00 00 07 00 00 00 00 00 00 00
+74 65 73 74 00 00 00 00 @binary    85 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+69 6e 63 00 00 00 00 00 @unary     ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+64 65 63 00 00 00 00 00 @unary     ff 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00
+6e 65 67 00 00 00 00 00 @unary     f7 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00
+6e 6f 74 00 00 00 00 00 @unary     f7 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00
+6d 75 6c 00 00 00 00 00 @unary     f7 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00
+69 6d 75 6c 00 00 00 00 @multiply  f7 00 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+64 69 76 00 00 00 00 00 @unary     f7 00 00 00 00 00 00 00 06 00 00 00 00 00 00 00
+69 64 69 76 00 00 00 00 @unary     f7 00 00 00 00 00 00 00 07 00 00 00 00 00 00 00
+70 75 73 68 00 00 00 00 @stack     50 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+70 6f 70 00 00 00 00 00 @stack     58 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+73 68 6c 00 00 00 00 00 @shift     c1 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00
+73 68 72 00 00 00 00 00 @shift     c1 00 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+73 61 72 00 00 00 00 00 @shift     c1 00 00 00 00 00 00 00 07 00 00 00 00 00 00 00
+63 61 6c 6c 00 00 00 00 @branch    ff 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00
+6a 6d 70 00 00 00 00 00 @branch    ff 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00
+6a 65 00 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00
+6a 7a 00 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 04 00 00 00 00 00 00 00
+6a 6e 65 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+6a 6e 7a 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 05 00 00 00 00 00 00 00
+6a 6c 00 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 0c 00 00 00 00 00 00 00
+6a 6c 65 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 0e 00 00 00 00 00 00 00
+6a 67 00 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 0f 00 00 00 00 00 00 00
+6a 67 65 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 0d 00 00 00 00 00 00 00
+6a 62 00 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00
+6a 62 65 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 06 00 00 00 00 00 00 00
+6a 61 00 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 07 00 00 00 00 00 00 00
+6a 61 65 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 03 00 00 00 00 00 00 00
+6a 73 00 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 08 00 00 00 00 00 00 00
+6a 6e 73 00 00 00 00 00 @conditional 00 00 00 00 00 00 00 00 09 00 00 00 00 00 00 00
+00
+:template
+7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+02 00 3e 00 01 00 00 00
+78 00 40 00 00 00 00 00
+40 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00
+40 00 38 00 01 00 00 00 00 00 00 00
+01 00 00 00 05 00 00 00
+00 00 00 00 00 00 00 00
+00 00 40 00 00 00 00 00
+00 00 40 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 10 00 00 00 00 00 00

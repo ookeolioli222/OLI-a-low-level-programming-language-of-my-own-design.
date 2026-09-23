@@ -1,0 +1,68 @@
+module genesis.registers
+proc main
+    calls none
+    entry
+    machine x64
+        mov rax, 0xffffffffffffffff
+        mov rcx, -9223372036854775808
+        mov rdx, 18446744073709551615
+        mov rbx, rax
+        mov rsp, rcx
+        mov rbp, rdx
+        mov rsi, rbx
+        mov rdi, rsp
+        mov r8, rbp
+        mov r9, rsi
+        mov r10, rdi
+        mov r11, r8
+        mov r12, r9
+        mov r13, r10
+        mov r14, r11
+        mov r15, r12
+        mov rax, r13
+        mov rcx, r14
+        mov rdx, r15
+        add r8, r9
+        or r10, r11
+        and r12, r13
+        sub r14, r15
+        xor rax, r8
+        cmp r9, rbx
+        test r10, rcx
+        add r8, -2147483648
+        or r9, 2147483647
+        and r10, -1
+        sub r11, 0
+        xor r12, 42
+        cmp r13, -42
+        test r14, 1
+        inc rax
+        dec r8
+        neg r9
+        not r10
+        mul r11
+        imul r12
+        div r13
+        idiv r14
+        imul r8, r9
+        imul r10, r11, -42
+        shl r12, 1
+        shr r13, 255
+        sar r14, 0
+        shl r15, cl
+        shr rax, cl
+        sar r8, cl
+        push rax
+        push r15
+        pop r14
+        pop rbx
+        push -42
+        call rax
+        call r8
+        jmp rbx
+        jmp r15
+        cqo
+        syscall
+        ret
+    end
+end

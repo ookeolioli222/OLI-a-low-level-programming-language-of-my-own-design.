@@ -1,0 +1,22 @@
+module genesis.arithmetic
+proc unused
+    calls none
+    machine x64
+        mov rdi, 99
+        mov rax, 60
+        syscall
+    end
+end
+proc main
+    entry
+    calls none
+    machine x64
+        mov r8, 6
+        mov r9, 7
+        imul r8, r9
+        push r8
+        pop rdi
+        mov rax, 60
+        syscall
+    end
+end

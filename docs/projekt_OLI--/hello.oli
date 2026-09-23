@@ -1,0 +1,42 @@
+module hello
+import std.os
+
+proc fib(n: u64) -> u64
+    if n < 2
+        ret n
+    end
+    ret fib(n - 1) + fib(n - 2)
+end
+
+proc total(v: view u8) -> u64
+    result : u64 <- 0
+    each value in v
+        result <- result + u64(value)
+    end
+    ret result
+end
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 65536
+        values := z.bytes(10)
+        i : uword <- 0
+        while i < values.len
+            values[i] <- u8.wrap(fib(u64(i) + 1))
+            i <- i + 1
+        end
+
+        -- 1, 1, 2, 3, 5, 8, 13, 21, 34, 55 = 143.
+        if total(values) != 143
+            ret 1
+        end
+        if values[9] != 55
+            ret 2
+        end
+
+        message := "Fibonacci buffer verified. Hello from Oli--\n"
+        os.syscall(os.WRITE, 1, message.addr, message.len)
+        ret 0
+    end
+end

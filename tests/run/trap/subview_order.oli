@@ -1,0 +1,14 @@
+module trap_subview_order
+-- A subview whose low bound is above its high bound fails the first half of
+-- the same check.
+-- expect: trap: bounds at stdin:9
+proc start -> s32
+    entry
+    v := "abcdef"
+    k : uword <- 1
+    s := v[4..k]
+    if s.len == 0
+        ret 1
+    end
+    ret 0
+end

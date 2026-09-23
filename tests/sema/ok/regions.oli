@@ -1,0 +1,57 @@
+-- Every acceptance obligation of spec/OLI_MEMORY_V0.md §9.
+module regions
+
+layout Header
+    magic : u32
+    len   : be u16
+end
+
+proc greeting -> view u8
+    ret "static memory outlives everything"
+end
+
+proc tail(v : view u8) -> view u8
+    ret v[1..]
+end
+
+proc header(v : rw view u8) -> rw ref Header
+    ret Header.at(v)
+end
+
+proc scratch(z : zone) -> rw view u8
+    ret z.bytes(16)
+end
+
+proc fill(buf : rw view u8, b : u8)
+    each i in 0..buf.len
+        buf[i] <- b
+    end
+end
+
+proc main -> s32
+    entry
+permit os.syscall
+    zone outer 8K
+        zone inner 1K
+            tmp := inner.bytes(32)
+            fill(tmp, 7)
+        end
+        each _i in 0..3
+            zone per_iteration 1K
+                _t := per_iteration.bytes(8)
+                break
+            end
+        end
+        buf := outer.bytes(64)
+        h := header(buf)
+        h.magic <- 1
+        t := tail(buf)
+        if t.len != 63 then ret 1
+        s := scratch(outer)
+        fill(s, 1)
+        keep : view u8 <- buf
+        _k := keep
+    end
+    _g := greeting()
+    ret 0
+end

@@ -1,0 +1,21 @@
+(oir
+  (static 0 len=12)
+  (proc start locals=1 entry
+    (bb0
+      %0 = addr.of static.0
+      %1 = len.of static.0
+      store frame.0, %0
+      store frame.1, %1
+      %4 = const 1
+      arg %4
+      %6 = const 1
+      arg %6
+      %8 = load frame.0
+      %9 = load frame.1
+      arg %8
+      %11 = load frame.0
+      %12 = load frame.1
+      arg %12
+      %14 = syscall/4
+      %15 = const 0
+      ret %15)))

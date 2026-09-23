@@ -1,0 +1,11 @@
+proc main -> s32
+    entry
+permit memory.raw
+    p := physaddr(0x1000)
+    a := addr u8 (0x2000)
+    _q := p + a
+    _r := a + p
+    ret 0
+end
+-- expect: E0203 @ 6:11
+-- expect: E0203 @ 7:11

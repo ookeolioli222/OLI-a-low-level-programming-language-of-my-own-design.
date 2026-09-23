@@ -1,0 +1,6 @@
+6a 2a                  ; push 42
+48 8b 04 24            ; mov rax, [rsp]
+48 89 c7               ; mov rdi, rax
+48 83 c4 08            ; add rsp, 8
+b8 3c 00 00 00         ; mov eax, 60
+0f 05                  ; syscall

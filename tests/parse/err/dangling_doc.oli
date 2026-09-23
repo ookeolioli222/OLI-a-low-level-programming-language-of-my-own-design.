@@ -1,0 +1,4 @@
+--- documents nothing
+
+import std.os
+-- expect: W0001 @ 1:1

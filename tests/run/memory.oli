@@ -1,0 +1,98 @@
+module memory
+-- M2: zones and views — a zone from the operating system, byte buffers taken
+-- from it, element reads and writes, subviews, `each`, and views as
+-- parameters and results. The exit status is the number of the check that
+-- failed; when every one held, `AB` is written and the status is 0.
+
+proc sum(v: view u8) -> u64
+    t : u64 <- 0
+    each b in v
+        t <- t + u64(b)
+    end
+    ret t
+end
+
+proc tail(v: view u8, k: uword) -> view u8
+    ret v[k..]
+end
+
+proc fill(b: rw view u8, c: u8)
+    i : uword <- 0
+    while i < b.len
+        b[i] <- c
+        i <- i + 1
+    end
+end
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 65536
+        b := z.bytes(16)
+        if b.len != 16
+            ret 1
+        end
+        -- A fresh mapping is zero, and the bytes of one allocation do not
+        -- overlap the next.
+        if b[0] != 0
+            ret 2
+        end
+        c := z.bytes(16)
+        if c.addr == b.addr
+            ret 3
+        end
+        fill(b, 65)
+        if b[0] != 65
+            ret 4
+        end
+        if b[15] != 65
+            ret 5
+        end
+        if sum(b) != 1040
+            ret 6
+        end
+        -- Subviews: every form, and the length each one has.
+        s := b[0..3]
+        if s.len != 3
+            ret 7
+        end
+        if b[..4].len != 4
+            ret 8
+        end
+        if b[12..].len != 4
+            ret 9
+        end
+        if b[16..16].len != 0
+            ret 10
+        end
+        -- A view is a pair, and both halves survive a call.
+        t := tail("hello", 3)
+        if t.len != 2
+            ret 11
+        end
+        if t[0] != 108
+            ret 12
+        end
+        if sum(t) != 219
+            ret 13
+        end
+        -- Element stores through a subview reach the buffer they came from.
+        s[1] <- 66
+        if b[1] != 66
+            ret 14
+        end
+        -- A wider element: the index is scaled and the load is that wide.
+        w := z.bytes(16)
+        w[0] <- 7
+        w[1] <- 9
+        if w[0] != 7
+            ret 15
+        end
+        if w[1] != 9
+            ret 16
+        end
+        -- A fixture with a `.out` file writes it and exits 0.
+        os.syscall(1, 1, b.addr, 2)
+        ret 0
+    end
+end

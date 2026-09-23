@@ -1,0 +1,16 @@
+proc f(x : bool) -> u8
+    if x
+        ret 1
+    end
+end
+proc g -> never
+    ret
+end
+proc main -> s32
+    entry
+    ret 0
+    _x := u8(1)
+end
+-- expect: E0230 @ 1:6
+-- expect: E0200 @ 7:5
+-- expect: E0231 @ 12:5

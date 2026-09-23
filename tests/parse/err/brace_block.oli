@@ -1,0 +1,9 @@
+proc f
+    if a == b {
+        x := 1
+    }
+end
+-- expect: E0032 @ 2:15
+-- expect: E0011 @ 3:11
+-- expect: E0012 @ 4:5
+-- expect: E0014 @ 5:4

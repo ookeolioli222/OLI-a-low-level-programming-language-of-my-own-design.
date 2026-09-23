@@ -1,0 +1,5 @@
+6a 2a                  ; push 42
+58                     ; pop rax
+48 89 c7               ; mov rdi, rax
+b8 3c 00 00 00         ; mov eax, 60
+0f 05                  ; syscall

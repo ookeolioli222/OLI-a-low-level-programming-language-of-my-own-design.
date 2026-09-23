@@ -1,0 +1,1153 @@
+module olic.opt
+-- The OIR passes of docs/OIR_SPEC.md §6, over the SSA form `compiler/ssa.oli`
+-- built. Four of them run to a fixpoint, because each one makes work for the
+-- others: folding a branch kills a block, killing a block makes a phi
+-- trivial, replacing a trivial phi makes its operands constant again.
+--
+--   const-fold    constant arithmetic, comparisons and conversions become a
+--                 constant; an operation whose constant answer its type
+--                 cannot hold becomes the `trap` it always took; a branch on
+--                 a constant becomes a jump
+--   check-elision a check goes only with a proof term recorded (§8.7)
+--   copy-prop     a phi whose operands are all one value becomes that value
+--   DCE           a value nothing uses and no block reaches is removed
+--
+-- What const-fold will not do, and why. Every constant here is a 64-bit word,
+-- and oli-core compares and divides *signed*, so the compiler cannot decide
+-- an unsigned question about a value with its top bit set without getting it
+-- wrong. Folding therefore requires every operand of a signed operation to
+-- lie in [-2^31, 2^31) and every operand of an unsigned one in [0, 2^31),
+-- where signed 64-bit arithmetic answers the question exactly and no sum,
+-- difference or product of two of them can overflow the word it is computed
+-- in. The answer is then checked against the type it belongs to: an unsigned
+-- one that came out negative, or any that its width cannot hold, is an
+-- overflow and not a result. Outside the window nothing is folded and the
+-- check the operation already carries stays. The pass loses precision there;
+-- it never gives a wrong answer, which is the rule §6 states.
+--
+-- What is not implemented: the third proof §6 names, dominance by an equal
+-- check, waits for common-subexpression elimination to make two equal checked
+-- operations exist; there is nothing in the corpus it would fire on today.
+-- Copy propagation has only phis to work on, because `mem2reg` leaves no copy
+-- instruction behind.
+
+OPT_ROUNDS := 16
+-- The half-open window a constant must lie in to be folded.
+FOLD_LIMIT := 2147483648
+
+proc optimize(ob: rw ref Oir)
+    q : u64 <- 0
+    while q < ob.nproc
+        opt_proc(ob, q)
+        q <- q + 1
+    end
+    compact_statics(ob)
+end
+
+-- Statics nothing names ---------------------------------------------------------
+
+proc compact_statics(ob: rw ref Oir)
+    -- The trap message of a check a pass proved away, or a string in a block
+    -- nothing reaches, is a static nothing names any more. It is dropped
+    -- from the image, and the ones that stay move down to close the gap: an
+    -- instruction names a static by index, and the index is what stays put.
+    -- This is the dead-code pass over data (§6); it runs after the last pass
+    -- over code, because that is when the names are final.
+    i : u64 <- 0
+    while i < ob.nstat
+        st := stat_at(ob, i)
+        st.dead <- 1
+        i <- i + 1
+    end
+    q : u64 <- 0
+    while q < ob.nproc
+        mark_statics(ob, q)
+        q <- q + 1
+    end
+    cursor : u64 <- 0
+    i <- 0
+    while i < ob.nstat
+        st2 := stat_at(ob, i)
+        if st2.dead == 0
+            move_static(ob, i, cursor)
+            cursor <- cursor + st2.len
+        else
+            st2.len <- 0
+        end
+        i <- i + 1
+    end
+    ob.ndata <- cursor
+end
+
+proc mark_statics(ob: rw ref Oir, q: u64)
+    op := oproc_at(ob, q)
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            i : u64 <- bk.first
+            ilast := bk.first + bk.n
+            while i < ilast
+                ins := ins_at(ob, i)
+                if ins.op != O_DEAD
+                    if ins.op == O_SADDR
+                        keep_static(ob, ins.a)
+                    end
+                    if ins.op == O_SLEN
+                        keep_static(ob, ins.a)
+                    end
+                    if ins.site > 0
+                        keep_static(ob, ins.site - 1)
+                    end
+                    if ins.site2 > 0
+                        keep_static(ob, ins.site2 - 1)
+                    end
+                end
+                i <- i + 1
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc keep_static(ob: rw ref Oir, i: u64)
+    st := stat_at(ob, i)
+    st.dead <- 0
+end
+
+proc move_static(ob: rw ref Oir, i: u64, to: u64)
+    -- Down, never up, and one byte at a time in increasing order, which is
+    -- the one order that is safe when the ranges overlap.
+    st := stat_at(ob, i)
+    if st.off == to
+        ret
+    end
+    d := ob.data
+    k : u64 <- 0
+    while k < st.len
+        d[to + k] <- d[st.off + k]
+        k <- k + 1
+    end
+    st.off <- to
+end
+
+proc opt_proc(ob: rw ref Oir, q: u64)
+    op := oproc_at(ob, q)
+    n : u64 <- 0
+    again : u64 <- 1
+    while again == 1
+        again <- 0
+        n <- n + 1
+        if n > OPT_ROUNDS
+            ret
+        end
+        if fold_proc(ob, op) == 1
+            again <- 1
+        end
+        if ob.cfgdirty == 1
+            ob.cfgdirty <- 0
+            refresh_cfg(ob, op)
+            again <- 1
+        end
+        if elide_proc(ob, op) == 1
+            again <- 1
+        end
+        if copyprop_proc(ob, op) == 1
+            again <- 1
+        end
+        if dce_proc(ob, op) == 1
+            again <- 1
+        end
+    end
+end
+
+-- The graph after an edge has gone -------------------------------------------
+
+proc refresh_cfg(ob: rw ref Oir, op: ref OProc)
+    -- A folded branch takes an edge out of the graph. Reachability is
+    -- recomputed first, then predecessors (which ignore the blocks that just
+    -- became unreachable), then dominators; the phis of every block whose
+    -- predecessors changed are rebuilt to match, and the blocks nothing
+    -- reaches are removed with a proof for every check that went with them.
+    order_blocks(ob, op)
+    kill_unreachable(ob, op)
+    build_preds(ob, op)
+    build_idoms(ob, op)
+    fix_phis(ob, op)
+end
+
+proc kill_unreachable(ob: rw ref Oir, op: ref OProc)
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        bk := blk_at(ob, b)
+        if bk.dead == 0
+            if bk.rpo == 0
+                bk.dead <- 1
+                i : u64 <- bk.first
+                ilast := bk.first + bk.n
+                while i < ilast
+                    ins := ins_at(ob, i)
+                    if ins.op != O_DEAD
+                        if ins.site > 0
+                            add_proof(ob, i, site_kind(ob, i, 1), site_val(ob, i, 1), PR_UNREACH)
+                        end
+                        if ins.site2 > 0
+                            add_proof(ob, i, site_kind(ob, i, 2), site_val(ob, i, 2), PR_UNREACH)
+                        end
+                        kill_ins(ob, i)
+                    end
+                    i <- i + 1
+                end
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc site_val(ob: ref Oir, i: u64, which: u64) -> u64
+    -- The value the check named, so the proof can be printed where the check
+    -- would have been: the divisor for a zero check, the result for every
+    -- overflow check.
+    ins := ins_at(ob, i)
+    if which == 1
+        if ins.op == O_BIN
+            if is_divide(ins.bop) == 1
+                ret ins.b
+            end
+        end
+    end
+    ret i
+end
+
+proc site_kind(ob: ref Oir, i: u64, which: u64) -> u64
+    -- Which trap the site of an instruction names: a divide carries the zero
+    -- check first and the MIN/-1 check second; a bounds, range or alignment
+    -- check and a zone operation name their own kind; everything else
+    -- carries an overflow check.
+    ins := ins_at(ob, i)
+    if ins.op == O_BIN
+        if is_divide(ins.bop) == 1
+            if which == 1
+                ret TK_DIV
+            end
+        end
+    end
+    if ins.op == O_CHKB
+        ret TK_BOUNDS
+    end
+    if ins.op == O_CHKR
+        ret TK_BOUNDS
+    end
+    if ins.op == O_CHKA
+        ret TK_MISALIGN
+    end
+    if ins.op == O_ZNEW
+        ret TK_ZONE
+    end
+    if ins.op == O_ZALLOC
+        ret TK_ZONE
+    end
+    ret TK_OVF
+end
+
+proc fix_phis(ob: rw ref Oir, op: ref OProc)
+    -- One operand per predecessor, in predecessor order, again: the value
+    -- each surviving predecessor carried is the one it still carries.
+    permit os.syscall
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            i : u64 <- bk.first
+            ilast := bk.first + bk.n
+            while i < ilast
+                ins := ins_at(ob, i)
+                if ins.op != O_PHI
+                    i <- ilast
+                else
+                    if ins.b != bk.npred
+                        if ob.nphiarg + bk.npred > PHIARG_MAX
+                            put(2, "olic: phi operand arena exhausted\n")
+                            os.syscall(60, 4)
+                        end
+                        base := ob.nphiarg
+                        k : u64 <- 0
+                        while k < bk.npred
+                            p := pred_of(ob, b, k)
+                            pa := phiarg_at(ob, ob.nphiarg)
+                            pa.blk <- p
+                            pa.val <- phi_val_from(ob, i, p)
+                            ob.nphiarg <- ob.nphiarg + 1
+                            k <- k + 1
+                        end
+                        ins.a <- base
+                        ins.b <- bk.npred
+                    end
+                    i <- i + 1
+                end
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc phi_val_from(ob: ref Oir, i: u64, p: u64) -> u64
+    ins := ins_at(ob, i)
+    k : u64 <- 0
+    while k < ins.b
+        pa := phiarg_at(ob, ins.a + k)
+        if pa.blk == p
+            ret pa.val
+        end
+        k <- k + 1
+    end
+    ret 0
+end
+
+-- Constant folding -------------------------------------------------------------
+
+proc is_const(ob: ref Oir, v: u64, sg: u64) -> word
+    -- A constant this pass may reason about, under the reading `sg` gives it:
+    -- an unsigned operand with the top bit set is a value above 2^63 that
+    -- signed arithmetic would answer for wrongly, so it is not one.
+    ins := ins_at(ob, v)
+    if ins.op != O_CONST
+        ret 0
+    end
+    ret in_window(ins.val, sg)
+end
+
+proc in_window(v: u64, sg: u64) -> word
+    w : word <- word.bits(v)
+    if w >= FOLD_LIMIT
+        ret 0
+    end
+    if w < 0
+        if sg != 1
+            ret 0
+        end
+        if w < 0 - FOLD_LIMIT
+            ret 0
+        end
+    end
+    ret 1
+end
+
+proc fits(r: word, w: u64, sg: u64) -> word
+    -- Whether the type can hold this answer: an unsigned type holds no
+    -- negative, and a narrow one holds only what its width re-extends to.
+    if sg != 1
+        if r < 0
+            ret 0
+        end
+    end
+    if ext_val(r, w, sg) != r
+        ret 0
+    end
+    ret 1
+end
+
+proc const_of_val(ob: ref Oir, v: u64) -> word
+    ins := ins_at(ob, v)
+    ret word.bits(ins.val)
+end
+
+proc ext_val(v: word, w: u64, sg: u64) -> word
+    -- The canonical image of `v` in a type `w` bits wide: what the machine
+    -- leaves in the slot, and what the value must already equal if the type
+    -- can hold it.
+    if w == 0
+        ret v
+    end
+    if w >= 64
+        ret v
+    end
+    one : word <- 1
+    half := one << (w - 1)
+    mask := half + half - 1
+    m := v & mask
+    if sg == 1
+        if m >= half
+            ret m - half - half
+        end
+    end
+    ret m
+end
+
+proc fold_proc(ob: rw ref Oir, op: ref OProc) -> word
+    did : word <- 0
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            if fold_blk(ob, b) == 1
+                did <- 1
+            end
+        end
+        b <- b + 1
+    end
+    ret did
+end
+
+proc fold_blk(ob: rw ref Oir, b: u64) -> word
+    did : word <- 0
+    bk := blk_at(ob, b)
+    i : u64 <- bk.first
+    ilast := bk.first + bk.n
+    while i < ilast
+        ins := ins_at(ob, i)
+        if ins.op == O_BIN
+            if is_plain_const(ob, ins.a) == 1
+                if is_plain_const(ob, ins.b) == 1
+                    if fold_bin(ob, i) == 1
+                        did <- 1
+                    end
+                end
+            end
+        elif ins.op == O_UN
+            if is_const(ob, ins.a, ins.c) == 1
+                if fold_un(ob, i) == 1
+                    did <- 1
+                end
+            end
+        elif ins.op == O_TRUNC
+            -- A conversion reads its operand as the source type gave it, and
+            -- the source of a narrowing one is always the wider reading.
+            if is_const(ob, ins.a, 1) == 1
+                if in_window(ins_val_of(ob, ins.a), 0) == 1
+                    v := ext_val(const_of_val(ob, ins.a), ins.b, ins.c)
+                    to_const(ob, i, v)
+                    did <- 1
+                end
+            end
+        end
+        i <- i + 1
+    end
+    -- A branch whose condition is known takes one edge, always. A condition
+    -- is a `bool`, which is 0 or 1 whatever the reading.
+    if bk.top == O_BRANCH
+        if is_const(ob, bk.ta, 0) == 1
+            taken : u64 <- bk.tb
+            if const_of_val(ob, bk.ta) == 0
+                taken <- bk.tc
+            end
+            bk.top <- O_JMP
+            bk.ta <- taken
+            bk.tb <- 0
+            bk.tc <- 0
+            ob.cfgdirty <- 1
+            did <- 1
+        end
+    end
+    ret did
+end
+
+proc to_const(ob: rw ref Oir, i: u64, v: word)
+    -- The operation is its answer now. Its checks go with it, and each one
+    -- leaves the proof that the answer is a constant the type can hold.
+    ins := ins_at(ob, i)
+    if ins.site > 0
+        add_proof(ob, i, site_kind(ob, i, 1), site_val(ob, i, 1), PR_CONST)
+    end
+    if ins.site2 > 0
+        add_proof(ob, i, site_kind(ob, i, 2), site_val(ob, i, 2), PR_CONST)
+    end
+    ins.op <- O_CONST
+    ins.bop <- 0
+    ins.a <- 0
+    ins.b <- 0
+    ins.c <- 0
+    ins.w <- 0
+    ins.site <- 0
+    ins.site2 <- 0
+    ins.val <- u64.bits(v)
+end
+
+proc to_trap(ob: rw ref Oir, i: u64, kind: u64)
+    -- The answer is one the type cannot hold, so the operation is the trap it
+    -- always took (§6). The site that fired stays on it and is still a check;
+    -- the other one, if it had two, leaves a proof.
+    ins := ins_at(ob, i)
+    keep : u64 <- ins.site
+    other : u64 <- ins.site2
+    okind : u64 <- site_kind(ob, i, 2)
+    oval : u64 <- site_val(ob, i, 2)
+    if site_kind(ob, i, 1) != kind
+        keep <- ins.site2
+        other <- ins.site
+        okind <- site_kind(ob, i, 1)
+        oval <- site_val(ob, i, 1)
+    end
+    if other > 0
+        add_proof(ob, i, okind, oval, PR_CONST)
+    end
+    ins.op <- O_TRAP
+    ins.bop <- 0
+    ins.a <- 0
+    ins.b <- 0
+    ins.c <- kind
+    ins.w <- 0
+    ins.site <- keep
+    ins.site2 <- 0
+    ins.val <- 0
+end
+
+proc is_plain_const(ob: ref Oir, v: u64) -> word
+    ins := ins_at(ob, v)
+    if ins.op == O_CONST
+        ret 1
+    end
+    ret 0
+end
+
+proc fold_bin(ob: rw ref Oir, i: u64) -> word
+    ins := ins_at(ob, i)
+    x := const_of_val(ob, ins.a)
+    y := const_of_val(ob, ins.b)
+    c := ins.bop
+    sg := ins.c
+    -- Equality is the one question both readings of a word answer the same
+    -- way, so it is decided on the bits and needs no window.
+    if c == B_EQ
+        if x == y
+            ret to_bool(ob, i, 1)
+        end
+        ret to_bool(ob, i, 0)
+    end
+    if c == B_NE
+        if x != y
+            ret to_bool(ob, i, 1)
+        end
+        ret to_bool(ob, i, 0)
+    end
+    -- Everything else is arithmetic, and answers only inside the window.
+    if is_const(ob, ins.a, sg) == 0
+        ret 0
+    end
+    if is_const(ob, ins.b, shift_sg(ins)) == 0
+        ret 0
+    end
+    if c == B_LT
+        if x < y
+            ret to_bool(ob, i, 1)
+        end
+        ret to_bool(ob, i, 0)
+    end
+    if c == B_LE
+        if x <= y
+            ret to_bool(ob, i, 1)
+        end
+        ret to_bool(ob, i, 0)
+    end
+    if c == B_GT
+        if x > y
+            ret to_bool(ob, i, 1)
+        end
+        ret to_bool(ob, i, 0)
+    end
+    if c == B_GE
+        if x >= y
+            ret to_bool(ob, i, 1)
+        end
+        ret to_bool(ob, i, 0)
+    end
+    if c == B_AND
+        ret fit(ob, i, x & y)
+    end
+    if c == B_OR
+        ret fit(ob, i, x | y)
+    end
+    if c == B_XOR
+        ret fit(ob, i, x ^ y)
+    end
+    if c == B_SHL
+        n := shift_count(y, ins.w)
+        if shl_fits(x, n) == 0
+            ret 0
+        end
+        ret fit(ob, i, x << n)
+    end
+    if c == B_SHR
+        ret fit(ob, i, x >> shift_count(y, ins.w))
+    end
+    if c == B_DIV
+        ret fold_div(ob, i, x, y, 0)
+    end
+    if c == B_REM
+        ret fold_div(ob, i, x, y, 1)
+    end
+    r : word <- 0
+    if c == B_ADD
+        r <- x + y
+    elif c == B_SUB
+        r <- x - y
+    elif c == B_MUL
+        r <- x * y
+    else
+        ret 0
+    end
+    -- Both operands are inside the window, so the word itself cannot have
+    -- overflowed; what is left is whether the type can hold the answer.
+    if fits(r, ins.w, sg) == 0
+        if ins.site > 0
+            to_trap(ob, i, TK_OVF)
+            ret 1
+        end
+        -- `wrap(e)` cleared the site: the answer is the image modulo the
+        -- width, which is exactly what the machine would have left.
+        to_const(ob, i, ext_val(r, ins.w, sg))
+        ret 1
+    end
+    to_const(ob, i, r)
+    ret 1
+end
+
+proc fold_div(ob: rw ref Oir, i: u64, x: word, y: word, want_rem: u64) -> word
+    ins := ins_at(ob, i)
+    if y == 0
+        to_trap(ob, i, TK_DIV)
+        ret 1
+    end
+    r : word <- 0
+    if want_rem == 1
+        r <- x % y
+    else
+        r <- x / y
+    end
+    if fits(r, ins.w, ins.c) == 0
+        to_trap(ob, i, TK_OVF)
+        ret 1
+    end
+    to_const(ob, i, r)
+    ret 1
+end
+
+proc ins_val_of(ob: ref Oir, v: u64) -> u64
+    ins := ins_at(ob, v)
+    ret ins.val
+end
+
+proc shift_sg(ins: ref Ins) -> u64
+    -- The count of a shift is a separate type from the value being shifted,
+    -- and never a negative one.
+    if is_shift_code(ins.bop) == 1
+        ret 0
+    end
+    ret ins.c
+end
+
+proc is_shift_code(c: u64) -> word
+    if c == B_SHL
+        ret 1
+    end
+    if c == B_SHR
+        ret 1
+    end
+    ret 0
+end
+
+proc shift_count(y: word, w: u64) -> word
+    -- The count the machine would have used: masked to the width, exactly as
+    -- `mask_count` in `compiler/x64.oli` masks it.
+    if w > 0
+        if w < 64
+            ret y & word.bits(w - 1)
+        end
+    end
+    ret y & 63
+end
+
+proc shl_fits(x: word, n: word) -> word
+    -- Folded only where the shift cannot leave the window the pass reasons
+    -- in; a wider one keeps the operation, which is a loss of precision and
+    -- not of meaning, because a shift carries no check to lose.
+    if n >= 31
+        ret 0
+    end
+    lim : word <- 1 << (30 - n)
+    if x >= lim
+        ret 0
+    end
+    if x <= 0 - lim
+        ret 0
+    end
+    ret 1
+end
+
+proc to_bool(ob: rw ref Oir, i: u64, v: word) -> word
+    to_const(ob, i, v)
+    ret 1
+end
+
+proc fit(ob: rw ref Oir, i: u64, v: word) -> word
+    -- An operation that cannot overflow: the answer is its canonical image.
+    ins := ins_at(ob, i)
+    to_const(ob, i, ext_val(v, ins.w, ins.c))
+    ret 1
+end
+
+proc fold_un(ob: rw ref Oir, i: u64) -> word
+    ins := ins_at(ob, i)
+    x := const_of_val(ob, ins.a)
+    if ins.bop == U1_LNOT
+        if x == 0
+            to_const(ob, i, 1)
+        else
+            to_const(ob, i, 0)
+        end
+        ret 1
+    end
+    if ins.bop == U1_BNOT
+        ret fit(ob, i, 0 - x - 1)
+    end
+    -- Negation. An unsigned type has no negative to hold, so every value but
+    -- zero traps; a signed one traps only where the width cannot hold it.
+    r := 0 - x
+    if ins.c != 1
+        if x != 0
+            if ins.site > 0
+                to_trap(ob, i, TK_OVF)
+                ret 1
+            end
+        end
+    end
+    if fits(r, ins.w, ins.c) == 0
+        if ins.site > 0
+            to_trap(ob, i, TK_OVF)
+            ret 1
+        end
+        to_const(ob, i, ext_val(r, ins.w, ins.c))
+        ret 1
+    end
+    to_const(ob, i, r)
+    ret 1
+end
+
+-- Check elision -----------------------------------------------------------------
+
+proc elide_proc(ob: rw ref Oir, op: ref OProc) -> word
+    -- The proofs this stage can record for a check it did not fold away: a
+    -- divisor that is a constant (the zero check cannot fire, and unless it is
+    -- -1 neither can the MIN/-1 check), and a bounds or range check whose
+    -- every operand is a constant that satisfies it.
+    did : word <- 0
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            i : u64 <- bk.first
+            ilast := bk.first + bk.n
+            while i < ilast
+                ins := ins_at(ob, i)
+                if ins.op == O_BIN
+                    if is_divide(ins.bop) == 1
+                        if elide_div(ob, i) == 1
+                            did <- 1
+                        end
+                    end
+                elif ins.op == O_CHKB
+                    if elide_chkb(ob, i) == 1
+                        did <- 1
+                    elif elide_loop(ob, i) == 1
+                        did <- 1
+                    end
+                elif ins.op == O_CHKR
+                    if elide_chkr(ob, i) == 1
+                        did <- 1
+                    end
+                end
+                i <- i + 1
+            end
+        end
+        b <- b + 1
+    end
+    ret did
+end
+
+proc elide_div(ob: rw ref Oir, i: u64) -> word
+    ins := ins_at(ob, i)
+    if is_const(ob, ins.b, ins.c) == 0
+        ret 0
+    end
+    y := const_of_val(ob, ins.b)
+    did : word <- 0
+    if y != 0
+        if ins.site > 0
+            add_proof(ob, i, TK_DIV, ins.b, PR_DIVISOR)
+            ins.site <- 0
+            did <- 1
+        end
+    end
+    if y != 0 - 1
+        if ins.site2 > 0
+            add_proof(ob, i, TK_OVF, i, PR_DIVISOR)
+            ins.site2 <- 0
+            did <- 1
+        end
+    end
+    ret did
+end
+
+proc elide_chkb(ob: rw ref Oir, i: u64) -> word
+    -- `check.bounds %i, %len` with both constant and `i < len`: the index is
+    -- inside the view whatever runs, so the check is proved and removed. Both
+    -- are unsigned, which is what the window guarantees when it admits them.
+    ins := ins_at(ob, i)
+    if ins.site == 0
+        ret 0
+    end
+    if is_const(ob, ins.a, 0) == 0
+        ret 0
+    end
+    if is_const(ob, ins.b, 0) == 0
+        ret 0
+    end
+    if const_of_val(ob, ins.a) >= const_of_val(ob, ins.b)
+        ret 0
+    end
+    add_proof(ob, i, TK_BOUNDS, ins.a, PR_CONST)
+    kill_ins(ob, i)
+    ret 1
+end
+
+proc elide_loop(ob: rw ref Oir, i: u64) -> word
+    -- `check.bounds %i, %len` below a branch on `cmp.lt %i, %len` whose true
+    -- side dominates the check: the values are the same values, a value in
+    -- this form never changes, so what the branch established still holds
+    -- here. This is the loop-bound proof of OIR_SPEC §5 — the loop of `each`
+    -- and of `while i < v.len` is where the shape arises — and it is a
+    -- dominance argument, which is why it needs no look at the loop itself.
+    ins := ins_at(ob, i)
+    if ins.site == 0
+        ret 0
+    end
+    here := cell_get(ob.iblk, i)
+    d : u64 <- here
+    loop
+        dk := blk_at(ob, d)
+        if dk.idom == 0
+            ret 0
+        end
+        up := dk.idom - 1
+        if up == d
+            ret 0
+        end
+        d <- up
+        uk := blk_at(ob, d)
+        if uk.top == O_BRANCH
+            if is_lt_of(ob, uk.ta, ins.a, ins.b) == 1
+                if dominates(ob, uk.tb, here) == 1
+                    add_proof(ob, i, TK_BOUNDS, ins.a, PR_LOOP)
+                    kill_ins(ob, i)
+                    ret 1
+                end
+            end
+        end
+    end
+end
+
+proc is_lt_of(ob: ref Oir, c: u64, a: u64, b: u64) -> word
+    -- Whether `%c` is the unsigned comparison `%a < %b`.
+    ci := ins_at(ob, c)
+    if ci.op != O_BIN
+        ret 0
+    end
+    if ci.bop != B_LT
+        ret 0
+    end
+    if ci.c == 1
+        ret 0
+    end
+    if ci.a != a
+        ret 0
+    end
+    if ci.b != b
+        ret 0
+    end
+    ret 1
+end
+
+proc elide_chkr(ob: rw ref Oir, i: u64) -> word
+    -- `check.range %a, %b, %len` with all three constant and `a <= b <= len`.
+    ins := ins_at(ob, i)
+    if ins.site == 0
+        ret 0
+    end
+    if is_const(ob, ins.a, 0) == 0
+        ret 0
+    end
+    if is_const(ob, ins.b, 0) == 0
+        ret 0
+    end
+    if is_const(ob, ins.val, 0) == 0
+        ret 0
+    end
+    if const_of_val(ob, ins.a) > const_of_val(ob, ins.b)
+        ret 0
+    end
+    if const_of_val(ob, ins.b) > const_of_val(ob, ins.val)
+        ret 0
+    end
+    add_proof(ob, i, TK_BOUNDS, ins.a, PR_CONST)
+    kill_ins(ob, i)
+    ret 1
+end
+
+-- Copy propagation ----------------------------------------------------------------
+
+proc copyprop_proc(ob: rw ref Oir, op: ref OProc) -> word
+    -- A phi whose operands are all one value is that value: every path into
+    -- the block carries the same thing, so nothing is chosen there.
+    did : word <- 0
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            i : u64 <- bk.first
+            ilast := bk.first + bk.n
+            while i < ilast
+                ins := ins_at(ob, i)
+                if ins.op != O_PHI
+                    i <- ilast
+                else
+                    one := phi_one_value(ob, i)
+                    if one >= 0
+                        replace_uses(ob, op, i, u64.bits(one))
+                        kill_ins(ob, i)
+                        did <- 1
+                    end
+                    i <- i + 1
+                end
+            end
+        end
+        b <- b + 1
+    end
+    ret did
+end
+
+proc phi_one_value(ob: ref Oir, i: u64) -> word
+    -- The value every operand names, or -1 when they differ. An operand that
+    -- is the phi itself is the value coming round a loop and names nothing
+    -- new, so it does not count against the others.
+    ins := ins_at(ob, i)
+    if ins.b == 0
+        ret -1
+    end
+    v : word <- -1
+    k : u64 <- 0
+    while k < ins.b
+        pa := phiarg_at(ob, ins.a + k)
+        if pa.val != i
+            if v < 0
+                v <- word.bits(pa.val)
+            elif u64.bits(v) != pa.val
+                ret -1
+            end
+        end
+        k <- k + 1
+    end
+    ret v
+end
+
+proc replace_uses(ob: rw ref Oir, op: ref OProc, old: u64, now: u64)
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            i : u64 <- bk.first
+            ilast := bk.first + bk.n
+            while i < ilast
+                replace_in_ins(ob, i, old, now)
+                i <- i + 1
+            end
+            if bk.top == O_BRANCH
+                if bk.ta == old
+                    bk.ta <- now
+                end
+            end
+            if bk.top == O_RET
+                if bk.tc > 0
+                    if bk.ta == old
+                        bk.ta <- now
+                    end
+                end
+                if bk.tc == 2
+                    if bk.tb == old
+                        bk.tb <- now
+                    end
+                end
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc replace_in_ins(ob: rw ref Oir, i: u64, old: u64, now: u64)
+    ins := ins_at(ob, i)
+    if ins.op == O_PHI
+        k : u64 <- 0
+        while k < ins.b
+            pa := phiarg_at(ob, ins.a + k)
+            if pa.val == old
+                pa.val <- now
+            end
+            k <- k + 1
+        end
+        ret
+    end
+    if op_uses_a(ins.op) == 1
+        if ins.a == old
+            ins.a <- now
+        end
+    end
+    if op_uses_b(ins.op) == 1
+        if ins.b == old
+            ins.b <- now
+        end
+    end
+    if op_uses_val(ins.op) == 1
+        if ins.val == old
+            ins.val <- now
+        end
+    end
+end
+
+
+
+-- Dead code --------------------------------------------------------------------
+
+proc dce_proc(ob: rw ref Oir, op: ref OProc) -> word
+    did : word <- 0
+    again : u64 <- 1
+    while again == 1
+        again <- 0
+        count_uses(ob, op)
+        last := op.bfirst + op.nblk
+        b : u64 <- op.bfirst
+        while b < last
+            if live_blk(ob, b) == 1
+                bk := blk_at(ob, b)
+                i : u64 <- bk.first
+                ilast := bk.first + bk.n
+                while i < ilast
+                    if removable(ob, i) == 1
+                        kill_ins(ob, i)
+                        did <- 1
+                        again <- 1
+                    end
+                    i <- i + 1
+                end
+            end
+            b <- b + 1
+        end
+    end
+    ret did
+end
+
+proc removable(ob: ref Oir, i: u64) -> word
+    -- A value nothing reads and nothing else depends on. A call, a syscall,
+    -- an argument marker and a trap stay whatever their result is used for,
+    -- and so does any operation still carrying a check: removing that would
+    -- be removing the check without a proof (§8.7).
+    ins := ins_at(ob, i)
+    if defines_value(ins.op) == 0
+        ret 0
+    end
+    if ins.op == O_CALL
+        ret 0
+    end
+    if ins.op == O_SYSCALL
+        ret 0
+    end
+    if ins.op == O_TRAP
+        ret 0
+    end
+    if ins.op == O_ZALLOC
+        -- The cursor it moved stays moved, whoever reads the answer.
+        ret 0
+    end
+    if ins.site > 0
+        ret 0
+    end
+    if ins.site2 > 0
+        ret 0
+    end
+    if cell_get(ob.vmap, i) > 0
+        ret 0
+    end
+    ret 1
+end
+
+proc count_uses(ob: rw ref Oir, op: ref OProc)
+    -- How many live instructions of this procedure read each value, in the
+    -- one cell per instruction `mem2reg` used for its value map and is
+    -- finished with.
+    i : u64 <- op.first
+    last := op.first + op.n
+    while i < last
+        cell_set(ob.vmap, i, 0)
+        i <- i + 1
+    end
+    bl := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < bl
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            j : u64 <- bk.first
+            jlast := bk.first + bk.n
+            while j < jlast
+                count_in_ins(ob, j)
+                j <- j + 1
+            end
+            if bk.top == O_BRANCH
+                bump(ob, bk.ta)
+            end
+            if bk.top == O_RET
+                if bk.tc > 0
+                    bump(ob, bk.ta)
+                end
+                if bk.tc == 2
+                    bump(ob, bk.tb)
+                end
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc count_in_ins(ob: rw ref Oir, i: u64)
+    ins := ins_at(ob, i)
+    if ins.op == O_DEAD
+        ret
+    end
+    if ins.op == O_PHI
+        k : u64 <- 0
+        while k < ins.b
+            pa := phiarg_at(ob, ins.a + k)
+            if pa.val != i
+                bump(ob, pa.val)
+            end
+            k <- k + 1
+        end
+        ret
+    end
+    if op_uses_a(ins.op) == 1
+        bump(ob, ins.a)
+    end
+    if op_uses_b(ins.op) == 1
+        bump(ob, ins.b)
+    end
+    if op_uses_val(ins.op) == 1
+        bump(ob, ins.val)
+    end
+end
+
+proc bump(ob: rw ref Oir, v: u64)
+    cell_set(ob.vmap, v, cell_get(ob.vmap, v) + 1)
+end

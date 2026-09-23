@@ -1,0 +1,6 @@
+proc start
+ entry
+ permit os.syscall
+ code := 7
+ os.syscall(60, code)
+end

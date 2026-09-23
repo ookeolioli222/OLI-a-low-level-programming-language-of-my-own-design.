@@ -1,0 +1,4313 @@
+-- oli1 - the Oli-- genesis oli-core compiler (layer 3), step 6f.
+-- A real code generator: integer bindings are stack-frame locals, expressions
+-- are evaluated at run time (in rax, with push/pop for the right operand),
+-- control flow is compiled to rel32 branches with forward fixups, procedures
+-- follow the SysV register convention (docs/ABI.md), views are two-word values
+-- (rax = addr, rdx = len), zones are (base, cursor, limit) triples.
+--   [module path]  { NAME := <decimal>            module-level integer constant
+--                  | layout NAME [packed] [align N] NL { f : T [align N] NL } end
+--                  | proc NAME [(p: T, ...)] [-> T [or E]] [entry | calls ... | permit ...]* block end }
+--   -> T or E                  fallible result (design 0007): T an integer or ref, E an
+--                               integer type or none; tag in rax (0 ok, 1 fail), payload in rdx
+--   ret v / fail [e]            in a fallible procedure: ok(v) / fail(e); bare fail only for none
+--   f(args) else fail           propagate the failure to the caller (same E kind required)
+--   f(args) else ret [v]        diverge; f(args) else v : default value of type T
+--   case f(args) NL when ok [x] NL block when fail [e] NL block end   (either order;
+--                               the second arm may be `else`); x : T, e : E are bindings
+--   an unresolved fallible value anywhere else is a compile error
+--   Name.size, Name.align      compile-time constants; Name.at(v) checks v.len and
+--                               alignment and yields ref Name; z.make(Name) allocates one
+--   r.f / r.f <- x              field load (zero/sign extended by the field type) / store
+--   NAME(args)                  call (statement or factor); up to six argument words in
+--                               rdi rsi rdx rcx r8 r9; result in rax (view: rax, rdx)
+--   T(x) / T.wrap(x) / T.bits(x)   explicit conversion: T(x) is lossless and emits
+--                               nothing, .wrap/.bits truncate to the width of T and
+--                               extend again with its signedness; .sat/.checked reject
+--   name := <expr>              bind a new local: one slot (int) or two (view)
+--   name := "text"              bind a name to a .rodata string (escapes of syntax §2.4)
+--   name <- <expr>              store into an existing local (same type)
+--   [a] <- <expr>               raw word store; [a] is the raw word load
+--   v[i] <- <expr>              byte store into a view (bounds checked)
+--   zone z SIZE [at ADDR] NL block end   hosted zone (mmap, munmap at end) or raw memory
+--   ret [<expr>]                in the entry procedure exit(value); elsewhere return it
+--   if <expr> NL block { elif <expr> NL block } [ else NL block ] end
+--   while <expr> NL block end ; break ; continue
+--   os.syscall(e0 .. e6)        statement or factor; its value is the result
+-- expr  = add [ ('=='|'!='|'<'|'<='|'>'|'>=') add ]     (result 1 or 0)
+-- add   = mul { ('+'|'-') mul } ; mul = unary { ('*'|'/'|'%') unary }
+-- unary = '-' unary | primary
+-- primary = int | "text" | [expr] | (expr) | os.syscall(args) | NAME(args)
+--         | name | name.addr | name.len | v[i] | v[a..b] | v[..b] | z.bytes(n)
+--         | z.make(Name) | Name.size | Name.align | Name.at(v) | r.f
+-- Type codes at compile time: 0 = integer word, 1 = view (addr, len), 2 = zone
+-- handle (parameters only; an integer argument satisfies it), 3+i = ref to
+-- layout i; a fallible result type adds 256 (bit 8) to the code of T and 512
+-- (bit 9) when E is none — only results and call values carry these bits.
+-- Symbol kinds: 0 int local (1 slot), 1 static string (addr, len
+-- known), 2 view local (2 slots), 3 zone handle (slot holding the address of
+-- the triple; a local zone keeps limit, cursor, base in three ascending-address
+-- slots below it), 4 ref local (1 slot, extra = layout index).
+-- A parameter type is `[rw] view ...` (1), `zone` (2), `[rw] ref Name` (3+i),
+-- anything else an integer; the same words after `->` give the result type.
+-- Scratch is a 16 MiB mmap: input [base,+1M), output [base+8M,+4M),
+-- string pool [base+4M,+1M), code temp [base+2M,+2M),
+-- call fixups [base+5M,+1M), procedure table [base+6M,+512K),
+-- break-fixup stack [base+1.8125M,+64K), if-fixup stack [base+1.875M,+64K),
+-- field table [base+1.5625M,+64K), layout table [base+1.625M,+64K),
+-- state [base+1.9375M): +0 nslots, +8 loop start, +16 if-fixup top, +24 frame
+-- field, +32 break-fixup top, +40 current proc is entry, +48 entry code pos,
+-- +56 entry count, +64 proc count, +72 call fixup count, +80 type of the last
+-- expression, +88 current proc result type, +96 zone depth, +104 zone depth at
+-- loop start, +112 signature pass (0 declare, 1 define), +120 return address
+-- of parse_sig, +128 layout count, +136 field count, +144 layout byte cursor,
+-- +152 layout being parsed; symbols [base+1.5M).
+-- Pass 0 reads every `layout` block, pass 1 every `proc` header, so that calls
+-- are type- and arity-checked where they occur, whatever the declaration order.
+-- Procedure entry (64 bytes): name ptr, name len, code pos, param words, param
+-- type codes (8 bits each), unused, param count, result type. Call fixup
+-- (24 bytes): rel32 field pos, proc index, unused; resolved at finalize.
+-- Layout entry (64 bytes): name ptr, name len, size, align, first field, field
+-- count, packed. Field entry (48 bytes): name ptr, name len, offset, size,
+-- signed, type code (0 integer, 1 view).
+-- Symbol entry (48 bytes): name ptr, name len, value (slot index, or string
+-- address), kind, extra (string length; base slot of a hosted zone, -1 for at;
+-- layout index of a ref); kind 5 is a module constant (value = the integer),
+-- kept in a separate table (48-byte entries at [base+0x1F1000), count at state
+-- +160) that name lookup searches after the procedure's locals.
+-- asm has no byte store, so emit writes an 8-byte value < 256 and advances one.
+-- Output layout: 120-byte ELF header | string pool | trap stub | code. Strings
+-- have a fixed address (0x400078 + pool offset) the moment they are bound; at
+-- finalize the code is moved behind the pool and e_entry is patched.
+-- Generated code: push rbp; mov rbp,rsp; sub rsp,FRAME (patched); parameters are
+-- spilled to slots 0..n-1; locals live at [rbp - 8*(slot+1)]; falling off the end
+-- exits 0 in the entry procedure and returns 0 elsewhere. Traps (bounds, zone
+-- exhausted, mmap failure) print `oli: trap` and exit 3.
+-- Registers: r14 in base, r13 in end, r12 out base, rbx symtab base, r15 symbol
+-- count, rbp string pool cursor, rdi emit ptr, rsi in cursor.
+module oli1
+proc start
+    calls none
+    entry
+    machine x64
+        mov rdi, 0
+        mov rsi, 0x1000000
+        mov rdx, 3
+        mov r10, 0x22
+        mov r8, -1
+        mov r9, 0
+        mov rax, 9
+        syscall
+        mov r14, rax
+        mov r12, r14
+        add r12, 0x800000
+        mov rbx, r14
+        add rbx, 0x180000
+        mov rbp, r14
+        add rbp, 0x400000
+        mov r15, 0
+        mov rax, 0
+        mov [r14+0x1F0000], rax
+        mov [r14+0x1F0008], rax
+        mov [r14+0x1F0028], rax
+        mov [r14+0x1F0030], rax
+        mov [r14+0x1F0038], rax
+        mov [r14+0x1F0040], rax
+        mov [r14+0x1F0048], rax
+        mov [r14+0x1F0050], rax
+        mov [r14+0x1F0058], rax
+        mov [r14+0x1F0060], rax
+        mov [r14+0x1F0068], rax
+        mov [r14+0x1F0070], rax
+        mov [r14+0x1F0080], rax
+        mov [r14+0x1F0088], rax
+        mov [r14+0x1F00A0], rax
+        mov rax, r14
+        add rax, 0x1E0000
+        mov [r14+0x1F0010], rax
+        mov rax, r14
+        add rax, 0x1D0000
+        mov [r14+0x1F0020], rax
+        mov rcx, r14
+.rd:
+        mov rdi, 0
+        mov rsi, rcx
+        mov rdx, 0x100000
+        push rcx
+        mov rax, 0
+        syscall
+        pop rcx
+        cmp rax, 0
+        jle .rd_done
+        add rcx, rax
+        jmp .rd
+.rd_done:
+        mov r13, rcx
+        mov rdi, r12
+        mov rsi, template
+        mov rcx, 15
+.hcpy:
+        mov rax, [rsi]
+        mov [rdi], rax
+        add rsi, 8
+        add rdi, 8
+        sub rcx, 1
+        cmp rcx, 0
+        jne .hcpy
+        mov rdx, trapmsg
+        mov rcx, 10
+.tcpy:
+        mov rax, [rdx]
+        and rax, 255
+        mov [rbp], rax
+        add rbp, 1
+        add rdx, 1
+        sub rcx, 1
+        cmp rcx, 0
+        jne .tcpy
+        mov rdx, seq_trap
+        mov rcx, 36
+        call .ebytes
+        mov rsi, r14
+.pass0:
+        cmp rsi, r13
+        jae .pass0_done
+        call .word
+        cmp rcx, 6
+        jne .pass0_skip
+        mov rdx, kw_layout
+        mov r9, 6
+        call .iskw
+        cmp rax, 1
+        jne .pass0_skip
+        call .parse_layout
+        jmp .pass0
+.pass0_skip:
+        call .eol_blind
+        jmp .pass0
+.pass0_done:
+        mov rsi, r14
+.pass1:
+        cmp rsi, r13
+        jae .pass1_done
+        call .word
+        cmp rcx, 4
+        jne .pass1_skip
+        mov rdx, kw_proc
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .pass1_skip
+        call .parse_sig
+        pop r11
+        jmp .pass1
+.pass1_skip:
+        call .eol_blind
+        jmp .pass1
+.pass1_done:
+        mov rax, 1
+        mov [r14+0x1F0070], rax
+        mov rsi, r14
+.hdr:
+        cmp rsi, r13
+        jae .finalize
+        call .word
+        cmp rcx, 0
+        jne .hdr_word
+        cmp rsi, r13
+        jae .finalize
+        call .blank
+        jmp .hdr
+.hdr_word:
+        mov rdx, kw_module
+        mov r9, 6
+        call .iskw
+        cmp rax, 1
+        jne .hdr_layout
+        call .eol_blind
+        jmp .hdr
+.hdr_layout:
+        mov rdx, kw_layout
+        mov r9, 6
+        call .iskw
+        cmp rax, 1
+        jne .hdr_proc
+        call .eol_blind
+.hdr_layout_skip:
+        cmp rsi, r13
+        jae .err
+        call .word
+        cmp rcx, 3
+        jne .hdr_layout_next
+        mov rdx, kw_end
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        je .hdr_layout_end
+.hdr_layout_next:
+        call .eol_blind
+        jmp .hdr_layout_skip
+.hdr_layout_end:
+        call .eol
+        jmp .hdr
+.hdr_proc:
+        mov rdx, kw_proc
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .hdr_const
+        call .parse_sig
+.hdr2:
+        call .word
+        cmp rcx, 0
+        jne .hdr2_word
+        call .blank
+        jmp .hdr2
+.hdr2_word:
+        mov rdx, kw_entry
+        mov r9, 5
+        call .iskw
+        cmp rax, 1
+        je .hdr2_entry
+        mov rdx, kw_calls
+        mov r9, 5
+        call .iskw
+        cmp rax, 1
+        je .hdr2_blind
+        mov rdx, kw_permit
+        mov r9, 6
+        call .iskw
+        cmp rax, 1
+        je .hdr2_blind
+        mov rsi, r8
+        jmp .body
+.hdr2_entry:
+        mov rax, 1
+        mov [r14+0x1F0028], rax
+        mov rax, [r14+0x1F0038]
+        add rax, 1
+        mov [r14+0x1F0038], rax
+        call .eol
+        jmp .hdr2
+.hdr2_blind:
+        call .eol_blind
+        jmp .hdr2
+.body:
+        pop r11
+        mov [r11+16], rdi
+        mov rax, [r14+0x1F0028]
+        cmp rax, 0
+        je .body_code
+        mov rax, [r14+0x1F0058]
+        cmp rax, 256
+        jae .err
+        mov [r14+0x1F0030], rdi
+.body_code:
+        mov rdx, seq_prologue
+        mov rcx, 7
+        call .ebytes
+        mov [r14+0x1F0018], rdi
+        mov rdx, 0
+        call .eimm
+        mov r9, 0
+.spill:
+        cmp r9, [r14+0x1F0000]
+        jae .spill_done
+        push r9
+        mov rdx, spilltab
+        lea rdx, [rdx+r9*2]
+        add rdx, r9
+        mov rcx, 3
+        call .ebytes
+        pop r9
+        mov rdx, r9
+        add rdx, 1
+        shl rdx, 3
+        neg rdx
+        call .eimm
+        add r9, 1
+        jmp .spill
+.spill_done:
+        call .block
+        cmp rax, 1
+        jne .err
+        mov rax, [r14+0x1F0028]
+        cmp rax, 0
+        je .body_leave
+        mov rdx, seq_exit0
+        mov rcx, 12
+        call .ebytes
+        jmp .body_frame
+.body_leave:
+        mov rdx, 0
+        call .e_movimm
+        mov rdx, seq_leave
+        mov rcx, 4
+        call .ebytes
+.body_frame:
+        mov rax, [r14+0x1F0000]
+        shl rax, 3
+        add rax, 15
+        and rax, -16
+        mov rcx, rax
+        mov rdx, [r14+0x1F0018]
+        call .put32
+        jmp .hdr
+.hdr_const:
+        push r8
+        push rcx
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 58
+        jne .err
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 61
+        jne .err
+        add rsi, 2
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        sub rax, 48
+        cmp rax, 9
+        ja .err
+        call .pint
+        pop rcx
+        pop r8
+        push rdx
+        call .glob_find
+        cmp r11, 0
+        jne .err
+        mov r11, [r14+0x1F00A0]
+        lea r11, [r11+r11*2]
+        shl r11, 4
+        add r11, r14
+        add r11, 0x1F1000
+        mov [r11], r8
+        mov [r11+8], rcx
+        pop rdx
+        mov [r11+16], rdx
+        mov rax, 5
+        mov [r11+24], rax
+        mov rax, 0
+        mov [r11+32], rax
+        mov rax, [r14+0x1F00A0]
+        add rax, 1
+        mov [r14+0x1F00A0], rax
+        call .eol
+        jmp .hdr
+.glob_find:
+        mov r9, [r14+0x1F00A0]
+.gf_loop:
+        cmp r9, 0
+        je .gf_none
+        sub r9, 1
+        mov rdx, r9
+        lea rdx, [rdx+rdx*2]
+        shl rdx, 4
+        add rdx, r14
+        add rdx, 0x1F1000
+        call .name_eq
+        cmp rax, 1
+        jne .gf_loop
+        mov r11, rdx
+        ret
+.gf_none:
+        mov r11, 0
+        ret
+.parse_sig:
+        pop rax
+        mov [r14+0x1F0078], rax
+        call .word
+        cmp rcx, 0
+        je .err
+        call .proc_find
+        mov rax, [r14+0x1F0070]
+        cmp rax, 0
+        jne .sig_define
+        cmp r11, 0
+        jne .err
+        call .proc_add
+        jmp .sig_have
+.sig_define:
+        cmp r11, 0
+        je .err
+.sig_have:
+        push r11
+        mov r15, 0
+        mov rax, 0
+        mov [r14+0x1F0000], rax
+        mov [r14+0x1F0008], rax
+        mov [r14+0x1F0028], rax
+        mov [r14+0x1F0058], rax
+        mov [r14+0x1F0060], rax
+        mov [r14+0x1F0068], rax
+        mov [r11+24], rax
+        mov [r11+32], rax
+        mov [r11+40], rax
+        mov [r11+48], rax
+        mov [r11+56], rax
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
+        jne .sig_noparams
+        add rsi, 1
+.sig_param:
+        call .word
+        cmp rcx, 0
+        jne .sig_pname
+        mov rax, 41
+        call .expect
+        jmp .sig_noparams
+.sig_pname:
+        mov r11, [rsp]
+        mov rax, [r11+48]
+        cmp rax, 6
+        jae .err
+        push r8
+        push rcx
+        mov rax, 58
+        call .expect
+        call .type_code
+.sig_pt_rest:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 44
+        je .sig_pt_end
+        cmp rax, 41
+        je .sig_pt_end
+        push r9
+        call .word
+        cmp rcx, 0
+        je .err
+        mov rdx, kw_or
+        mov r9, 2
+        call .iskw
+        pop r9
+        cmp rax, 1
+        je .err
+        jmp .sig_pt_rest
+.sig_pt_end:
+        pop rcx
+        pop r8
+        mov r11, [rsp]
+        mov rax, [r14+0x1F0070]
+        cmp rax, 0
+        je .sig_pt_table
+        push r9
+        mov r10, [r14+0x1F0000]
+        call .sym_new
+        mov [r11+16], r10
+        call .kind_of_code
+        mov [r11+24], rax
+        mov [r11+32], rdx
+        pop r9
+        mov r11, [rsp]
+.sig_pt_table:
+        mov rcx, [r11+48]
+        shl rcx, 3
+        mov rdx, r9
+        shl rdx, cl
+        or [r11+32], rdx
+        mov rax, 1
+        cmp r9, 1
+        jne .sig_pt_words
+        mov rax, 2
+.sig_pt_words:
+        add [r11+24], rax
+        add [r14+0x1F0000], rax
+        mov rcx, [r11+48]
+        add rcx, 1
+        mov [r11+48], rcx
+        mov rax, [r11+24]
+        cmp rax, 6
+        ja .err
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 44
+        jne .sig_param
+        add rsi, 1
+        jmp .sig_param
+.sig_noparams:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 45
+        jne .sig_eol
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 62
+        jne .err
+        add rsi, 2
+        call .type_code
+        cmp r9, 2
+        je .err
+        mov r11, [rsp]
+        mov [r11+56], r9
+.sig_rtype_rest:
+        call .sksp
+        cmp rsi, r13
+        jae .sig_eol
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .sig_eol
+        cmp rax, 13
+        je .sig_eol
+        cmp rax, 45
+        je .sig_eol
+        call .word
+        cmp rcx, 0
+        je .err
+        cmp rcx, 2
+        jne .sig_rtype_rest
+        mov rdx, kw_or
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .sig_rtype_rest
+        mov r11, [rsp]
+        mov rax, [r11+56]
+        cmp rax, 1
+        je .err
+        cmp rax, 256
+        jae .err
+        add rax, 256
+        push rax
+        call .word
+        cmp rcx, 0
+        je .err
+        mov rdx, kw_none
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .sig_rtype_e
+        pop rax
+        add rax, 512
+        jmp .sig_rtype_set
+.sig_rtype_e:
+        mov rdx, kw_view
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .err
+        mov rdx, kw_zone
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .err
+        mov rdx, kw_ref
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        je .err
+        mov rdx, kw_rw
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        je .err
+        pop rax
+.sig_rtype_set:
+        mov r11, [rsp]
+        mov [r11+56], rax
+        jmp .sig_rtype_rest
+.sig_eol:
+        call .eol
+        mov r11, [rsp]
+        mov rax, [r11+56]
+        mov [r14+0x1F0058], rax
+        mov rax, [r14+0x1F0078]
+        push rax
+        ret
+.type_code:
+        call .word
+        cmp rcx, 0
+        je .err
+        mov rdx, kw_rw
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .tc_word
+        call .word
+        cmp rcx, 0
+        je .err
+.tc_word:
+        mov rdx, kw_view
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .tc_view
+        mov rdx, kw_zone
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .tc_zone
+        mov rdx, kw_ref
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        je .tc_ref
+        mov r9, 0
+        ret
+.tc_view:
+        mov r9, 1
+        ret
+.tc_zone:
+        mov r9, 2
+        ret
+.tc_ref:
+        call .word
+        cmp rcx, 0
+        je .err
+        call .layout_find
+        cmp r11, 0
+        je .err
+        add r9, 3
+        ret
+.kind_of_code:
+        mov rdx, 0
+        cmp r9, 0
+        je .koc_int
+        cmp r9, 1
+        je .koc_view
+        cmp r9, 2
+        je .koc_zone
+        mov rax, 4
+        mov rdx, r9
+        sub rdx, 3
+        ret
+.koc_int:
+        mov rax, 0
+        ret
+.koc_view:
+        mov rax, 2
+        ret
+.koc_zone:
+        mov rax, 3
+        ret
+.name_eq:
+        push r11
+        push r10
+        mov rax, [rdx+8]
+        cmp rax, rcx
+        jne .ne_no
+        mov r11, 0
+.ne_l:
+        cmp r11, rcx
+        jae .ne_yes
+        mov rax, [r8+r11]
+        and rax, 255
+        mov r10, [rdx]
+        mov r10, [r10+r11]
+        and r10, 255
+        cmp rax, r10
+        jne .ne_no
+        add r11, 1
+        jmp .ne_l
+.ne_yes:
+        pop r10
+        pop r11
+        mov rax, 1
+        ret
+.ne_no:
+        pop r10
+        pop r11
+        mov rax, 0
+        ret
+.layout_find:
+        mov r9, [r14+0x1F0080]
+.lf_loop:
+        cmp r9, 0
+        je .lf_none
+        sub r9, 1
+        mov rdx, r9
+        shl rdx, 6
+        add rdx, r14
+        add rdx, 0x1A0000
+        call .name_eq
+        cmp rax, 1
+        jne .lf_loop
+        mov r11, rdx
+        ret
+.lf_none:
+        mov r11, 0
+        ret
+.field_find:
+        mov r10, [r11+32]
+        mov r9, [r11+40]
+        add r9, r10
+.ff_loop:
+        cmp r10, r9
+        jae .err
+        mov rdx, r10
+        lea rdx, [rdx+rdx*2]
+        shl rdx, 4
+        add rdx, r14
+        add rdx, 0x190000
+        call .name_eq
+        cmp rax, 1
+        je .ff_hit
+        add r10, 1
+        jmp .ff_loop
+.ff_hit:
+        mov r10, rdx
+        ret
+.type_of:
+        mov rdx, typetab
+.to_l:
+        mov rax, [rdx]
+        and rax, 255
+        cmp rax, 0
+        je .err
+        cmp rax, rcx
+        jne .to_next
+        mov r9, 0
+.to_c:
+        cmp r9, rcx
+        jae .to_hit
+        mov rax, [r8+r9]
+        and rax, 255
+        mov r10, [rdx+r9+1]
+        and r10, 255
+        cmp rax, r10
+        jne .to_next
+        add r9, 1
+        jmp .to_c
+.to_hit:
+        mov r9, [rdx+9]
+        and r9, 255
+        mov r10, [rdx+10]
+        and r10, 255
+        mov rax, [rdx+11]
+        and rax, 255
+        ret
+.to_next:
+        add rdx, 12
+        jmp .to_l
+.parse_layout:
+        call .word
+        cmp rcx, 0
+        je .err
+        call .layout_find
+        cmp r11, 0
+        jne .err
+        mov r11, [r14+0x1F0080]
+        shl r11, 6
+        add r11, r14
+        add r11, 0x1A0000
+        mov [r11], r8
+        mov [r11+8], rcx
+        mov rax, 0
+        mov [r11+16], rax
+        mov [r11+48], rax
+        mov rax, 1
+        mov [r11+24], rax
+        mov rax, [r14+0x1F0088]
+        mov [r11+32], rax
+        mov rax, 0
+        mov [r11+40], rax
+        mov [r14+0x1F0090], rax
+        mov [r14+0x1F0098], r11
+        mov rax, [r14+0x1F0080]
+        add rax, 1
+        mov [r14+0x1F0080], rax
+.pl_opts:
+        call .word
+        cmp rcx, 0
+        je .pl_opts_done
+        mov rdx, kw_packed
+        mov r9, 6
+        call .iskw
+        cmp rax, 1
+        jne .pl_opt_align
+        mov r11, [r14+0x1F0098]
+        mov rax, 1
+        mov [r11+48], rax
+        jmp .pl_opts
+.pl_opt_align:
+        mov rdx, kw_align
+        mov r9, 5
+        call .iskw
+        cmp rax, 1
+        jne .err
+        call .sksp
+        call .pint
+        cmp rdx, 0
+        je .err
+        mov r11, [r14+0x1F0098]
+        mov [r11+24], rdx
+        jmp .pl_opts
+.pl_opts_done:
+        call .eol
+.pl_field:
+        cmp rsi, r13
+        jae .err
+        call .word
+        cmp rcx, 0
+        jne .pl_field_word
+        call .blank
+        jmp .pl_field
+.pl_field_word:
+        mov rdx, kw_end
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        je .pl_end
+        mov r11, [r14+0x1F0098]
+        push r8
+        push rcx
+        mov r10, [r11+32]
+        mov r9, [r11+40]
+        add r9, r10
+.pl_dup:
+        cmp r10, r9
+        jae .pl_nodup
+        mov rdx, r10
+        lea rdx, [rdx+rdx*2]
+        shl rdx, 4
+        add rdx, r14
+        add rdx, 0x190000
+        call .name_eq
+        cmp rax, 1
+        je .err
+        add r10, 1
+        jmp .pl_dup
+.pl_nodup:
+        mov rax, 58
+        call .expect
+.pl_ftype:
+        call .word
+        cmp rcx, 0
+        je .err
+        mov rdx, kw_rw
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        je .pl_ftype
+        mov rdx, kw_mmio
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .pl_ftype
+        call .type_of
+        mov r11, [r14+0x1F0088]
+        lea r11, [r11+r11*2]
+        shl r11, 4
+        add r11, r14
+        add r11, 0x190000
+        pop rcx
+        pop r8
+        mov [r11], r8
+        mov [r11+8], rcx
+        mov [r11+24], r9
+        mov [r11+32], r10
+        mov [r11+40], rax
+        mov rdx, r9
+        cmp rdx, 8
+        jbe .pl_align_ok
+        mov rdx, 8
+.pl_align_ok:
+        mov r10, [r14+0x1F0098]
+        mov rax, [r10+48]
+        cmp rax, 0
+        je .pl_field_rest
+        mov rdx, 1
+.pl_field_rest:
+        push r11
+        push rdx
+.pl_field_loop:
+        call .word
+        cmp rcx, 0
+        je .pl_field_done
+        mov rdx, kw_align
+        mov r9, 5
+        call .iskw
+        cmp rax, 1
+        jne .pl_field_loop
+        call .sksp
+        call .pint
+        cmp rdx, 0
+        je .err
+        pop rax
+        push rdx
+        jmp .pl_field_loop
+.pl_field_done:
+        pop rdx
+        pop r11
+        mov r10, [r14+0x1F0098]
+        cmp rdx, [r10+24]
+        jbe .pl_align_keep
+        mov [r10+24], rdx
+.pl_align_keep:
+        mov rax, [r14+0x1F0090]
+        add rax, rdx
+        sub rax, 1
+        push rdx
+        mov rcx, rdx
+        neg rcx
+        and rax, rcx
+        pop rdx
+        mov [r11+16], rax
+        add rax, [r11+24]
+        mov [r14+0x1F0090], rax
+        mov rax, [r10+40]
+        add rax, 1
+        mov [r10+40], rax
+        mov rax, [r14+0x1F0088]
+        add rax, 1
+        mov [r14+0x1F0088], rax
+        call .eol
+        jmp .pl_field
+.pl_end:
+        call .eol
+        mov r11, [r14+0x1F0098]
+        mov rdx, [r11+24]
+        mov rax, [r14+0x1F0090]
+        add rax, rdx
+        sub rax, 1
+        mov rcx, rdx
+        neg rcx
+        and rax, rcx
+        mov [r11+16], rax
+        ret
+.proc_find:
+        mov r9, [r14+0x1F0040]
+.pf_loop:
+        cmp r9, 0
+        je .pf_none
+        sub r9, 1
+        mov r11, r9
+        shl r11, 6
+        add r11, r14
+        add r11, 0x600000
+        mov rdx, [r11+8]
+        cmp rdx, rcx
+        jne .pf_loop
+        mov r11, [r11]
+        mov rdx, 0
+.pf_cmp:
+        cmp rdx, rcx
+        jae .pf_found
+        mov rax, [r8+rdx]
+        and rax, 255
+        mov r10, [r11+rdx]
+        and r10, 255
+        cmp rax, r10
+        jne .pf_loop
+        add rdx, 1
+        jmp .pf_cmp
+.pf_found:
+        mov r11, r9
+        shl r11, 6
+        add r11, r14
+        add r11, 0x600000
+        ret
+.pf_none:
+        mov r11, 0
+        ret
+.proc_add:
+        mov r9, [r14+0x1F0040]
+        cmp r9, 8000
+        jae .err
+        mov r11, r9
+        shl r11, 6
+        add r11, r14
+        add r11, 0x600000
+        mov [r11], r8
+        mov [r11+8], rcx
+        mov rax, 0
+        mov [r11+16], rax
+        add r9, 1
+        mov [r14+0x1F0040], r9
+        ret
+.sym_at:
+        lea r11, [r11+r11*2]
+        shl r11, 4
+        add r11, rbx
+        ret
+.sym_new:
+        push rax
+        mov r11, r15
+        call .sym_at
+        mov [r11], r8
+        mov [r11+8], rcx
+        mov rax, 0
+        mov [r11+16], rax
+        mov [r11+24], rax
+        mov [r11+32], rax
+        add r15, 1
+        pop rax
+        ret
+.block:
+        cmp rsi, r13
+        jae .blk_eof
+        call .word
+        cmp rcx, 0
+        jne .blk_word
+        cmp rsi, r13
+        jae .blk_eof
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 91
+        je .blk_rawstore
+        call .blank
+        jmp .block
+.blk_eof:
+        mov rax, 0
+        ret
+.blk_rawstore:
+        add rsi, 1
+        call .expr
+        call .need_int
+        mov rax, 93
+        call .expect
+        call .expect_store
+        mov rax, 80
+        call .emit
+        call .expr
+        call .need_int
+        mov rdx, seq_rawstore
+        mov rcx, 7
+        call .ebytes
+        call .eol
+        jmp .block
+.blk_word:
+        mov rdx, kw_end
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        jne .blk_elif
+        call .eol
+        mov rax, 1
+        ret
+.blk_elif:
+        mov rdx, kw_elif
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_else
+        mov rax, 2
+        ret
+.blk_else:
+        mov rdx, kw_else
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_when
+        call .eol
+        mov rax, 3
+        ret
+.blk_when:
+        mov rdx, kw_when
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_fail
+        mov rax, 4
+        ret
+.blk_fail:
+        mov rdx, kw_fail
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_case
+        call .s_fail
+        jmp .block
+.blk_case:
+        mov rdx, kw_case
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_ret
+        call .s_case
+        jmp .block
+.blk_ret:
+        mov rdx, kw_ret
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        jne .blk_if
+        call .s_ret
+        jmp .block
+.blk_if:
+        mov rdx, kw_if
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .blk_while
+        call .s_if
+        jmp .block
+.blk_while:
+        mov rdx, kw_while
+        mov r9, 5
+        call .iskw
+        cmp rax, 1
+        jne .blk_break
+        call .s_while
+        jmp .block
+.blk_break:
+        mov rdx, kw_break
+        mov r9, 5
+        call .iskw
+        cmp rax, 1
+        jne .blk_continue
+        call .s_break
+        jmp .block
+.blk_continue:
+        mov rdx, kw_continue
+        mov r9, 8
+        call .iskw
+        cmp rax, 1
+        jne .blk_loop
+        call .s_continue
+        jmp .block
+.blk_loop:
+        mov rdx, kw_loop
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_zone
+        call .s_loop
+        jmp .block
+.blk_zone:
+        mov rdx, kw_zone
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .blk_os
+        call .s_zone
+        jmp .block
+.blk_os:
+        mov rdx, kw_os
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .blk_name
+        mov rsi, r8
+        call .expr
+        call .eol
+        jmp .block
+.blk_name:
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
+        jne .blk_name_sub
+        mov rsi, r8
+        call .expr
+        call .eol
+        jmp .block
+.blk_name_sub:
+        cmp rax, 91
+        jne .blk_name_dot
+        call .s_substore
+        jmp .block
+.blk_name_dot:
+        cmp rax, 46
+        jne .blk_name2
+        call .s_fieldstore
+        jmp .block
+.blk_name2:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        mov rdx, [rsi+1]
+        and rdx, 255
+        cmp rax, 58
+        jne .blk_store
+        cmp rdx, 61
+        jne .blk_place
+        add rsi, 2
+        call .s_bind
+        jmp .block
+.blk_place:
+        add rsi, 1
+        call .s_place
+        jmp .block
+.blk_store:
+        cmp rax, 60
+        jne .err
+        cmp rdx, 45
+        jne .err
+        add rsi, 2
+        call .s_store
+        jmp .block
+.s_place:
+        -- `name : T` reserves frame slots; `<- expr` stores an initial value.
+        push r8
+        push rcx
+        call .type_code
+        cmp r9, 2
+        je .err
+        push r9
+.place_trest:
+        call .sksp
+        cmp rsi, r13
+        jae .place_tdone
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .place_tdone
+        cmp rax, 13
+        je .place_tdone
+        cmp rax, 45
+        je .place_tdone
+        cmp rax, 60
+        je .place_tdone
+        call .word
+        cmp rcx, 0
+        je .err
+        jmp .place_trest
+.place_tdone:
+        pop r9
+        pop rcx
+        pop r8
+        push r9
+        call .sym_new
+        pop r9
+        push r11
+        push r9
+        call .kind_of_code
+        mov [r11+24], rax
+        mov [r11+32], rdx
+        pop r9
+        pop r11
+        mov rax, [r14+0x1F0000]
+        mov [r11+16], rax
+        mov rdx, 1
+        cmp r9, 1
+        jne .place_slots
+        mov rdx, 2
+.place_slots:
+        add rax, rdx
+        mov [r14+0x1F0000], rax
+        push r11
+        push r9
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 60
+        jne .place_bare
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 45
+        jne .err
+        add rsi, 2
+        call .expr
+        pop r9
+        pop r11
+        mov rax, [r14+0x1F0050]
+        cmp rax, r9
+        jne .err
+        cmp r9, 1
+        je .place_view
+        mov rdx, [r11+16]
+        call .e_store
+        call .eol
+        ret
+.place_view:
+        mov rdx, [r11+16]
+        push rdx
+        call .e_store
+        pop rdx
+        add rdx, 1
+        call .e_store_rdx
+        call .eol
+        ret
+.place_bare:
+        pop r9
+        pop r11
+        call .eol
+        ret
+.s_bind:
+        push r8
+        push rcx
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 34
+        jne .bind_expr
+        mov rax, rbp
+        sub rax, r14
+        sub rax, 0x400000
+        add rax, 0x400078
+        push rax
+        push rbp
+        call .pstr
+        pop rax
+        mov rdx, rbp
+        sub rdx, rax
+        pop rax
+        pop rcx
+        pop r8
+        call .sym_new
+        mov [r11+16], rax
+        mov rax, 1
+        mov [r11+24], rax
+        mov [r11+32], rdx
+        call .eol
+        ret
+.bind_expr:
+        call .expr
+        pop rcx
+        pop r8
+        call .sym_new
+        mov rax, [r14+0x1F0000]
+        mov [r11+16], rax
+        mov rdx, [r14+0x1F0050]
+        cmp rdx, 1
+        je .bind_view
+        cmp rdx, 3
+        jb .bind_int
+        sub rdx, 3
+        mov [r11+32], rdx
+        mov rdx, 4
+        mov [r11+24], rdx
+.bind_int:
+        add rax, 1
+        mov [r14+0x1F0000], rax
+        mov rdx, [r11+16]
+        call .e_store
+        call .eol
+        ret
+.bind_view:
+        add rax, 2
+        mov [r14+0x1F0000], rax
+        mov rdx, 2
+        mov [r11+24], rdx
+        mov rdx, [r11+16]
+        push rdx
+        call .e_store
+        pop rdx
+        add rdx, 1
+        call .e_store_rdx
+        call .eol
+        ret
+.s_store:
+        call .lookup_name
+        mov rdx, [r11+24]
+        cmp rdx, 0
+        je .store_int
+        cmp rdx, 4
+        je .store_ref
+        cmp rdx, 2
+        jne .err
+        push r11
+        call .expr
+        pop r11
+        mov rax, [r14+0x1F0050]
+        cmp rax, 1
+        jne .err
+        mov rdx, [r11+16]
+        push rdx
+        call .e_store
+        pop rdx
+        add rdx, 1
+        call .e_store_rdx
+        call .eol
+        ret
+.store_int:
+        push r11
+        call .expr
+        call .need_int
+        pop r11
+        mov rdx, [r11+16]
+        call .e_store
+        call .eol
+        ret
+.store_ref:
+        push r11
+        call .expr
+        pop r11
+        mov rax, [r11+32]
+        add rax, 3
+        cmp rax, [r14+0x1F0050]
+        jne .err
+        mov rdx, [r11+16]
+        call .e_store
+        call .eol
+        ret
+.s_substore:
+        call .lookup_name
+        mov rdx, [r11+24]
+        cmp rdx, 2
+        jne .err
+        push r11
+        add rsi, 1
+        call .expr
+        call .need_int
+        mov rax, 93
+        call .expect
+        call .expect_store
+        mov rax, 80
+        call .emit
+        call .expr
+        call .need_int
+        pop r11
+        mov rdx, seq_swap
+        mov rcx, 4
+        call .ebytes
+        call .e_bounds
+        mov rdx, seq_substore
+        mov rcx, 3
+        call .ebytes
+        call .eol
+        ret
+.s_fieldstore:
+        call .lookup_name
+        mov rdx, [r11+24]
+        cmp rdx, 4
+        jne .err
+        add rsi, 1
+        push r11
+        call .word
+        pop r11
+        push r11
+        mov rax, [r11+32]
+        shl rax, 6
+        add rax, r14
+        add rax, 0x1A0000
+        mov r11, rax
+        call .field_find
+        pop r11
+        push r10
+        call .expect_store
+        mov rdx, [r11+16]
+        call .e_load
+        mov rax, 80
+        call .emit
+        call .expr
+        pop r10
+        mov rax, [r14+0x1F0050]
+        cmp rax, [r10+40]
+        jne .err
+        mov rdx, seq_binop
+        mov rcx, 4
+        call .ebytes
+        call .e_fieldstore
+        call .eol
+        ret
+.expect_store:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 60
+        jne .err
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 45
+        jne .err
+        add rsi, 2
+        ret
+.s_zone:
+        call .word
+        cmp rcx, 0
+        je .err
+        push r8
+        push rcx
+        call .expr
+        call .need_int
+        mov rax, 80
+        call .emit
+        call .word
+        cmp rcx, 0
+        jne .zone_at
+        mov rsi, r8
+        mov rdx, seq_mmap
+        mov rcx, 53
+        call .ebytes
+        mov rax, 136
+        call .e_jcc_trap
+        mov rax, 89
+        call .emit
+        pop rcx
+        pop r8
+        call .sym_new
+        mov rax, [r14+0x1F0000]
+        mov [r11+32], rax
+        jmp .zone_bind
+.zone_at:
+        cmp rcx, 2
+        jne .err
+        mov rdx, kw_at
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .err
+        call .expr
+        call .need_int
+        mov rax, 89
+        call .emit
+        pop rcx
+        pop r8
+        call .sym_new
+        mov rax, -1
+        mov [r11+32], rax
+.zone_bind:
+        mov rax, 3
+        mov [r11+24], rax
+        mov rax, [r14+0x1F0000]
+        add rax, 3
+        mov [r11+16], rax
+        add rax, 1
+        mov [r14+0x1F0000], rax
+        push r11
+        mov rdx, [r11+16]
+        sub rdx, 1
+        push rdx
+        call .e_store
+        pop rdx
+        push rdx
+        sub rdx, 1
+        call .e_store
+        mov rdx, seq_add
+        mov rcx, 3
+        call .ebytes
+        pop rdx
+        push rdx
+        sub rdx, 2
+        call .e_store
+        pop rdx
+        push rdx
+        call .e_lea
+        pop rdx
+        add rdx, 1
+        call .e_store
+        call .eol
+        mov rax, [r14+0x1F0060]
+        add rax, 1
+        mov [r14+0x1F0060], rax
+        call .block
+        cmp rax, 1
+        jne .err
+        mov rax, [r14+0x1F0060]
+        sub rax, 1
+        mov [r14+0x1F0060], rax
+        pop r11
+        mov rax, [r11+32]
+        cmp rax, -1
+        je .zone_done
+        mov rdx, [r11+16]
+        sub rdx, 1
+        push rdx
+        mov rax, 72
+        call .emit
+        mov rax, 139
+        call .emit
+        mov rax, 189
+        call .emit
+        pop rdx
+        push rdx
+        call .e_disp
+        pop rdx
+        sub rdx, 2
+        mov rax, 72
+        call .emit
+        mov rax, 139
+        call .emit
+        mov rax, 181
+        call .emit
+        call .e_disp
+        mov rdx, seq_munmap
+        mov rcx, 10
+        call .ebytes
+.zone_done:
+        ret
+.s_ret:
+        call .ret_check
+        call .ret_tail
+        call .eol
+        ret
+.ret_check:
+        mov rax, [r14+0x1F0028]
+        cmp rax, 1
+        je .ret_ok
+        mov rax, [r14+0x1F0060]
+        cmp rax, 0
+        jne .err
+.ret_ok:
+        ret
+.ret_tail:
+        call .sksp
+        cmp rsi, r13
+        jae .ret_bare
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .ret_bare
+        cmp rax, 13
+        je .ret_bare
+        cmp rax, 45
+        jne .ret_expr
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 45
+        je .ret_bare
+.ret_expr:
+        call .expr
+        mov rax, [r14+0x1F0028]
+        cmp rax, 1
+        je .ret_emit
+        mov rax, [r14+0x1F0058]
+        mov rcx, rax
+        and rcx, 255
+        cmp rcx, [r14+0x1F0050]
+        jne .err
+        cmp rax, 256
+        jb .ret_emit
+        mov rdx, seq_okret
+        mov rcx, 7
+        call .ebytes
+        ret
+.ret_bare:
+        mov rax, [r14+0x1F0058]
+        cmp rax, 0
+        jne .err
+        mov rdx, 0
+        call .e_movimm
+.ret_emit:
+        mov rax, [r14+0x1F0028]
+        cmp rax, 0
+        je .ret_leave
+        call .need_int
+        mov rdx, seq_ret
+        mov rcx, 10
+        call .ebytes
+        ret
+.ret_leave:
+        mov rdx, seq_leave
+        add rdx, 2
+        mov rcx, 2
+        call .ebytes
+        ret
+.s_fail:
+        mov rax, [r14+0x1F0058]
+        cmp rax, 256
+        jb .err
+        mov rax, [r14+0x1F0060]
+        cmp rax, 0
+        jne .err
+        call .fail_tail
+        call .eol
+        ret
+.fail_tail:
+        call .sksp
+        cmp rsi, r13
+        jae .fail_bare
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .fail_bare
+        cmp rax, 13
+        je .fail_bare
+        cmp rax, 45
+        jne .fail_expr
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 45
+        je .fail_bare
+.fail_expr:
+        mov rax, [r14+0x1F0058]
+        and rax, 512
+        cmp rax, 0
+        jne .err
+        call .expr
+        call .need_int
+        mov rdx, seq_tordx
+        mov rcx, 3
+        call .ebytes
+        jmp .fail_emit
+.fail_bare:
+        mov rax, [r14+0x1F0058]
+        and rax, 512
+        cmp rax, 0
+        je .err
+        mov rax, 49
+        call .emit
+        mov rax, 210
+        call .emit
+.fail_emit:
+        mov rdx, seq_fail
+        mov rcx, 7
+        call .ebytes
+        ret
+.s_case:
+        call .cmpx
+        mov rax, [r14+0x1F0050]
+        cmp rax, 256
+        jb .err
+        push rax
+        call .eol
+        call .when_line
+        call .when_arm
+        push rax
+        push r8
+        push rcx
+        cmp rax, 1
+        jne .case_first_fail
+        call .e_jnz
+        jmp .case_first_bind
+.case_first_fail:
+        call .e_jz
+.case_first_bind:
+        pop rcx
+        pop r8
+        push rdx
+        mov rax, [rsp+8]
+        mov rdx, [rsp+16]
+        call .case_bind
+        call .block
+        cmp rax, 3
+        je .case_else
+        cmp rax, 4
+        jne .err
+        call .when_arm
+        cmp rax, [rsp+8]
+        je .err
+        push rax
+        push r8
+        push rcx
+        call .e_jmp
+        mov rax, [rsp+24]
+        mov [rsp+24], rdx
+        mov rdx, rax
+        call .patch_here
+        pop rcx
+        pop r8
+        pop rax
+        mov rdx, [rsp+16]
+        call .case_bind
+        call .block
+        cmp rax, 1
+        jne .err
+        pop rdx
+        call .patch_here
+        pop rax
+        pop rax
+        ret
+.case_else:
+        call .e_jmp
+        mov rax, [rsp]
+        mov [rsp], rdx
+        mov rdx, rax
+        call .patch_here
+        call .block
+        cmp rax, 1
+        jne .err
+        pop rdx
+        call .patch_here
+        pop rax
+        pop rax
+        ret
+.when_line:
+        cmp rsi, r13
+        jae .err
+        call .word
+        cmp rcx, 0
+        jne .wl_word
+        call .blank
+        jmp .when_line
+.wl_word:
+        mov rdx, kw_when
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+        ret
+.when_arm:
+        call .word
+        cmp rcx, 2
+        jne .wa_fail
+        mov rdx, kw_ok
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rax, 1
+        jmp .wa_ident
+.wa_fail:
+        mov rdx, kw_fail
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rax, 2
+.wa_ident:
+        push rax
+        call .word
+        push r8
+        push rcx
+        call .eol
+        pop rcx
+        pop r8
+        pop rax
+        ret
+.case_bind:
+        cmp rcx, 0
+        je .cb_none
+        cmp rax, 1
+        je .cb_ok
+        mov r9, rdx
+        and r9, 512
+        cmp r9, 0
+        jne .err
+        mov r9, 0
+        jmp .cb_new
+.cb_ok:
+        mov r9, rdx
+        and r9, 255
+.cb_new:
+        push r9
+        call .sym_new
+        pop r9
+        call .kind_of_code
+        mov [r11+24], rax
+        mov [r11+32], rdx
+        mov rax, [r14+0x1F0000]
+        mov [r11+16], rax
+        add rax, 1
+        mov [r14+0x1F0000], rax
+        mov rdx, [r11+16]
+        call .e_store_rdx
+.cb_none:
+        ret
+.s_if:
+        mov rax, [r14+0x1F0010]
+        push rax
+.if_cond:
+        call .expr
+        call .need_int
+        call .eol
+        call .e_jz
+        push rdx
+        call .block
+        pop rdx
+        cmp rax, 1
+        je .if_end
+        cmp rax, 0
+        je .err
+        cmp rax, 3
+        ja .err
+        push rax
+        push rdx
+        call .e_jmp
+        call .fix_push
+        pop rdx
+        call .patch_here
+        pop rax
+        cmp rax, 2
+        je .if_cond
+        call .block
+        cmp rax, 1
+        jne .err
+        jmp .if_done
+.if_end:
+        call .patch_here
+.if_done:
+        pop r9
+        call .fix_patch_to
+        ret
+.s_while:
+        mov rax, [r14+0x1F0008]
+        push rax
+        mov rax, [r14+0x1F0020]
+        push rax
+        mov rax, [r14+0x1F0068]
+        push rax
+        mov rax, [r14+0x1F0060]
+        mov [r14+0x1F0068], rax
+        mov [r14+0x1F0008], rdi
+        call .expr
+        call .need_int
+        call .eol
+        call .e_jz
+        push rdx
+        call .block
+        cmp rax, 1
+        jne .err
+        call .e_jmp
+        mov rax, [r14+0x1F0008]
+        call .patch_to
+        pop rdx
+        call .patch_here
+        pop rax
+        mov [r14+0x1F0068], rax
+        pop r9
+        call .brk_patch_to
+        pop rax
+        mov [r14+0x1F0008], rax
+        ret
+.s_loop:
+        -- `loop` is `while` with no condition: only `break`, `ret` or `fail`
+        -- leave it.
+        mov rax, [r14+0x1F0008]
+        push rax
+        mov rax, [r14+0x1F0020]
+        push rax
+        mov rax, [r14+0x1F0068]
+        push rax
+        mov rax, [r14+0x1F0060]
+        mov [r14+0x1F0068], rax
+        mov [r14+0x1F0008], rdi
+        call .eol
+        call .block
+        cmp rax, 1
+        jne .err
+        call .e_jmp
+        mov rax, [r14+0x1F0008]
+        call .patch_to
+        pop rax
+        mov [r14+0x1F0068], rax
+        pop r9
+        call .brk_patch_to
+        pop rax
+        mov [r14+0x1F0008], rax
+        ret
+.s_break:
+        call .loop_check
+        call .e_jmp
+        call .brk_push
+        call .eol
+        ret
+.s_continue:
+        call .loop_check
+        call .e_jmp
+        mov rax, [r14+0x1F0008]
+        call .patch_to
+        call .eol
+        ret
+.loop_check:
+        mov rax, [r14+0x1F0008]
+        cmp rax, 0
+        je .err
+        mov rax, [r14+0x1F0060]
+        cmp rax, [r14+0x1F0068]
+        jne .err
+        ret
+.need_int:
+        mov rax, [r14+0x1F0050]
+        cmp rax, 0
+        jne .err
+        ret
+.expr:
+        call .cmpx
+        call .word
+        cmp rcx, 4
+        jne .expr_noelse
+        mov rdx, kw_else
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .expr_else
+.expr_noelse:
+        mov rsi, r8
+        mov rax, [r14+0x1F0050]
+        cmp rax, 256
+        jae .err
+        ret
+.expr_else:
+        mov rax, [r14+0x1F0050]
+        cmp rax, 256
+        jb .err
+        push rax
+        call .e_jz
+        push rdx
+        call .word
+        cmp rcx, 4
+        jne .expr_else_ret
+        mov rdx, kw_fail
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .expr_else_ret
+        mov rax, [r14+0x1F0028]
+        cmp rax, 0
+        jne .err
+        mov rax, [r14+0x1F0060]
+        cmp rax, 0
+        jne .err
+        mov rax, [r14+0x1F0058]
+        cmp rax, 256
+        jb .err
+        and rax, 512
+        mov rdx, [rsp+8]
+        and rdx, 512
+        cmp rax, rdx
+        jne .err
+        mov rdx, seq_fail
+        mov rcx, 7
+        call .ebytes
+        jmp .expr_else_ok
+.expr_else_ret:
+        cmp rcx, 3
+        jne .expr_else_val
+        mov rdx, kw_ret
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        jne .expr_else_val
+        call .ret_check
+        call .ret_tail
+        jmp .expr_else_ok
+.expr_else_val:
+        mov rsi, r8
+        call .cmpx
+        mov rax, [rsp+8]
+        and rax, 255
+        cmp rax, [r14+0x1F0050]
+        jne .err
+        call .e_jmp
+        pop rax
+        push rdx
+        mov rdx, rax
+        call .patch_here
+        mov rdx, seq_movrdx
+        mov rcx, 3
+        call .ebytes
+        pop rdx
+        call .patch_here
+        pop rax
+        and rax, 255
+        mov [r14+0x1F0050], rax
+        ret
+.expr_else_ok:
+        pop rdx
+        call .patch_here
+        mov rdx, seq_movrdx
+        mov rcx, 3
+        call .ebytes
+        pop rax
+        and rax, 255
+        mov [r14+0x1F0050], rax
+        ret
+.cmpx:
+        call .bor
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        mov rcx, [rsi+1]
+        and rcx, 255
+        cmp rax, 61
+        je .cmp_eq
+        cmp rax, 33
+        je .cmp_ne
+        cmp rax, 60
+        je .cmp_lt
+        cmp rax, 62
+        je .cmp_gt
+        ret
+.cmp_eq:
+        cmp rcx, 61
+        jne .err
+        add rsi, 2
+        mov rdx, 148
+        jmp .cmp_emit
+.cmp_ne:
+        cmp rcx, 61
+        jne .err
+        add rsi, 2
+        mov rdx, 149
+        jmp .cmp_emit
+.cmp_lt:
+        cmp rcx, 45
+        je .err
+        cmp rcx, 61
+        je .cmp_le
+        add rsi, 1
+        mov rdx, 156
+        jmp .cmp_emit
+.cmp_le:
+        add rsi, 2
+        mov rdx, 158
+        jmp .cmp_emit
+.cmp_gt:
+        cmp rcx, 61
+        je .cmp_ge
+        add rsi, 1
+        mov rdx, 159
+        jmp .cmp_emit
+.cmp_ge:
+        add rsi, 2
+        mov rdx, 157
+.cmp_emit:
+        push rdx
+        call .binop_left
+        call .bor
+        call .binop_right
+        mov rax, 15
+        call .emit
+        pop rax
+        call .emit
+        mov rax, 192
+        call .emit
+        mov rdx, seq_movzx
+        mov rcx, 3
+        call .ebytes
+        ret
+.bor:
+        call .bxor
+.bor_l:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 124
+        jne .bor_ret
+        add rsi, 1
+        call .binop_left
+        call .bxor
+        call .binop_right
+        mov rdx, seq_or
+        mov rcx, 3
+        call .ebytes
+        jmp .bor_l
+.bor_ret:
+        ret
+.bxor:
+        call .band
+.bxor_l:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 94
+        jne .bxor_ret
+        add rsi, 1
+        call .binop_left
+        call .band
+        call .binop_right
+        mov rdx, seq_xor
+        mov rcx, 3
+        call .ebytes
+        jmp .bxor_l
+.bxor_ret:
+        ret
+.band:
+        call .shiftx
+.band_l:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 38
+        jne .band_ret
+        add rsi, 1
+        call .binop_left
+        call .shiftx
+        call .binop_right
+        mov rdx, seq_and
+        mov rcx, 3
+        call .ebytes
+        jmp .band_l
+.band_ret:
+        ret
+.shiftx:
+        call .add
+.shift_l:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        mov rcx, [rsi+1]
+        and rcx, 255
+        cmp rax, 60
+        je .shift_left
+        cmp rax, 62
+        je .shift_right
+        ret
+.shift_left:
+        cmp rcx, 60
+        jne .shift_ret
+        add rsi, 2
+        call .binop_left
+        call .add
+        call .binop_right
+        mov rdx, seq_shl
+        mov rcx, 3
+        call .ebytes
+        jmp .shift_l
+.shift_right:
+        cmp rcx, 62
+        jne .shift_ret
+        add rsi, 2
+        call .binop_left
+        call .add
+        call .binop_right
+        mov rdx, seq_shr
+        mov rcx, 3
+        call .ebytes
+        jmp .shift_l
+.shift_ret:
+        ret
+.add:
+        call .mul
+.add_l:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 43
+        je .add_plus
+        cmp rax, 45
+        jne .add_ret
+        mov rcx, [rsi+1]
+        and rcx, 255
+        cmp rcx, 45
+        je .add_ret
+        add rsi, 1
+        call .binop_left
+        call .mul
+        call .binop_right
+        mov rdx, seq_sub
+        mov rcx, 3
+        call .ebytes
+        jmp .add_l
+.add_plus:
+        add rsi, 1
+        call .binop_left
+        call .mul
+        call .binop_right
+        mov rdx, seq_add
+        mov rcx, 3
+        call .ebytes
+        jmp .add_l
+.add_ret:
+        ret
+.binop_left:
+        call .need_int
+        mov rax, 80
+        call .emit
+        ret
+.binop_right:
+        call .need_int
+        mov rdx, seq_binop
+        mov rcx, 7
+        call .ebytes
+        ret
+.mul:
+        call .unary
+.mul_l:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 42
+        je .mul_mul
+        cmp rax, 47
+        je .mul_div
+        cmp rax, 37
+        je .mul_mod
+        ret
+.mul_mul:
+        add rsi, 1
+        call .binop_left
+        call .unary
+        call .binop_right
+        mov rdx, seq_imul
+        mov rcx, 4
+        call .ebytes
+        jmp .mul_l
+.mul_div:
+        add rsi, 1
+        call .binop_left
+        call .unary
+        call .binop_right
+        mov rdx, seq_idiv
+        mov rcx, 5
+        call .ebytes
+        jmp .mul_l
+.mul_mod:
+        add rsi, 1
+        call .binop_left
+        call .unary
+        call .binop_right
+        mov rdx, seq_idiv
+        mov rcx, 5
+        call .ebytes
+        mov rdx, seq_movrdx
+        mov rcx, 3
+        call .ebytes
+        jmp .mul_l
+.unary:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 126
+        je .un_bitnot
+        cmp rax, 45
+        jne .primary
+        add rsi, 1
+        call .unary
+        call .need_int
+        mov rdx, seq_neg
+        mov rcx, 3
+        call .ebytes
+        ret
+.un_bitnot:
+        add rsi, 1
+        call .unary
+        call .need_int
+        mov rdx, seq_bitnot
+        mov rcx, 3
+        call .ebytes
+        ret
+.primary:
+        call .sksp
+        cmp rsi, r13
+        jae .err
+        mov rax, 0
+        mov [r14+0x1F0050], rax
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
+        je .pr_paren
+        cmp rax, 91
+        je .pr_rawload
+        cmp rax, 34
+        je .pr_strlit
+        mov rcx, rax
+        sub rcx, 48
+        cmp rcx, 9
+        jbe .pr_int
+        call .word
+        cmp rcx, 0
+        je .err
+        mov rdx, kw_os
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        je .pr_syscall
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
+        je .pr_maybe_conv
+        cmp rax, 46
+        je .pr_maybe_conv
+        jmp .pr_after_conv
+.pr_maybe_conv:
+        call .conv_lookup
+        cmp rax, 1
+        je .pr_conv
+.pr_after_conv:
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 40
+        je .pr_call
+        call .lookup_opt
+        cmp r11, 0
+        je .pr_layout
+        mov rdx, [r11+24]
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 46
+        jne .pr_nomember
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 46
+        jne .pr_member
+        mov rax, 46
+.pr_nomember:
+        cmp rax, 91
+        je .pr_subscript
+        cmp rdx, 0
+        je .pr_intlocal
+        cmp rdx, 3
+        je .pr_intlocal
+        cmp rdx, 4
+        je .pr_reflocal
+        cmp rdx, 5
+        je .pr_const
+        cmp rdx, 1
+        je .pr_strval
+        mov rdx, [r11+16]
+        push rdx
+        call .e_load
+        pop rdx
+        add rdx, 1
+        call .e_load_rdx
+        mov rax, 1
+        mov [r14+0x1F0050], rax
+        ret
+.pr_const:
+        mov rdx, [r11+16]
+        call .e_movimm
+        ret
+.pr_intlocal:
+        mov rdx, [r11+16]
+        call .e_load
+        ret
+.pr_reflocal:
+        mov rdx, [r11+16]
+        push r11
+        call .e_load
+        pop r11
+        mov rax, [r11+32]
+        add rax, 3
+        mov [r14+0x1F0050], rax
+        ret
+.pr_layout:
+        call .layout_find
+        cmp r11, 0
+        je .err
+        mov rax, 46
+        call .expect
+        push r11
+        call .word
+        pop r11
+        cmp rcx, 2
+        je .pl_at
+        cmp rcx, 4
+        je .pl_size
+        cmp rcx, 5
+        jne .err
+        mov rdx, kw_align
+        mov r9, 5
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rdx, [r11+24]
+        call .e_movimm
+        ret
+.pl_size:
+        mov rdx, kw_size
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rdx, [r11+16]
+        call .e_movimm
+        ret
+.pl_at:
+        mov rdx, kw_at
+        mov r9, 2
+        call .iskw
+        cmp rax, 1
+        jne .err
+        push r11
+        mov rax, 40
+        call .expect
+        call .expr
+        mov rax, [r14+0x1F0050]
+        cmp rax, 1
+        jne .err
+        mov rax, 41
+        call .expect
+        pop r11
+        push r11
+        mov rdx, seq_cmprdx
+        mov rcx, 3
+        call .ebytes
+        mov rdx, [r11+16]
+        call .eimm
+        mov rax, 130
+        call .e_jcc_trap
+        mov r11, [rsp]
+        mov rdx, [r11+24]
+        cmp rdx, 1
+        jbe .pl_at_done
+        mov rax, 72
+        call .emit
+        mov rax, 169
+        call .emit
+        mov r11, [rsp]
+        mov rdx, [r11+24]
+        sub rdx, 1
+        call .eimm
+        mov rax, 133
+        call .e_jcc_trap
+.pl_at_done:
+        pop r11
+        call .layout_index
+        add rax, 3
+        mov [r14+0x1F0050], rax
+        ret
+.layout_index:
+        mov rax, r11
+        sub rax, r14
+        sub rax, 0x1A0000
+        shr rax, 6
+        ret
+.pr_strval:
+        mov rdx, [r11+16]
+        push r11
+        call .e_movimm
+        pop r11
+        mov rdx, [r11+32]
+        call .e_movimm_rdx
+        mov rax, 1
+        mov [r14+0x1F0050], rax
+        ret
+.pr_conv:
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 46
+        je .pr_conv_mode
+        add rsi, 1
+        call .expr
+        call .need_int
+        mov rax, 41
+        call .expect
+        mov rax, 0
+        mov [r14+0x1F0050], rax
+        ret
+.pr_conv_mode:
+        add rsi, 1
+        push r9
+        push r10
+        call .word
+        cmp rcx, 0
+        je .err
+        mov rdx, kw_wrap
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        je .pr_conv_mode_ok
+        mov rdx, kw_bits
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+.pr_conv_mode_ok:
+        mov rax, 40
+        call .expect
+        call .expr
+        call .need_int
+        mov rax, 41
+        call .expect
+        pop r10
+        pop r9
+        call .e_trunc
+        mov rax, 0
+        mov [r14+0x1F0050], rax
+        ret
+.conv_lookup:
+        push rdx
+        mov rdx, convtab
+.cl_loop:
+        mov rax, [rdx]
+        and rax, 255
+        cmp rax, 0
+        je .cl_none
+        cmp rax, rcx
+        jne .cl_next
+        mov r9, 0
+.cl_char:
+        cmp r9, rcx
+        jae .cl_hit
+        mov rax, [r8+r9]
+        and rax, 255
+        mov r10, [rdx+r9+1]
+        and r10, 255
+        cmp rax, r10
+        jne .cl_next
+        add r9, 1
+        jmp .cl_char
+.cl_hit:
+        mov r9, [rdx+9]
+        and r9, 255
+        mov r10, [rdx+10]
+        and r10, 255
+        pop rdx
+        mov rax, 1
+        ret
+.cl_next:
+        add rdx, 12
+        jmp .cl_loop
+.cl_none:
+        pop rdx
+        mov rax, 0
+        ret
+.e_trunc:
+        cmp r9, 8
+        je .et_done
+        cmp r9, 4
+        je .et_4
+        cmp r9, 2
+        je .et_2
+        cmp r10, 1
+        je .et_s1
+        mov rdx, seq_wrap_u8
+        mov rcx, 3
+        call .ebytes
+        ret
+.et_s1:
+        mov rdx, seq_wrap_s8
+        mov rcx, 4
+        call .ebytes
+        ret
+.et_2:
+        cmp r10, 1
+        je .et_s2
+        mov rdx, seq_wrap_u16
+        mov rcx, 3
+        call .ebytes
+        ret
+.et_s2:
+        mov rdx, seq_wrap_s16
+        mov rcx, 4
+        call .ebytes
+        ret
+.et_4:
+        cmp r10, 1
+        je .et_s4
+        mov rdx, seq_wrap_u32
+        mov rcx, 2
+        call .ebytes
+        ret
+.et_s4:
+        mov rdx, seq_wrap_s32
+        mov rcx, 3
+        call .ebytes
+        ret
+.et_done:
+        ret
+.pr_int:
+        call .pint
+        call .e_movimm
+        ret
+.pr_paren:
+        add rsi, 1
+        call .expr
+        mov rax, 41
+        call .expect
+        ret
+.pr_rawload:
+        add rsi, 1
+        call .expr
+        call .need_int
+        mov rax, 93
+        call .expect
+        mov rdx, seq_rawload
+        mov rcx, 3
+        call .ebytes
+        ret
+.pr_strlit:
+        mov rax, rbp
+        sub rax, r14
+        sub rax, 0x400000
+        add rax, 0x400078
+        push rax
+        push rbp
+        call .pstr
+        pop rax
+        mov rdx, rbp
+        sub rdx, rax
+        pop rax
+        push rdx
+        mov rdx, rax
+        call .e_movimm
+        pop rdx
+        call .e_movimm_rdx
+        mov rax, 1
+        mov [r14+0x1F0050], rax
+        ret
+.pr_member:
+        add rsi, 1
+        push r11
+        call .word
+        pop r11
+        mov rdx, [r11+24]
+        cmp rdx, 4
+        je .pm_field
+        cmp rdx, 3
+        je .pm_zone
+        cmp rcx, 3
+        je .pr_len
+        cmp rcx, 4
+        je .pr_addr
+        jmp .err
+.pm_field:
+        push r11
+        mov rax, [r11+32]
+        shl rax, 6
+        add rax, r14
+        add rax, 0x1A0000
+        mov r11, rax
+        call .field_find
+        pop r11
+        mov rdx, [r11+16]
+        push r10
+        call .e_load
+        pop r10
+        call .e_fieldload
+        ret
+.pm_zone:
+        cmp rcx, 4
+        je .pm_make
+        cmp rcx, 5
+        jne .err
+        mov rdx, kw_bytes
+        mov r9, 5
+        call .iskw
+        cmp rax, 1
+        jne .err
+        push r11
+        mov rax, 40
+        call .expect
+        call .expr
+        call .need_int
+        mov rax, 41
+        call .expect
+        pop r11
+        jmp .pm_alloc
+.pm_make:
+        mov rdx, kw_make
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+        push r11
+        mov rax, 40
+        call .expect
+        call .word
+        cmp rcx, 0
+        je .err
+        call .layout_find
+        cmp r11, 0
+        je .err
+        mov rax, 41
+        call .expect
+        mov rdx, [r11+16]
+        call .e_movimm
+        call .layout_index
+        add rax, 3
+        pop r11
+        push rax
+        call .pm_alloc
+        pop rax
+        mov [r14+0x1F0050], rax
+        ret
+.pm_alloc:
+        mov rdx, seq_zbytes
+        mov rcx, 6
+        call .ebytes
+        mov rdx, [r11+16]
+        call .e_disp
+        mov rdx, seq_zbytes2
+        mov rcx, 22
+        call .ebytes
+        mov rax, 135
+        call .e_jcc_trap
+        mov rdx, seq_zbytes3
+        mov rcx, 7
+        call .ebytes
+        mov rax, 1
+        mov [r14+0x1F0050], rax
+        ret
+.pr_addr:
+        mov rdx, kw_addr
+        mov r9, 4
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rdx, [r11+24]
+        cmp rdx, 1
+        je .pr_addr_str
+        cmp rdx, 2
+        jne .err
+        mov rdx, [r11+16]
+        call .e_load
+        ret
+.pr_addr_str:
+        mov rdx, [r11+16]
+        call .e_movimm
+        ret
+.pr_len:
+        mov rdx, kw_len
+        mov r9, 3
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rdx, [r11+24]
+        cmp rdx, 1
+        je .pr_len_str
+        cmp rdx, 2
+        jne .err
+        mov rdx, [r11+16]
+        add rdx, 1
+        call .e_load
+        ret
+.pr_len_str:
+        mov rdx, [r11+32]
+        call .e_movimm
+        ret
+.pr_subscript:
+        cmp rdx, 1
+        je .pr_sub_ok
+        cmp rdx, 2
+        jne .err
+.pr_sub_ok:
+        push r11
+        add rsi, 1
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 46
+        je .pr_sub_from0
+        call .expr
+        call .need_int
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 46
+        je .pr_subview
+        mov rax, 93
+        call .expect
+        pop r11
+        call .e_bounds
+        mov rdx, seq_subload
+        mov rcx, 4
+        call .ebytes
+        ret
+.pr_sub_from0:
+        mov rdx, 0
+        call .e_movimm
+.pr_subview:
+        mov rax, 46
+        call .expect
+        mov rax, 46
+        call .expect
+        mov rax, 80
+        call .emit
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 93
+        je .pr_subview_toend
+        call .expr
+        call .need_int
+        jmp .pr_subview_len
+.pr_subview_toend:
+        mov r11, [rsp]
+        call .e_len_rax
+.pr_subview_len:
+        mov rax, 93
+        call .expect
+        pop r11
+        mov rax, 89
+        call .emit
+        call .e_cmp_len
+        mov rax, 135
+        call .e_jcc_trap
+        mov rdx, seq_subview
+        mov rcx, 3
+        call .ebytes
+        mov rax, 135
+        call .e_jcc_trap
+        mov rdx, seq_subview2
+        mov rcx, 6
+        call .ebytes
+        call .e_addr_rax
+        mov rdx, seq_add
+        mov rcx, 3
+        call .ebytes
+        mov rax, 1
+        mov [r14+0x1F0050], rax
+        ret
+.e_len_rax:
+        mov rdx, [r11+24]
+        cmp rdx, 1
+        je .e_len_str
+        mov rdx, [r11+16]
+        add rdx, 1
+        call .e_load
+        ret
+.e_len_str:
+        mov rdx, [r11+32]
+        call .e_movimm
+        ret
+.e_addr_rax:
+        mov rdx, [r11+24]
+        cmp rdx, 1
+        je .e_addr_str
+        mov rdx, [r11+16]
+        call .e_load
+        ret
+.e_addr_str:
+        mov rdx, [r11+16]
+        call .e_movimm
+        ret
+.e_cmp_len:
+        mov rdx, [r11+24]
+        cmp rdx, 1
+        je .e_cmp_len_str
+        mov rdx, [r11+16]
+        add rdx, 1
+        push r11
+        mov rax, 72
+        call .emit
+        mov rax, 59
+        call .emit
+        mov rax, 133
+        call .emit
+        call .e_disp
+        pop r11
+        ret
+.e_cmp_len_str:
+        push r11
+        mov rax, 72
+        call .emit
+        mov rax, 61
+        call .emit
+        mov rdx, [r11+32]
+        call .eimm
+        pop r11
+        ret
+.e_bounds:
+        call .e_cmp_len
+        mov rax, 131
+        call .e_jcc_trap
+        mov rdx, [r11+24]
+        cmp rdx, 1
+        je .e_bounds_str
+        mov rdx, [r11+16]
+        mov rax, 72
+        call .emit
+        mov rax, 139
+        call .emit
+        mov rax, 141
+        call .emit
+        call .e_disp
+        ret
+.e_bounds_str:
+        mov rax, 72
+        call .emit
+        mov rax, 185
+        call .emit
+        mov rdx, [r11+16]
+        call .eimm
+        shr rdx, 32
+        call .eimm
+        ret
+.pr_call:
+        call .proc_find
+        cmp r11, 0
+        je .err
+        push r11
+        mov rax, 0
+        push rax
+        push rax
+        push rax
+        add rsi, 1
+.pc_arg:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 41
+        je .pc_end
+        mov r11, [rsp+24]
+        mov rax, [rsp+16]
+        cmp rax, [r11+48]
+        jae .err
+        call .expr
+        mov r11, [rsp+24]
+        mov rcx, [rsp+16]
+        shl rcx, 3
+        mov rdx, [r11+32]
+        shr rdx, cl
+        and rdx, 255
+        mov rax, [r14+0x1F0050]
+        cmp rax, rdx
+        je .pc_arg_ok
+        cmp rdx, 2
+        jne .err
+        cmp rax, 0
+        jne .err
+.pc_arg_ok:
+        cmp rax, 1
+        je .pc_arg_view
+        mov rax, 80
+        call .emit
+        mov rax, [rsp]
+        add rax, 1
+        mov [rsp], rax
+        jmp .pc_arg_next
+.pc_arg_view:
+        mov rax, 80
+        call .emit
+        mov rax, 82
+        call .emit
+        mov rax, [rsp]
+        add rax, 2
+        mov [rsp], rax
+.pc_arg_next:
+        mov rax, [rsp+16]
+        add rax, 1
+        mov [rsp+16], rax
+        cmp rax, 6
+        ja .err
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 41
+        je .pc_end
+        cmp rax, 44
+        jne .err
+        add rsi, 1
+        jmp .pc_arg
+.pc_end:
+        add rsi, 1
+        pop r10
+        pop rdx
+        pop rax
+        pop r11
+        cmp rax, [r11+48]
+        jne .err
+        cmp r10, [r11+24]
+        jne .err
+        push r11
+.pc_pop:
+        cmp r10, 0
+        je .pc_call
+        sub r10, 1
+        mov rdx, argpop
+        add rdx, r10
+        add rdx, r10
+        mov rax, [rdx]
+        and rax, 255
+        cmp rax, 65
+        jne .pc_pop1
+        call .emit
+        mov rax, [rdx+1]
+        and rax, 255
+.pc_pop1:
+        call .emit
+        jmp .pc_pop
+.pc_call:
+        mov rax, 232
+        call .emit
+        pop r9
+        mov rax, [r9+56]
+        mov [r14+0x1F0050], rax
+        sub r9, r14
+        sub r9, 0x600000
+        shr r9, 6
+        mov rax, [r14+0x1F0048]
+        cmp rax, 40000
+        jae .err
+        mov r11, rax
+        lea r11, [r11+r11*2]
+        shl r11, 3
+        add r11, r14
+        add r11, 0x500000
+        add rax, 1
+        mov [r14+0x1F0048], rax
+        mov [r11], rdi
+        mov [r11+8], r9
+        mov rdx, 0
+        call .eimm
+        ret
+.pr_syscall:
+        mov rax, 46
+        call .expect
+        call .word
+        mov rdx, kw_syscall
+        mov r9, 7
+        call .iskw
+        cmp rax, 1
+        jne .err
+        mov rax, 40
+        call .expect
+        mov r10, 0
+.sc_arg:
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 41
+        je .sc_end
+        cmp r10, 7
+        jae .err
+        push r10
+        call .expr
+        call .need_int
+        pop r10
+        mov rax, 80
+        call .emit
+        add r10, 1
+        call .sksp
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 41
+        je .sc_end
+        cmp rax, 44
+        jne .err
+        add rsi, 1
+        jmp .sc_arg
+.sc_end:
+        add rsi, 1
+.sc_pop:
+        cmp r10, 0
+        je .sc_call
+        sub r10, 1
+        mov rdx, poptab
+        add rdx, r10
+        add rdx, r10
+        mov rax, [rdx]
+        and rax, 255
+        cmp rax, 65
+        jne .sc_pop1
+        call .emit
+        mov rax, [rdx+1]
+        and rax, 255
+.sc_pop1:
+        call .emit
+        jmp .sc_pop
+.sc_call:
+        mov rax, 15
+        call .emit
+        mov rax, 5
+        call .emit
+        mov rax, 0
+        mov [r14+0x1F0050], rax
+        ret
+.e_fieldload:
+        mov rax, [r10+40]
+        cmp rax, 1
+        je .efl_view
+        mov rax, [r10+24]
+        cmp rax, 8
+        je .efl_8
+        cmp rax, 4
+        je .efl_4
+        cmp rax, 2
+        je .efl_2
+        mov rax, [r10+32]
+        cmp rax, 0
+        jne .efl_s1
+        mov rdx, seq_ld_u8
+        mov rcx, 3
+        jmp .efl_emit
+.efl_s1:
+        mov rdx, seq_ld_s8
+        mov rcx, 4
+        jmp .efl_emit
+.efl_2:
+        mov rax, [r10+32]
+        cmp rax, 0
+        jne .efl_s2
+        mov rdx, seq_ld_u16
+        mov rcx, 3
+        jmp .efl_emit
+.efl_s2:
+        mov rdx, seq_ld_s16
+        mov rcx, 4
+        jmp .efl_emit
+.efl_4:
+        mov rax, [r10+32]
+        cmp rax, 0
+        jne .efl_s4
+        mov rdx, seq_ld_u32
+        mov rcx, 2
+        jmp .efl_emit
+.efl_s4:
+        mov rdx, seq_ld_s32
+        mov rcx, 3
+        jmp .efl_emit
+.efl_8:
+        mov rdx, seq_ld_64
+        mov rcx, 3
+.efl_emit:
+        call .ebytes
+        mov rdx, [r10+16]
+        call .eimm
+        mov rax, 0
+        mov [r14+0x1F0050], rax
+        ret
+.efl_view:
+        mov rdx, seq_ld_64rdx
+        mov rcx, 3
+        call .ebytes
+        mov rdx, [r10+16]
+        add rdx, 8
+        call .eimm
+        mov rdx, seq_ld_64
+        mov rcx, 3
+        call .ebytes
+        mov rdx, [r10+16]
+        call .eimm
+        mov rax, 1
+        mov [r14+0x1F0050], rax
+        ret
+.e_fieldstore:
+        mov rax, [r10+40]
+        cmp rax, 1
+        je .efs_view
+        mov rax, [r10+24]
+        cmp rax, 8
+        je .efs_8
+        cmp rax, 4
+        je .efs_4
+        cmp rax, 2
+        je .efs_2
+        mov rdx, seq_st_8
+        mov rcx, 2
+        jmp .efs_emit
+.efs_2:
+        mov rdx, seq_st_16
+        mov rcx, 3
+        jmp .efs_emit
+.efs_4:
+        mov rdx, seq_st_32
+        mov rcx, 2
+        jmp .efs_emit
+.efs_8:
+        mov rdx, seq_st_64
+        mov rcx, 3
+.efs_emit:
+        call .ebytes
+        mov rdx, [r10+16]
+        call .eimm
+        ret
+.efs_view:
+        mov rdx, seq_st_64
+        mov rcx, 3
+        call .ebytes
+        mov rdx, [r10+16]
+        call .eimm
+        mov rdx, seq_st_64rdx
+        mov rcx, 3
+        call .ebytes
+        mov rdx, [r10+16]
+        add rdx, 8
+        call .eimm
+        ret
+.e_disp:
+        add rdx, 1
+        shl rdx, 3
+        neg rdx
+        call .eimm
+        ret
+.e_load:
+        push rdx
+        mov rdx, seq_load
+        mov rcx, 3
+        call .ebytes
+        pop rdx
+        call .e_disp
+        ret
+.e_load_rdx:
+        push rdx
+        mov rdx, seq_loadrdx
+        mov rcx, 3
+        call .ebytes
+        pop rdx
+        call .e_disp
+        ret
+.e_store:
+        push rdx
+        mov rdx, seq_store
+        mov rcx, 3
+        call .ebytes
+        pop rdx
+        call .e_disp
+        ret
+.e_store_rdx:
+        push rdx
+        mov rdx, seq_storerdx
+        mov rcx, 3
+        call .ebytes
+        pop rdx
+        call .e_disp
+        ret
+.e_lea:
+        push rdx
+        mov rdx, seq_lea
+        mov rcx, 3
+        call .ebytes
+        pop rdx
+        call .e_disp
+        ret
+.e_movimm:
+        push rdx
+        mov rax, 72
+        call .emit
+        mov rax, 184
+        call .emit
+        pop rdx
+        call .eimm
+        shr rdx, 32
+        call .eimm
+        ret
+.e_movimm_rdx:
+        push rdx
+        mov rax, 72
+        call .emit
+        mov rax, 186
+        call .emit
+        pop rdx
+        call .eimm
+        shr rdx, 32
+        call .eimm
+        ret
+.e_jz:
+        mov rdx, seq_jz
+        mov rcx, 5
+        call .ebytes
+        mov rdx, rdi
+        push rdx
+        mov rdx, 0
+        call .eimm
+        pop rdx
+        ret
+.e_jnz:
+        mov rdx, seq_jnz
+        mov rcx, 5
+        call .ebytes
+        mov rdx, rdi
+        push rdx
+        mov rdx, 0
+        call .eimm
+        pop rdx
+        ret
+.e_jmp:
+        mov rax, 233
+        call .emit
+        mov rdx, rdi
+        push rdx
+        mov rdx, 0
+        call .eimm
+        pop rdx
+        ret
+.e_jcc_trap:
+        push rax
+        mov rax, 15
+        call .emit
+        pop rax
+        call .emit
+        mov rdx, rdi
+        push rdx
+        mov rdx, 0
+        call .eimm
+        pop rdx
+        mov rax, r12
+        add rax, 120
+        call .patch_to
+        ret
+.patch_here:
+        mov rax, rdi
+.patch_to:
+        push rcx
+        mov rcx, rax
+        sub rcx, rdx
+        sub rcx, 4
+        call .put32
+        pop rcx
+        ret
+.put32:
+        push rax
+        shl rcx, 32
+        shr rcx, 32
+        mov rax, [rdx]
+        shr rax, 32
+        shl rax, 32
+        or rax, rcx
+        mov [rdx], rax
+        pop rax
+        ret
+.fix_push:
+        mov rax, [r14+0x1F0010]
+        mov [rax], rdx
+        add rax, 8
+        mov [r14+0x1F0010], rax
+        ret
+.fix_patch_to:
+        mov rax, [r14+0x1F0010]
+        cmp rax, r9
+        jbe .fp_done
+        sub rax, 8
+        mov [r14+0x1F0010], rax
+        mov rdx, [rax]
+        call .patch_here
+        jmp .fix_patch_to
+.fp_done:
+        ret
+.brk_push:
+        mov rax, [r14+0x1F0020]
+        mov [rax], rdx
+        add rax, 8
+        mov [r14+0x1F0020], rax
+        ret
+.brk_patch_to:
+        mov rax, [r14+0x1F0020]
+        cmp rax, r9
+        jbe .bp_done
+        sub rax, 8
+        mov [r14+0x1F0020], rax
+        mov rdx, [rax]
+        call .patch_here
+        jmp .brk_patch_to
+.bp_done:
+        ret
+.ebytes:
+        mov rax, [rdx]
+        and rax, 255
+        call .emit
+        add rdx, 1
+        sub rcx, 1
+        cmp rcx, 0
+        jne .ebytes
+        ret
+.emit:
+        push r10
+        mov r10, rdi
+        sub r10, r12
+        cmp r10, 0x1FFFF0
+        jae .err
+        pop r10
+        mov [rdi], rax
+        add rdi, 1
+        ret
+.eimm:
+        mov rax, rdx
+        and rax, 255
+        call .emit
+        mov rax, rdx
+        shr rax, 8
+        and rax, 255
+        call .emit
+        mov rax, rdx
+        shr rax, 16
+        and rax, 255
+        call .emit
+        mov rax, rdx
+        shr rax, 24
+        and rax, 255
+        call .emit
+        ret
+.expect:
+        push rax
+        call .sksp
+        pop rax
+        cmp rsi, r13
+        jae .err
+        mov rcx, [rsi]
+        and rcx, 255
+        cmp rcx, rax
+        jne .err
+        add rsi, 1
+        ret
+.word:
+        call .sksp
+        mov r8, rsi
+        call .skipname
+        mov rcx, rsi
+        sub rcx, r8
+        ret
+.blank:
+        cmp rsi, r13
+        jae .err
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .eol
+        cmp rax, 13
+        je .eol
+        cmp rax, 45
+        jne .err
+        jmp .eol
+.iskw:
+        cmp rcx, r9
+        jne .kw_no
+        push r11
+        mov r11, 0
+.kw_l:
+        cmp r11, rcx
+        jae .kw_yes
+        mov rax, [r8+r11]
+        and rax, 255
+        mov r10, [rdx+r11]
+        and r10, 255
+        cmp rax, r10
+        jne .kw_no1
+        add r11, 1
+        jmp .kw_l
+.kw_yes:
+        pop r11
+        mov rax, 1
+        ret
+.kw_no1:
+        pop r11
+.kw_no:
+        mov rax, 0
+        ret
+.pint:
+        mov rdx, 0
+.pint_d:
+        mov rax, [rsi]
+        and rax, 255
+        sub rax, 48
+        cmp rax, 9
+        ja .pint_done
+        lea rdx, [rdx+rdx*4]
+        add rdx, rdx
+        add rdx, rax
+        add rsi, 1
+        jmp .pint_d
+.pint_done:
+        ret
+.sksp:
+        push rax
+.sksp_l:
+        cmp rsi, r13
+        jae .sksp_r
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 32
+        je .sksp_a
+        cmp rax, 9
+        je .sksp_a
+.sksp_r:
+        pop rax
+        ret
+.sksp_a:
+        add rsi, 1
+        jmp .sksp_l
+.eol:
+        call .sksp
+        cmp rsi, r13
+        jae .eol_ret
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        je .eol_take
+        cmp rax, 13
+        je .eol_take
+        cmp rax, 45
+        jne .err
+        mov rax, [rsi+1]
+        and rax, 255
+        cmp rax, 45
+        jne .err
+.eol_blind:
+        cmp rsi, r13
+        jae .eol_ret
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        cmp rax, 10
+        jne .eol_blind
+        ret
+.eol_take:
+        add rsi, 1
+        cmp rax, 13
+        jne .eol_ret
+        cmp rsi, r13
+        jae .eol_ret
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 10
+        jne .eol_ret
+        add rsi, 1
+.eol_ret:
+        ret
+.skipname:
+        cmp rsi, r13
+        jae .sn_no
+        mov rax, [rsi]
+        and rax, 255
+        cmp rax, 48
+        jb .sn_chka
+        cmp rax, 57
+        jbe .sn_yes
+.sn_chka:
+        cmp rax, 65
+        jb .sn_chku
+        cmp rax, 90
+        jbe .sn_yes
+.sn_chku:
+        cmp rax, 95
+        je .sn_yes
+        cmp rax, 97
+        jb .sn_no
+        cmp rax, 122
+        jbe .sn_yes
+.sn_no:
+        ret
+.sn_yes:
+        add rsi, 1
+        jmp .skipname
+.lookup_name:
+        call .lookup_opt
+        cmp r11, 0
+        je .err
+        ret
+.lookup_opt:
+        mov r9, r15
+.ln_loop:
+        cmp r9, 0
+        je .ln_none
+        sub r9, 1
+        mov r11, r9
+        call .sym_at
+        mov rdx, [r11+8]
+        cmp rdx, rcx
+        jne .ln_loop
+        mov r11, [r11]
+        mov rdx, 0
+.ln_cmp:
+        cmp rdx, rcx
+        jae .ln_found
+        mov rax, [r8+rdx]
+        and rax, 255
+        mov r10, [r11+rdx]
+        and r10, 255
+        cmp rax, r10
+        jne .ln_loop
+        add rdx, 1
+        jmp .ln_cmp
+.ln_found:
+        mov r11, r9
+        call .sym_at
+        mov rax, [r11+16]
+        ret
+.ln_none:
+        call .glob_find
+        cmp r11, 0
+        je .ln_gnone
+        mov rax, [r11+16]
+.ln_gnone:
+        ret
+.finalize:
+        mov rax, [r14+0x1F0038]
+        cmp rax, 1
+        jne .err
+        mov r9, 0
+.fx_loop:
+        cmp r9, [r14+0x1F0048]
+        jae .fx_done
+        mov r11, r9
+        lea r11, [r11+r11*2]
+        shl r11, 3
+        add r11, r14
+        add r11, 0x500000
+        mov r10, [r11+8]
+        shl r10, 6
+        add r10, r14
+        add r10, 0x600000
+        mov rax, [r10+16]
+        cmp rax, 0
+        je .err
+        mov rdx, [r11]
+        call .patch_to
+        add r9, 1
+        jmp .fx_loop
+.fx_done:
+        mov r8, rdi
+        sub r8, r12
+        sub r8, 120
+        mov r9, rbp
+        sub r9, r14
+        sub r9, 0x400000
+        mov rsi, r12
+        add rsi, 120
+        mov rdi, r14
+        add rdi, 0x200000
+        mov rcx, r8
+        call .copy8
+        mov rsi, r14
+        add rsi, 0x400000
+        mov rdi, r12
+        add rdi, 120
+        mov rcx, r9
+        call .copy8
+        mov rsi, r14
+        add rsi, 0x200000
+        mov rdi, r12
+        add rdi, 120
+        add rdi, r9
+        mov rcx, r8
+        call .copy8
+        mov rax, r8
+        add rax, r9
+        add rax, 120
+        mov [r12+96], rax
+        mov [r12+104], rax
+        mov rdx, r9
+        add rdx, 0x400078
+        add rdx, [r14+0x1F0030]
+        sub rdx, r12
+        sub rdx, 120
+        mov [r12+24], rdx
+        mov rdx, rax
+        mov rdi, 1
+        mov rsi, r12
+        mov rax, 1
+        syscall
+        mov rdi, 0
+        mov rax, 60
+        syscall
+.copy8:
+        cmp rcx, 0
+        jle .c8_done
+        mov rax, [rsi]
+        mov [rdi], rax
+        add rsi, 8
+        add rdi, 8
+        sub rcx, 8
+        jmp .copy8
+.c8_done:
+        ret
+.pstr:
+        add rsi, 1
+.ps_l:
+        cmp rsi, r13
+        jae .err
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        cmp rax, 34
+        je .ps_done
+        cmp rax, 10
+        je .err
+        cmp rax, 0
+        je .err
+        cmp rax, 92
+        jne .ps_put
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        cmp rax, 110
+        je .ps_n
+        cmp rax, 116
+        je .ps_t
+        cmp rax, 114
+        je .ps_r
+        cmp rax, 48
+        je .ps_0
+        cmp rax, 92
+        je .ps_put
+        cmp rax, 34
+        je .ps_put
+        cmp rax, 39
+        je .ps_put
+        cmp rax, 120
+        je .ps_x
+        jmp .err
+.ps_n:
+        mov rax, 10
+        jmp .ps_put
+.ps_t:
+        mov rax, 9
+        jmp .ps_put
+.ps_r:
+        mov rax, 13
+        jmp .ps_put
+.ps_0:
+        mov rax, 0
+        jmp .ps_put
+.ps_x:
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        call .hexd
+        shl rax, 4
+        mov rdx, rax
+        mov rax, [rsi]
+        and rax, 255
+        add rsi, 1
+        call .hexd
+        add rax, rdx
+.ps_put:
+        mov r10, rbp
+        sub r10, r14
+        cmp r10, 0x4FFFF0
+        jae .err
+        mov [rbp], rax
+        add rbp, 1
+        jmp .ps_l
+.ps_done:
+        ret
+.hexd:
+        sub rax, 48
+        cmp rax, 9
+        jbe .hd_ok
+        sub rax, 7
+        cmp rax, 10
+        jb .err
+        cmp rax, 15
+        jbe .hd_ok
+        sub rax, 32
+        cmp rax, 10
+        jb .err
+        cmp rax, 15
+        ja .err
+.hd_ok:
+        ret
+.err:
+        mov rcx, r14
+        mov rdx, 1
+.err_cnt:
+        cmp rcx, rsi
+        jae .err_cnt_done
+        cmp rcx, r13
+        jae .err_cnt_done
+        mov rax, [rcx]
+        and rax, 255
+        cmp rax, 10
+        jne .err_cnt_next
+        add rdx, 1
+.err_cnt_next:
+        add rcx, 1
+        jmp .err_cnt
+.err_cnt_done:
+        mov rax, rdx
+        mov rdi, r12
+        mov r9, 0
+.err_dig:
+        mov rdx, 0
+        mov r8, 10
+        div r8
+        add rdx, 48
+        mov [rdi+r9], rdx
+        add r9, 1
+        cmp rax, 0
+        jne .err_dig
+        mov rdi, 2
+        mov rsi, errmsg
+        mov rdx, 20
+        mov rax, 1
+        syscall
+.err_out:
+        cmp r9, 0
+        je .err_nl
+        sub r9, 1
+        mov rsi, r12
+        add rsi, r9
+        mov rdi, 2
+        mov rdx, 1
+        mov rax, 1
+        syscall
+        jmp .err_out
+.err_nl:
+        mov rdi, 2
+        mov rsi, nlmsg
+        mov rdx, 1
+        mov rax, 1
+        syscall
+        mov rdi, 2
+        mov rax, 60
+        syscall
+    end
+end
+rodata errmsg
+    ascii "oli1: error at line "
+end
+rodata nlmsg
+    ascii "\n"
+end
+rodata trapmsg
+    ascii "oli: trap\n"
+end
+rodata kw_module
+    ascii "module"
+end
+rodata kw_proc
+    ascii "proc"
+end
+rodata kw_entry
+    ascii "entry"
+end
+rodata kw_calls
+    ascii "calls"
+end
+rodata kw_permit
+    ascii "permit"
+end
+rodata kw_end
+    ascii "end"
+end
+rodata kw_elif
+    ascii "elif"
+end
+rodata kw_else
+    ascii "else"
+end
+rodata kw_ret
+    ascii "ret"
+end
+rodata kw_if
+    ascii "if"
+end
+rodata kw_while
+    ascii "while"
+end
+rodata kw_break
+    ascii "break"
+end
+rodata kw_continue
+    ascii "continue"
+end
+rodata kw_zone
+    ascii "zone"
+end
+rodata kw_loop
+    ascii "loop"
+end
+rodata kw_mmio
+    ascii "mmio"
+end
+rodata kw_at
+    ascii "at"
+end
+rodata kw_view
+    ascii "view"
+end
+rodata kw_bytes
+    ascii "bytes"
+end
+rodata kw_make
+    ascii "make"
+end
+rodata kw_layout
+    ascii "layout"
+end
+rodata kw_packed
+    ascii "packed"
+end
+rodata kw_align
+    ascii "align"
+end
+rodata kw_size
+    ascii "size"
+end
+rodata kw_ref
+    ascii "ref"
+end
+rodata kw_rw
+    ascii "rw"
+end
+rodata kw_or
+    ascii "or"
+end
+rodata kw_none
+    ascii "none"
+end
+rodata kw_fail
+    ascii "fail"
+end
+rodata kw_case
+    ascii "case"
+end
+rodata kw_when
+    ascii "when"
+end
+rodata kw_ok
+    ascii "ok"
+end
+rodata seq_jnz
+    byte 0x48, 0x85, 0xc0, 0x0f, 0x85
+end
+rodata seq_tordx
+    byte 0x48, 0x89, 0xc2
+end
+rodata seq_fail
+    byte 0xb8, 0x01, 0x00, 0x00, 0x00, 0xc9, 0xc3
+end
+rodata seq_okret
+    byte 0x48, 0x89, 0xc2, 0x31, 0xc0, 0xc9, 0xc3
+end
+rodata typetab
+    byte 2
+    ascii "u8      "
+    byte 1, 0, 0
+    byte 2
+    ascii "s8      "
+    byte 1, 1, 0
+    byte 4
+    ascii "byte    "
+    byte 1, 0, 0
+    byte 4
+    ascii "bool    "
+    byte 1, 0, 0
+    byte 3
+    ascii "u16     "
+    byte 2, 0, 0
+    byte 3
+    ascii "s16     "
+    byte 2, 1, 0
+    byte 3
+    ascii "u32     "
+    byte 4, 0, 0
+    byte 3
+    ascii "s32     "
+    byte 4, 1, 0
+    byte 3
+    ascii "u64     "
+    byte 8, 0, 0
+    byte 3
+    ascii "s64     "
+    byte 8, 1, 0
+    byte 4
+    ascii "word    "
+    byte 8, 1, 0
+    byte 5
+    ascii "uword   "
+    byte 8, 0, 0
+    byte 4
+    ascii "addr    "
+    byte 8, 0, 0
+    byte 8
+    ascii "physaddr"
+    byte 8, 0, 0
+    byte 3
+    ascii "ref     "
+    byte 8, 0, 0
+    byte 4
+    ascii "view    "
+    byte 16, 0, 1
+    byte 0
+end
+rodata seq_cmprdx
+    byte 0x48, 0x81, 0xfa
+end
+rodata seq_ld_u8
+    byte 0x0f, 0xb6, 0x80
+end
+rodata seq_ld_s8
+    byte 0x48, 0x0f, 0xbe, 0x80
+end
+rodata seq_ld_u16
+    byte 0x0f, 0xb7, 0x80
+end
+rodata seq_ld_s16
+    byte 0x48, 0x0f, 0xbf, 0x80
+end
+rodata seq_ld_u32
+    byte 0x8b, 0x80
+end
+rodata seq_ld_s32
+    byte 0x48, 0x63, 0x80
+end
+rodata seq_ld_64
+    byte 0x48, 0x8b, 0x80
+end
+rodata seq_ld_64rdx
+    byte 0x48, 0x8b, 0x90
+end
+rodata seq_st_8
+    byte 0x88, 0x88
+end
+rodata seq_st_16
+    byte 0x66, 0x89, 0x88
+end
+rodata seq_st_32
+    byte 0x89, 0x88
+end
+rodata seq_st_64
+    byte 0x48, 0x89, 0x88
+end
+rodata seq_st_64rdx
+    byte 0x48, 0x89, 0x90
+end
+rodata kw_wrap
+    ascii "wrap"
+end
+rodata kw_bits
+    ascii "bits"
+end
+rodata convtab
+    byte 2
+    ascii "u8      "
+    byte 1, 0, 0
+    byte 2
+    ascii "s8      "
+    byte 1, 1, 0
+    byte 4
+    ascii "byte    "
+    byte 1, 0, 0
+    byte 3
+    ascii "u16     "
+    byte 2, 0, 0
+    byte 3
+    ascii "s16     "
+    byte 2, 1, 0
+    byte 3
+    ascii "u32     "
+    byte 4, 0, 0
+    byte 3
+    ascii "s32     "
+    byte 4, 1, 0
+    byte 3
+    ascii "u64     "
+    byte 8, 0, 0
+    byte 3
+    ascii "s64     "
+    byte 8, 1, 0
+    byte 4
+    ascii "word    "
+    byte 8, 1, 0
+    byte 5
+    ascii "uword   "
+    byte 8, 0, 0
+    byte 0
+end
+rodata seq_wrap_u8
+    byte 0x0f, 0xb6, 0xc0
+end
+rodata seq_wrap_s8
+    byte 0x48, 0x0f, 0xbe, 0xc0
+end
+rodata seq_wrap_u16
+    byte 0x0f, 0xb7, 0xc0
+end
+rodata seq_wrap_s16
+    byte 0x48, 0x0f, 0xbf, 0xc0
+end
+rodata seq_wrap_u32
+    byte 0x89, 0xc0
+end
+rodata seq_wrap_s32
+    byte 0x48, 0x63, 0xc0
+end
+rodata kw_os
+    ascii "os"
+end
+rodata kw_syscall
+    ascii "syscall"
+end
+rodata kw_addr
+    ascii "addr"
+end
+rodata kw_len
+    ascii "len"
+end
+rodata seq_trap
+    byte 0xbf, 0x02, 0x00, 0x00, 0x00
+    byte 0x48, 0xc7, 0xc6, 0x78, 0x00, 0x40, 0x00
+    byte 0xba, 0x0a, 0x00, 0x00, 0x00
+    byte 0xb8, 0x01, 0x00, 0x00, 0x00, 0x0f, 0x05
+    byte 0xbf, 0x03, 0x00, 0x00, 0x00
+    byte 0xb8, 0x3c, 0x00, 0x00, 0x00, 0x0f, 0x05
+end
+rodata seq_prologue
+    byte 0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec
+end
+rodata seq_exit0
+    byte 0xbf, 0x00, 0x00, 0x00, 0x00, 0xb8, 0x3c, 0x00, 0x00, 0x00, 0x0f, 0x05
+end
+rodata seq_leave
+    byte 0x31, 0xd2, 0xc9, 0xc3
+end
+rodata spilltab
+    byte 0x48, 0x89, 0xbd, 0x48, 0x89, 0xb5, 0x48, 0x89, 0x95, 0x48, 0x89, 0x8d, 0x4c, 0x89, 0x85, 0x4c, 0x89, 0x8d
+end
+rodata argpop
+    byte 0x5f, 0x00, 0x5e, 0x00, 0x5a, 0x00, 0x59, 0x00, 0x41, 0x58, 0x41, 0x59
+end
+rodata seq_ret
+    byte 0x48, 0x89, 0xc7, 0xb8, 0x3c, 0x00, 0x00, 0x00, 0x0f, 0x05
+end
+rodata seq_binop
+    byte 0x48, 0x89, 0xc1, 0x58, 0x48, 0x39, 0xc8
+end
+rodata seq_movzx
+    byte 0x0f, 0xb6, 0xc0
+end
+rodata seq_add
+    byte 0x48, 0x01, 0xc8
+end
+rodata seq_or
+    byte 0x48, 0x09, 0xc8
+end
+rodata seq_xor
+    byte 0x48, 0x31, 0xc8
+end
+rodata seq_and
+    byte 0x48, 0x21, 0xc8
+end
+rodata seq_shl
+    byte 0x48, 0xd3, 0xe0
+end
+rodata seq_shr
+    byte 0x48, 0xd3, 0xe8
+end
+rodata seq_bitnot
+    byte 0x48, 0xf7, 0xd0
+end
+rodata seq_sub
+    byte 0x48, 0x29, 0xc8
+end
+rodata seq_imul
+    byte 0x48, 0x0f, 0xaf, 0xc1
+end
+rodata seq_idiv
+    byte 0x48, 0x99, 0x48, 0xf7, 0xf9
+end
+rodata seq_movrdx
+    byte 0x48, 0x89, 0xd0
+end
+rodata seq_neg
+    byte 0x48, 0xf7, 0xd8
+end
+rodata seq_load
+    byte 0x48, 0x8b, 0x85
+end
+rodata seq_loadrdx
+    byte 0x48, 0x8b, 0x95
+end
+rodata seq_store
+    byte 0x48, 0x89, 0x85
+end
+rodata seq_storerdx
+    byte 0x48, 0x89, 0x95
+end
+rodata seq_lea
+    byte 0x48, 0x8d, 0x85
+end
+rodata seq_jz
+    byte 0x48, 0x85, 0xc0, 0x0f, 0x84
+end
+rodata seq_rawload
+    byte 0x48, 0x8b, 0x00
+end
+rodata seq_rawstore
+    byte 0x48, 0x89, 0xc2, 0x58, 0x48, 0x89, 0x10
+end
+rodata seq_swap
+    byte 0x48, 0x89, 0xc2, 0x58
+end
+rodata seq_subload
+    byte 0x0f, 0xb6, 0x04, 0x01
+end
+rodata seq_substore
+    byte 0x88, 0x14, 0x01
+end
+rodata seq_subview
+    byte 0x48, 0x39, 0xc1
+end
+rodata seq_subview2
+    byte 0x48, 0x89, 0xc2, 0x48, 0x29, 0xca
+end
+rodata seq_mmap
+    byte 0x58, 0x48, 0x05, 0xff, 0x0f, 0x00, 0x00, 0x48, 0x25, 0x00, 0xf0, 0xff, 0xff, 0x50
+    byte 0x48, 0x89, 0xc6, 0xbf, 0x00, 0x00, 0x00, 0x00, 0xba, 0x03, 0x00, 0x00, 0x00
+    byte 0x41, 0xba, 0x22, 0x00, 0x00, 0x00, 0x49, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff
+    byte 0x45, 0x31, 0xc9, 0xb8, 0x09, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x48, 0x85, 0xc0
+end
+rodata seq_munmap
+    byte 0x48, 0x29, 0xfe, 0xb8, 0x0b, 0x00, 0x00, 0x00, 0x0f, 0x05
+end
+rodata seq_zbytes
+    byte 0x48, 0x89, 0xc1, 0x48, 0x8b, 0x95
+end
+rodata seq_zbytes2
+    byte 0x48, 0x8b, 0x42, 0x08, 0x48, 0x83, 0xc0, 0x0f, 0x48, 0x83, 0xe0, 0xf0
+    byte 0x49, 0x89, 0xc0, 0x49, 0x01, 0xc8, 0x4c, 0x3b, 0x42, 0x10
+end
+rodata seq_zbytes3
+    byte 0x4c, 0x89, 0x42, 0x08, 0x48, 0x89, 0xca
+end
+rodata poptab
+    byte 0x58, 0x00, 0x5f, 0x00, 0x5e, 0x00, 0x5a, 0x00, 0x41, 0x5a, 0x41, 0x58, 0x41, 0x59
+end
+rodata template
+    byte 0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00
+    byte 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x02, 0x00, 0x3e, 0x00, 0x01, 0x00, 0x00, 0x00
+    byte 0x78, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x00, 0x00, 0x00, 0x00
+    byte 0x40, 0x00, 0x38, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00
+    byte 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    byte 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+end

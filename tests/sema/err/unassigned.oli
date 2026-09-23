@@ -1,0 +1,16 @@
+proc main -> s32
+    entry
+    x : u8
+    if true
+        x <- 1
+    end
+    y := x
+    z : u32
+    while true
+        z <- 1
+    end
+    _w := z + u32(y)
+    ret 0
+end
+-- expect: E0220 @ 7:10
+-- expect: E0220 @ 12:11

@@ -1,0 +1,720 @@
+module olic.cfg
+-- The block form of OIR (docs/OIR_SPEC.md §3) and its verifier (§8).
+--
+-- `compiler/oir.oli` emits one instruction per value in evaluation order,
+-- with labels and jumps. This file cuts that stream into basic blocks, gives
+-- every block the single terminator §3 requires, links predecessors, numbers
+-- the reachable blocks in reverse postorder and computes the immediate
+-- dominator of each. `compiler/ssa.oli` then promotes places to values with
+-- phi nodes, and `compiler/x64.oli` lowers the blocks.
+--
+-- A terminator is held in the `Blk` record rather than in the instruction
+-- stream. A block that falls through into a label needs a `jump` the stream
+-- never emitted, and inserting one would renumber every value after it — a
+-- value is its instruction's index. Holding it in the block costs nothing and
+-- keeps the numbering of the stream the front end built.
+--
+-- The verifier reports the invariant of §8 that failed, by its number there:
+--
+--   1  a value is defined once and dominates every use of it
+--   2  each block ends in exactly one terminator and every target exists
+--   7  a check was removed without a proof (`compiler/ssa.oli` records none,
+--      so the count of trap sites must survive a rebuild exactly)
+--   9  the block form's own rule: phi nodes stand at the head of a block, one
+--      operand per predecessor, in predecessor order (§3, §5)
+--
+-- Invariants 3-6 and 8 of §8 concern permits, `own.move`, returned regions,
+-- volatile order and `never`-typed calls. This subset reaches none of them:
+-- the capability rule is enforced on the semantic graph by
+-- `compiler/check.oli`, and the other four constructs are refused with E0900
+-- before OIR is built. They are checked when they exist, not asserted now.
+
+proc new_blk(ob: rw ref Oir, first: u64) -> u64
+    permit os.syscall
+    if ob.nblk >= BLK_MAX
+        put(2, "olic: block arena exhausted\n")
+        os.syscall(60, 4)
+    end
+    b := ob.nblk
+    bk := blk_at(ob, b)
+    bk.first <- first
+    bk.n <- 0
+    bk.top <- 0
+    bk.ta <- 0
+    bk.tb <- 0
+    bk.tc <- 0
+    bk.pfirst <- 0
+    bk.npred <- 0
+    bk.idom <- 0
+    bk.rpo <- 0
+    bk.dffirst <- 0
+    bk.ndf <- 0
+    bk.dead <- 0
+    ob.nblk <- b + 1
+    ret b
+end
+
+proc build_blocks(ob: rw ref Oir, q: u64)
+    op := oproc_at(ob, q)
+    op.bfirst <- ob.nblk
+    map_labels(ob, op)
+    cut_blocks(ob, op)
+    op.nblk <- ob.nblk - op.bfirst
+    resolve_targets(ob, op)
+    order_blocks(ob, op)
+    build_preds(ob, op)
+    build_idoms(ob, op)
+end
+
+proc map_labels(ob: rw ref Oir, op: ref OProc)
+    -- Where each label leads: the first instruction that is not itself a
+    -- label, which is the first instruction of the block the label names.
+    permit os.syscall
+    last := op.first + op.n
+    i : u64 <- op.first
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op == O_LABEL
+            if ins.a >= LBLMAP_MAX
+                put(2, "olic: label map exhausted\n")
+                os.syscall(60, 4)
+            end
+            j : u64 <- i + 1
+            while j < last
+                jn := ins_at(ob, j)
+                if jn.op != O_LABEL
+                    break
+                end
+                j <- j + 1
+            end
+            cell_set(ob.lblmap, ins.a, j)
+        end
+        i <- i + 1
+    end
+end
+
+proc cut_blocks(ob: rw ref Oir, op: ref OProc)
+    -- A block starts at the first instruction, after a label and after a
+    -- terminator, and ends at the next terminator or at the next label. A
+    -- block ended by a label falls through, so it is given the `jump` that
+    -- makes the edge explicit; its target is recorded as an instruction index
+    -- and resolved to a block below, exactly like a label's.
+    last := op.first + op.n
+    cur : word <- -1
+    fall : word <- -1
+    i : u64 <- op.first
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op == O_LABEL
+            if cur >= 0
+                fall <- cur
+                cur <- -1
+            end
+            i <- i + 1
+            continue
+        end
+        if cur < 0
+            nb := new_blk(ob, i)
+            cur <- word.bits(nb)
+            if fall >= 0
+                bf := blk_at(ob, u64.bits(fall))
+                bf.top <- O_JMP
+                bf.ta <- i
+                fall <- -1
+            end
+        end
+        bk := blk_at(ob, u64.bits(cur))
+        cell_set(ob.iblk, i, u64.bits(cur))
+        if is_term(ins.op) == 1
+            bk.top <- ins.op
+            if ins.op == O_BRANCH
+                bk.ta <- ins.a
+                bk.tc <- cell_get(ob.lblmap, ins.val)
+            elif ins.op == O_JMP
+                bk.ta <- cell_get(ob.lblmap, ins.a)
+            else
+                bk.ta <- ins.a
+                bk.tb <- ins.b
+                bk.tc <- ins.c
+            end
+            cur <- -1
+        else
+            bk.n <- bk.n + 1
+        end
+        i <- i + 1
+    end
+end
+
+proc resolve_targets(ob: rw ref Oir, op: ref OProc)
+    -- Jump targets are instruction indices until here, and the instruction
+    -- that starts a block knows which block that is.
+    b : u64 <- op.bfirst
+    last := op.bfirst + op.nblk
+    while b < last
+        bk := blk_at(ob, b)
+        if bk.top == O_JMP
+            bk.ta <- cell_get(ob.iblk, bk.ta)
+        end
+        if bk.top == O_BRANCH
+            bk.tb <- b + 1
+            bk.tc <- cell_get(ob.iblk, bk.tc)
+        end
+        b <- b + 1
+    end
+end
+
+proc blk_succ(ob: ref Oir, b: u64, k: u64) -> word
+    -- Successor `k` of a block, or -1 when it has none.
+    bk := blk_at(ob, b)
+    if bk.top == O_JMP
+        if k == 0
+            ret word.bits(bk.ta)
+        end
+        ret -1
+    end
+    if bk.top == O_BRANCH
+        if k == 0
+            ret word.bits(bk.tb)
+        end
+        if k == 1
+            ret word.bits(bk.tc)
+        end
+    end
+    ret -1
+end
+
+proc build_preds(ob: rw ref Oir, op: ref OProc)
+    -- Counted first, then filled, so the predecessors of a block are
+    -- contiguous and in block order: that order is the order of the operands
+    -- of every phi the next stage puts in the block.
+    --
+    -- An edge out of a block no path reaches is not an edge: it would give a
+    -- live block a predecessor nothing arrives from, and a phi one operand
+    -- too many. `order_blocks` therefore runs before this, not after.
+    permit os.syscall
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        bk := blk_at(ob, b)
+        bk.npred <- 0
+        b <- b + 1
+    end
+    b <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            k : u64 <- 0
+            while k < 2
+                s := blk_succ(ob, b, k)
+                if s >= 0
+                    sb := blk_at(ob, u64.bits(s))
+                    sb.npred <- sb.npred + 1
+                end
+                k <- k + 1
+            end
+        end
+        b <- b + 1
+    end
+    base : u64 <- ob.npred
+    b <- op.bfirst
+    while b < last
+        bk2 := blk_at(ob, b)
+        bk2.pfirst <- base
+        base <- base + bk2.npred
+        bk2.npred <- 0
+        b <- b + 1
+    end
+    if base >= PRED_MAX
+        put(2, "olic: predecessor arena exhausted\n")
+        os.syscall(60, 4)
+    end
+    ob.npred <- base
+    b <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            k2 : u64 <- 0
+            while k2 < 2
+                s2 := blk_succ(ob, b, k2)
+                if s2 >= 0
+                    sb2 := blk_at(ob, u64.bits(s2))
+                    cell_set(ob.preds, sb2.pfirst + sb2.npred, b)
+                    sb2.npred <- sb2.npred + 1
+                end
+                k2 <- k2 + 1
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc pred_of(ob: ref Oir, b: u64, k: u64) -> u64
+    bk := blk_at(ob, b)
+    ret cell_get(ob.preds, bk.pfirst + k)
+end
+
+proc order_blocks(ob: rw ref Oir, op: ref OProc)
+    -- Postorder from the entry block, then reverse-postorder numbers from 1.
+    -- A block that the walk never reaches keeps the number 0 and is
+    -- unreachable: the dominator fixpoint and the verifier both skip it, and
+    -- `compiler/ssa.oli` does not build it at all.
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        cell_set(ob.work, b, 0)
+        bk := blk_at(ob, b)
+        bk.rpo <- 0
+        bk.idom <- 0
+        b <- b + 1
+    end
+    if op.nblk == 0
+        ret
+    end
+    ob.nord <- 0
+    dfs_post(ob, op, op.bfirst)
+    k : u64 <- 0
+    while k < ob.nord
+        bk2 := blk_at(ob, cell_get(ob.order, op.bfirst + k))
+        bk2.rpo <- ob.nord - k
+        k <- k + 1
+    end
+end
+
+proc dfs_post(ob: rw ref Oir, op: ref OProc, b: u64)
+    if cell_get(ob.work, b) == 1
+        ret
+    end
+    cell_set(ob.work, b, 1)
+    -- The second successor first: the first is the one the branch falls
+    -- through to, so walking it last puts it first in reverse postorder and
+    -- the order the blocks were written in is the order they come back in.
+    k : u64 <- 2
+    while k > 0
+        k <- k - 1
+        s := blk_succ(ob, b, k)
+        if s >= 0
+            dfs_post(ob, op, u64.bits(s))
+        end
+    end
+    cell_set(ob.order, op.bfirst + ob.nord, b)
+    ob.nord <- ob.nord + 1
+end
+
+proc build_idoms(ob: rw ref Oir, op: ref OProc)
+    -- Cooper, Harvey and Kennedy: walk the reachable blocks in reverse
+    -- postorder, intersecting the dominators of the predecessors already
+    -- known, until nothing changes. `idom` is the block plus one, so that 0
+    -- means "not computed" and a block can be its own dominator.
+    if op.nblk == 0
+        ret
+    end
+    ent := op.bfirst
+    eb := blk_at(ob, ent)
+    eb.idom <- ent + 1
+    again : u64 <- 1
+    while again == 1
+        again <- 0
+        k : u64 <- ob.nord
+        while k > 0
+            k <- k - 1
+            b := cell_get(ob.order, op.bfirst + k)
+            if b != ent
+                nd : word <- -1
+                j : u64 <- 0
+                bk := blk_at(ob, b)
+                while j < bk.npred
+                    p := pred_of(ob, b, j)
+                    pb := blk_at(ob, p)
+                    if pb.idom > 0
+                        if nd < 0
+                            nd <- word.bits(p)
+                        else
+                            nd <- word.bits(dom_meet(ob, p, u64.bits(nd)))
+                        end
+                    end
+                    j <- j + 1
+                end
+                if nd >= 0
+                    if bk.idom != u64.bits(nd) + 1
+                        bk.idom <- u64.bits(nd) + 1
+                        again <- 1
+                    end
+                end
+            end
+        end
+    end
+end
+
+proc blk_rpo(ob: ref Oir, b: u64) -> u64
+    bk := blk_at(ob, b)
+    ret bk.rpo
+end
+
+proc blk_idom(ob: ref Oir, b: u64) -> u64
+    bk := blk_at(ob, b)
+    ret bk.idom - 1
+end
+
+proc dom_meet(ob: ref Oir, x: u64, y: u64) -> u64
+    a : u64 <- x
+    b : u64 <- y
+    while a != b
+        while blk_rpo(ob, a) > blk_rpo(ob, b)
+            a <- blk_idom(ob, a)
+        end
+        while blk_rpo(ob, b) > blk_rpo(ob, a)
+            b <- blk_idom(ob, b)
+        end
+    end
+    ret a
+end
+
+proc dominates(ob: ref Oir, a: u64, b: u64) -> word
+    x : u64 <- b
+    loop
+        if x == a
+            ret 1
+        end
+        bk := blk_at(ob, x)
+        if bk.idom == 0
+            ret 0
+        end
+        nx := bk.idom - 1
+        if nx == x
+            ret 0
+        end
+        x <- nx
+    end
+end
+
+-- The verifier ------------------------------------------------------------------
+
+proc defines_value(op: u64) -> word
+    -- The instructions that produce a `%n`. A store, an argument marker, a
+    -- removed instruction and a terminator do not, so naming one as an
+    -- operand is invariant 1 failing. A folded `trap` does: it stands where
+    -- an operation stood, and the operands that named that operation still
+    -- name it. Nothing reads what it leaves, because it does not return.
+    if op == O_STORE
+        ret 0
+    end
+    if op == O_ARG
+        ret 0
+    end
+    if op == O_LABEL
+        ret 0
+    end
+    if op == O_DEAD
+        ret 0
+    end
+    if op == O_RSTORE
+        ret 0
+    end
+    if op == O_CHKB
+        ret 0
+    end
+    if op == O_CHKR
+        ret 0
+    end
+    if op == O_ZNEW
+        ret 0
+    end
+    if op == O_ZEND
+        ret 0
+    end
+    if is_term(op) == 1
+        ret 0
+    end
+    ret 1
+end
+
+proc vfail(pg: ref Prog, ob: rw ref Oir, q: u64, inv: u64, what: view u8)
+    ob.vfail <- inv
+    op := oproc_at(ob, q)
+    v := proc_at(pg, op.pi)
+    cx := mod_ctx(pg, v.mod)
+    nd := node_at(cx, v.node)
+    put(2, "olic: OIR invariant ")
+    put_uint(2, pg.tmp, inv)
+    put(2, " violated in ")
+    put(2, tok_text(cx, nd.t0))
+    put(2, ": ")
+    put(2, what)
+    put(2, "\n")
+end
+
+proc vwhere(pg: ref Prog, ob: rw ref Oir, i: u64, v: u64)
+    -- The instruction and the operand a failure was found at, numbered from
+    -- the start of the procedure as the printed form numbers them.
+    op := oproc_at(ob, ob.curp)
+    put(2, "  at %")
+    put_uint(2, pg.tmp, i - op.first)
+    put(2, ", operand ")
+    put_uint(2, pg.tmp, v)
+    put(2, "\n")
+end
+
+proc verify_oir(pg: ref Prog, ob: rw ref Oir) -> u64
+    q : u64 <- 0
+    while q < ob.nproc
+        verify_proc(pg, ob, q)
+        if ob.vfail > 0
+            ret ob.vfail
+        end
+        q <- q + 1
+    end
+    ret 0
+end
+
+proc verify_proc(pg: ref Prog, ob: rw ref Oir, q: u64)
+    op := oproc_at(ob, q)
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            verify_shape(pg, ob, q, b)
+            if ob.vfail > 0
+                ret
+            end
+        end
+        b <- b + 1
+    end
+    b <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            if bk.rpo > 0
+                verify_uses(pg, ob, q, b)
+                if ob.vfail > 0
+                    ret
+                end
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc verify_shape(pg: ref Prog, ob: rw ref Oir, q: u64, b: u64)
+    -- Invariant 2, and the phi rule of §3.
+    op := oproc_at(ob, q)
+    bk := blk_at(ob, b)
+    if bk.top == 0
+        vfail(pg, ob, q, 2, "a block has no terminator")
+        ret
+    end
+    k : u64 <- 0
+    while k < 2
+        s := blk_succ(ob, b, k)
+        if s >= 0
+            if u64.bits(s) < op.bfirst
+                vfail(pg, ob, q, 2, "a terminator names a block of another procedure")
+                ret
+            end
+            if u64.bits(s) >= op.bfirst + op.nblk
+                vfail(pg, ob, q, 2, "a terminator names a block that does not exist")
+                ret
+            end
+            if live_blk(ob, u64.bits(s)) == 0
+                vfail(pg, ob, q, 2, "a terminator names a block a pass removed")
+                ret
+            end
+        end
+        k <- k + 1
+    end
+    inhead : u64 <- 1
+    i : u64 <- bk.first
+    ilast := bk.first + bk.n
+    while i < ilast
+        ins := ins_at(ob, i)
+        if ins.op == O_DEAD
+            i <- i + 1
+            continue
+        end
+        if is_term(ins.op) == 1
+            vfail(pg, ob, q, 2, "a terminator stands inside a block")
+            ret
+        end
+        if ins.op == O_LABEL
+            vfail(pg, ob, q, 2, "a label stands inside a block")
+            ret
+        end
+        if ins.op == O_PHI
+            if inhead == 0
+                vfail(pg, ob, q, 9, "a phi stands after an ordinary instruction")
+                ret
+            end
+            if ins.b != bk.npred
+                vfail(pg, ob, q, 9, "a phi has one operand per predecessor")
+                ret
+            end
+            j : u64 <- 0
+            while j < ins.b
+                pa := phiarg_at(ob, ins.a + j)
+                if pa.blk != pred_of(ob, b, j)
+                    vfail(pg, ob, q, 9, "the operands of a phi are not in predecessor order")
+                    ret
+                end
+                j <- j + 1
+            end
+        else
+            inhead <- 0
+        end
+        i <- i + 1
+    end
+end
+
+proc verify_uses(pg: ref Prog, ob: rw ref Oir, q: u64, b: u64)
+    -- Invariant 1. An ordinary operand is defined by an instruction that
+    -- dominates the use; a phi operand is defined by one that dominates the
+    -- end of the predecessor it arrives from, which is what makes the copy on
+    -- that edge legal.
+    bk := blk_at(ob, b)
+    i : u64 <- bk.first
+    ilast := bk.first + bk.n
+    while i < ilast
+        ins := ins_at(ob, i)
+        if ins.op == O_DEAD
+            i <- i + 1
+            continue
+        end
+        if ins.op == O_PHI
+            j : u64 <- 0
+            while j < ins.b
+                pa := phiarg_at(ob, ins.a + j)
+                verify_one(pg, ob, q, pa.val, pa.blk, at_end(ob, pa.blk))
+                if ob.vfail > 0
+                    ret
+                end
+                j <- j + 1
+            end
+        else
+            verify_operands(pg, ob, q, i)
+            if ob.vfail > 0
+                ret
+            end
+        end
+        i <- i + 1
+    end
+    if bk.top == O_BRANCH
+        verify_one(pg, ob, q, bk.ta, b, ilast)
+    end
+    if bk.top == O_RET
+        if bk.tc > 0
+            verify_one(pg, ob, q, bk.ta, b, ilast)
+            if ob.vfail > 0
+                ret
+            end
+        end
+        if bk.tc == 2
+            verify_one(pg, ob, q, bk.tb, b, ilast)
+        end
+    end
+end
+
+proc verify_operands(pg: ref Prog, ob: rw ref Oir, q: u64, i: u64)
+    ins := ins_at(ob, i)
+    op := ins.op
+    bl := cell_get(ob.iblk, i)
+    if op_uses_a(op) == 1
+        verify_one(pg, ob, q, ins.a, bl, i)
+        if ob.vfail > 0
+            ret
+        end
+    end
+    if op_uses_b(op) == 1
+        verify_one(pg, ob, q, ins.b, bl, i)
+        if ob.vfail > 0
+            ret
+        end
+    end
+    if op_uses_val(op) == 1
+        verify_one(pg, ob, q, ins.val, bl, i)
+    end
+end
+
+proc verify_one(pg: ref Prog, ob: rw ref Oir, q: u64, v: u64, atb: u64, upos: u64)
+    -- `atb` is the block the use belongs to and `upos` the position in the
+    -- stream it must precede: the instruction itself, or, for a phi operand,
+    -- the end of the predecessor the operand arrives from.
+    op := oproc_at(ob, q)
+    ob.curp <- q
+    if v < op.first
+        vfail(pg, ob, q, 1, "an operand names a value of another procedure")
+        vwhere(pg, ob, upos, v)
+        ret
+    end
+    if v >= op.first + op.n
+        vfail(pg, ob, q, 1, "an operand names a value that does not exist")
+        ret
+    end
+    d := ins_at(ob, v)
+    if defines_value(d.op) == 0
+        vfail(pg, ob, q, 1, "an operand names an instruction that defines no value")
+        ret
+    end
+    db := cell_get(ob.iblk, v)
+    if db == atb
+        if v >= upos
+            vfail(pg, ob, q, 1, "a value is used before it is defined")
+        end
+        ret
+    end
+    if dominates(ob, db, atb) == 0
+        vfail(pg, ob, q, 1, "a value does not dominate a use of it")
+    end
+end
+
+proc at_end(ob: ref Oir, b: u64) -> u64
+    bk := blk_at(ob, b)
+    ret bk.first + bk.n
+end
+
+proc count_checks(ob: ref Oir) -> u64
+    -- Every trap site of every procedure, counted over the stream each one
+    -- currently owns. `compiler/ssa.oli` removes no check and records no
+    -- proof, so this number must survive its rebuild exactly (invariant 7).
+    n : u64 <- 0
+    q : u64 <- 0
+    while q < ob.nproc
+        op := oproc_at(ob, q)
+        i : u64 <- op.first
+        last := op.first + op.n
+        while i < last
+            ins := ins_at(ob, i)
+            if ins.op != O_DEAD
+                if ins.site > 0
+                    n <- n + 1
+                end
+                if ins.site2 > 0
+                    n <- n + 1
+                end
+            end
+            i <- i + 1
+        end
+        q <- q + 1
+    end
+    ret n
+end
+
+proc verify_ssa(pg: ref Prog, ob: rw ref Oir, before: u64) -> u64
+    -- The whole of §8 this stage can reach, plus the rule only a rewrite can
+    -- break: every check that stood in the stream before it either still
+    -- stands or left a proof behind (§8.7). `mem2reg` records none, so there
+    -- it is simple equality; after the passes the proofs make up the rest.
+    permit os.syscall
+    r := verify_oir(pg, ob)
+    if r > 0
+        ret r
+    end
+    after := count_checks(ob) + ob.nproof
+    if after != before
+        put(2, "olic: OIR invariant 7 violated: ")
+        put_uint(2, pg.tmp, before)
+        put(2, " checks before, ")
+        put_uint(2, pg.tmp, count_checks(ob))
+        put(2, " after and ")
+        put_uint(2, pg.tmp, ob.nproof)
+        put(2, " removed with a proof\n")
+        ob.vfail <- 7
+        ret 7
+    end
+    ret 0
+end

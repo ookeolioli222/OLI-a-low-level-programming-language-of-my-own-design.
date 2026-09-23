@@ -1,0 +1,7 @@
+proc start
+    entry
+    permit os.syscall
+    s := "a\tb\x41\\\"\'\r\0\n"
+    os.syscall(1, 1, s.addr, s.len)
+    os.syscall(60, 0)
+end

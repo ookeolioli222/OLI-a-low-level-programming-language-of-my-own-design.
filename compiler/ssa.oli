@@ -1,0 +1,552 @@
+module olic.ssa
+-- `mem2reg` (docs/OIR_SPEC.md §6): the places of a procedure become values,
+-- and a place that reaches a join with more than one definition becomes the
+-- phi §3 puts at the head of that block. It is the pass that makes the form
+-- SSA; without it every value is already defined once, and no phi is ever
+-- needed, because every assignment goes through a frame word.
+--
+-- A place is promoted unless its address is taken (§2.1): a local read and
+-- written only by whole-word `load frame.k` and `store frame.k` becomes
+-- values, and one that an `addr.of frame.k` names keeps its words, because
+-- what is written through that address is not written through the slot. The
+-- triple of a `zone` is the place that needs this.
+--
+-- The phis are placed by the iterated dominance frontier of the blocks that
+-- write the place (Cytron et al.), narrowed to the blocks the place is live
+-- into. That is why nothing has to be removed again afterwards: the form is
+-- built pruned rather than built maximal and cleaned up.
+--
+-- The liveness is not an optimization. A phi for a place that is not live at
+-- the join has no value to take from at least one of its predecessors — the
+-- place was never written on that path — and there is no such thing as an
+-- operand that is nothing. Definite assignment (`compiler/check.oli`) is what
+-- makes the converse true: a place that *is* live at a join was written on
+-- every path to it, so every operand of every phi built here exists.
+--
+-- The rebuild appends: the SSA form of a procedure is emitted after the
+-- stream it is built from, and the `OProc` record is moved onto it. A value
+-- is its instruction's index, so a phi cannot be inserted into the head of a
+-- block that already exists — the whole procedure is rewritten instead, which
+-- also drops the blocks no path reaches. That is not the DCE pass of §6: a
+-- block with no reachable predecessor has no value for a place to arrive
+-- with, so building it is not possible rather than merely wasteful.
+
+proc build_ssa(ob: rw ref Oir)
+    q : u64 <- 0
+    while q < ob.nproc
+        ssa_proc(ob, q)
+        q <- q + 1
+    end
+end
+
+proc ssa_slots(ob: rw ref Oir, q: u64) -> u64
+    permit os.syscall
+    op := oproc_at(ob, q)
+    n := op.nloc * LOC_WORDS + op.ntmp
+    if n > SLOT_MAX
+        put(2, "olic: procedure has more places than SSA construction holds\n")
+        os.syscall(60, 4)
+    end
+    ret n
+end
+
+proc ssa_proc(ob: rw ref Oir, q: u64)
+    permit os.syscall
+    op := oproc_at(ob, q)
+    if op.nblk == 0
+        ret
+    end
+    ob.nslot <- ssa_slots(ob, q)
+    mark_addr_taken(ob, op)
+    oldb := op.bfirst
+    oldn := op.nblk
+    -- `rpo` and the walk order belong to whichever procedure was ordered
+    -- last, so this one is ordered again before its blocks are copied.
+    order_blocks(ob, op)
+    nb := copy_blocks(ob, op)
+    if ob.nslot * nb > ENDDEF_MAX
+        put(2, "olic: procedure too large for SSA construction\n")
+        os.syscall(60, 4)
+    end
+    order_blocks(ob, op)
+    build_preds(ob, op)
+    build_idoms(ob, op)
+    build_df(ob, op)
+    build_live(ob, op)
+    place_phis(ob, op, oldb, oldn)
+    rename(ob, op)
+    finish_terms(ob, op)
+    fill_phis(ob, op)
+end
+
+proc mark_addr_taken(ob: rw ref Oir, op: ref OProc)
+    -- The places an `addr.of frame.k` names. They keep their words, and the
+    -- loads and stores that reach them stay in the stream.
+    s : u64 <- 0
+    while s < ob.nslot
+        cell_set(ob.noprom, s, 0)
+        s <- s + 1
+    end
+    i : u64 <- op.first
+    last := op.first + op.n
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op == O_FADDR
+            if ins.a < ob.nslot
+                cell_set(ob.noprom, ins.a, 1)
+            end
+        end
+        i <- i + 1
+    end
+end
+
+proc promotable(ob: ref Oir, s: u64) -> word
+    if cell_get(ob.noprom, s) == 1
+        ret 0
+    end
+    ret 1
+end
+
+proc copy_blocks(ob: rw ref Oir, op: rw ref OProc) -> u64
+    -- One new block for each old block a path reaches. The old block records
+    -- the new one in `work`, which the walk that follows is finished with.
+    oldb := op.bfirst
+    oldlast := op.bfirst + op.nblk
+    newb := ob.nblk
+    b : u64 <- oldb
+    while b < oldlast
+        cell_set(ob.work, b, 0)
+        b <- b + 1
+    end
+    -- In reverse postorder, so that a block is numbered, and below rebuilt,
+    -- after the one that dominates it. For structured control flow that is
+    -- also the order the blocks were written in.
+    k : u64 <- ob.nord
+    while k > 0
+        k <- k - 1
+        o := cell_get(ob.order, oldb + k)
+        cell_set(ob.work, o, new_blk(ob, 0) + 1)
+    end
+    n := ob.nblk - newb
+    b <- oldb
+    while b < oldlast
+        m := cell_get(ob.work, b)
+        if m > 0
+            ok := blk_at(ob, b)
+            nk := blk_at(ob, m - 1)
+            nk.first <- b
+            nk.top <- ok.top
+            nk.ta <- ok.ta
+            nk.tb <- ok.tb
+            nk.tc <- ok.tc
+            if ok.top == O_JMP
+                nk.ta <- cell_get(ob.work, ok.ta) - 1
+            end
+            if ok.top == O_BRANCH
+                nk.tb <- cell_get(ob.work, ok.tb) - 1
+                nk.tc <- cell_get(ob.work, ok.tc) - 1
+            end
+        end
+        b <- b + 1
+    end
+    op.bfirst <- newb
+    op.nblk <- n
+    ret n
+end
+
+proc build_df(ob: rw ref Oir, op: ref OProc)
+    -- The dominance frontier of each block (Cytron et al.): counted first,
+    -- then filled, so each block's frontier is contiguous. `dfmark` holds the
+    -- join currently being walked, which is what keeps one block out of the
+    -- same frontier twice.
+    permit os.syscall
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        bk := blk_at(ob, b)
+        bk.ndf <- 0
+        cell_set(ob.dfmark, b, 0)
+        b <- b + 1
+    end
+    df_walk(ob, op, 0)
+    base : u64 <- ob.ndf
+    b <- op.bfirst
+    while b < last
+        bk2 := blk_at(ob, b)
+        bk2.dffirst <- base
+        base <- base + bk2.ndf
+        bk2.ndf <- 0
+        cell_set(ob.dfmark, b, 0)
+        b <- b + 1
+    end
+    if base > DF_MAX
+        put(2, "olic: dominance-frontier arena exhausted\n")
+        os.syscall(60, 4)
+    end
+    ob.ndf <- base
+    df_walk(ob, op, 1)
+end
+
+proc df_walk(ob: rw ref Oir, op: ref OProc, fill: u64)
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        bk := blk_at(ob, b)
+        if bk.npred > 1
+            k : u64 <- 0
+            while k < bk.npred
+                r : u64 <- pred_of(ob, b, k)
+                stop := blk_idom(ob, b)
+                while r != stop
+                    if cell_get(ob.dfmark, r) != b + 1
+                        cell_set(ob.dfmark, r, b + 1)
+                        rk := blk_at(ob, r)
+                        if fill == 1
+                            cell_set(ob.df, rk.dffirst + rk.ndf, b)
+                        end
+                        rk.ndf <- rk.ndf + 1
+                    end
+                    r <- blk_idom(ob, r)
+                end
+                k <- k + 1
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc old_blk_of(ob: ref Oir, b: u64) -> u64
+    -- `copy_blocks` left the block this one was copied from in `first`, where
+    -- it stays until `rename` puts the new stream position there.
+    bk := blk_at(ob, b)
+    ret bk.first
+end
+
+proc build_live(ob: rw ref Oir, op: ref OProc)
+    -- Which places are live on entry to each block: read backwards through
+    -- the block, then round the graph until nothing changes. Walking in
+    -- postorder visits a block after its successors, so one pass usually
+    -- settles everything but the back edges.
+    n := ob.nslot * op.nblk
+    i : u64 <- 0
+    while i < n
+        cell_set(ob.livein, i, 0)
+        i <- i + 1
+    end
+    again : u64 <- 1
+    while again == 1
+        again <- 0
+        k : u64 <- 0
+        while k < ob.nord
+            if live_one(ob, op, cell_get(ob.order, op.bfirst + k)) == 1
+                again <- 1
+            end
+            k <- k + 1
+        end
+    end
+end
+
+proc live_one(ob: rw ref Oir, op: ref OProc, b: u64) -> word
+    nslot := ob.nslot
+    s : u64 <- 0
+    while s < nslot
+        cell_set(ob.live, s, 0)
+        s <- s + 1
+    end
+    k : u64 <- 0
+    while k < 2
+        sc := blk_succ(ob, b, k)
+        if sc >= 0
+            base := (u64.bits(sc) - op.bfirst) * nslot
+            s <- 0
+            while s < nslot
+                if cell_get(ob.livein, base + s) == 1
+                    cell_set(ob.live, s, 1)
+                end
+                s <- s + 1
+            end
+        end
+        k <- k + 1
+    end
+    ok := blk_at(ob, old_blk_of(ob, b))
+    i : u64 <- ok.first + ok.n
+    while i > ok.first
+        i <- i - 1
+        ins := ins_at(ob, i)
+        if ins.op == O_STORE
+            cell_set(ob.live, ins.a, 0)
+        elif ins.op == O_LOAD
+            cell_set(ob.live, ins.a, 1)
+        end
+    end
+    changed : word <- 0
+    mine := (b - op.bfirst) * nslot
+    s <- 0
+    while s < nslot
+        if cell_get(ob.livein, mine + s) != cell_get(ob.live, s)
+            cell_set(ob.livein, mine + s, cell_get(ob.live, s))
+            changed <- 1
+        end
+        s <- s + 1
+    end
+    ret changed
+end
+
+proc place_phis(ob: rw ref Oir, op: ref OProc, oldb: u64, oldn: u64)
+    -- A place needs a phi in every block of the iterated dominance frontier
+    -- of the blocks that write it. `phin` records where, and `rename` emits
+    -- them in place order at the head of the block.
+    n := ob.nslot
+    i : u64 <- 0
+    while i < n * op.nblk
+        cell_set(ob.phin, i, 0)
+        i <- i + 1
+    end
+    s : u64 <- 0
+    while s < n
+        if promotable(ob, s) == 1
+            place_one(ob, op, oldb, oldn, s)
+        end
+        s <- s + 1
+    end
+end
+
+proc place_one(ob: rw ref Oir, op: ref OProc, oldb: u64, oldn: u64, s: u64)
+    -- The worklist is the blocks that write `s`, and a block that gains a phi
+    -- joins it, because the phi is itself a definition. A block reaches it at
+    -- most twice, once for each reason, which is what bounds it.
+    permit os.syscall
+    if op.nblk * 2 > BLK_MAX
+        put(2, "olic: phi worklist exhausted\n")
+        os.syscall(60, 4)
+    end
+    last := oldb + oldn
+    nw : u64 <- 0
+    b : u64 <- oldb
+    while b < last
+        m := cell_get(ob.work, b)
+        if m > 0
+            if writes_slot(ob, b, s) == 1
+                cell_set(ob.wl, nw, m - 1)
+                nw <- nw + 1
+            end
+        end
+        b <- b + 1
+    end
+    while nw > 0
+        nw <- nw - 1
+        x := cell_get(ob.wl, nw)
+        xk := blk_at(ob, x)
+        k : u64 <- 0
+        while k < xk.ndf
+            y := cell_get(ob.df, xk.dffirst + k)
+            idx := (y - op.bfirst) * ob.nslot + s
+            if cell_get(ob.phin, idx) == 0
+                if cell_get(ob.livein, idx) == 1
+                    cell_set(ob.phin, idx, 1)
+                    cell_set(ob.wl, nw, y)
+                    nw <- nw + 1
+                end
+            end
+            k <- k + 1
+        end
+    end
+end
+
+proc writes_slot(ob: ref Oir, b: u64, s: u64) -> word
+    bk := blk_at(ob, b)
+    i : u64 <- bk.first
+    last := bk.first + bk.n
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op == O_STORE
+            if ins.a == s
+                ret 1
+            end
+        end
+        i <- i + 1
+    end
+    ret 0
+end
+
+-- The rebuild ------------------------------------------------------------------
+
+proc rename(ob: rw ref Oir, op: rw ref OProc)
+    -- Blocks in reverse postorder, so the block a value arrives from has been
+    -- rebuilt before the block that reads it. For structured control flow
+    -- that is also the order they were written in.
+    op.first <- ob.nins
+    op.nphi <- 0
+    k : u64 <- ob.nord
+    while k > 0
+        k <- k - 1
+        rename_blk(ob, op, cell_get(ob.order, op.bfirst + k))
+    end
+    op.n <- ob.nins - op.first
+    op.nval <- op.n
+end
+
+proc rename_blk(ob: rw ref Oir, op: rw ref OProc, b: u64)
+    bk := blk_at(ob, b)
+    -- `copy_blocks` left the block this one was copied from in `first`.
+    oldk := blk_at(ob, bk.first)
+    bk.first <- ob.nins
+    bk.n <- 0
+    nslot := ob.nslot
+    -- The value of each place on entry: the phi this block was given, or the
+    -- value at the end of the block that dominates it. The entry block starts
+    -- with none, and definite assignment (`compiler/check.oli`) is what makes
+    -- that safe.
+    np : u64 <- 0
+    s : u64 <- 0
+    while s < nslot
+        if promotable(ob, s) == 0
+            cell_set(ob.cur, s, 0)
+        elif cell_get(ob.phin, (b - op.bfirst) * nslot + s) == 1
+            v := emit_ins(ob, O_PHI, 0, bk.npred, 0, s)
+            bk.n <- bk.n + 1
+            cell_set(ob.cur, s, v + 1)
+            np <- np + 1
+        elif b == op.bfirst
+            cell_set(ob.cur, s, 0)
+        else
+            cell_set(ob.cur, s, cell_get(ob.enddef, (blk_idom(ob, b) - op.bfirst) * nslot + s))
+        end
+        s <- s + 1
+    end
+    if np > op.nphi
+        op.nphi <- np
+    end
+    i : u64 <- oldk.first
+    ilast := oldk.first + oldk.n
+    while i < ilast
+        ins := ins_at(ob, i)
+        if ins.op == O_LOAD
+            if promotable(ob, ins.a) == 1
+                cell_set(ob.vmap, i, cell_get(ob.cur, ins.a))
+            else
+                cell_set(ob.vmap, i, emit_moved(ob, i) + 1)
+                bk.n <- bk.n + 1
+            end
+        elif ins.op == O_STORE
+            if promotable(ob, ins.a) == 1
+                cell_set(ob.cur, ins.a, cell_get(ob.vmap, ins.b))
+            else
+                emit_moved(ob, i)
+                bk.n <- bk.n + 1
+            end
+        else
+            cell_set(ob.vmap, i, emit_moved(ob, i) + 1)
+            bk.n <- bk.n + 1
+        end
+        i <- i + 1
+    end
+    s <- 0
+    while s < nslot
+        cell_set(ob.enddef, (b - op.bfirst) * nslot + s, cell_get(ob.cur, s))
+        s <- s + 1
+    end
+end
+
+proc mapped(ob: ref Oir, v: u64) -> u64
+    -- The value `v` became. A place that no definition reaches would read 0
+    -- here; the front end rejects that (E0104) long before OIR exists.
+    m := cell_get(ob.vmap, v)
+    if m == 0
+        ret 0
+    end
+    ret m - 1
+end
+
+proc emit_moved(ob: rw ref Oir, i: u64) -> u64
+    -- The same instruction over the values its operands became. The width,
+    -- the signedness and both trap sites are copied, so the rebuild removes
+    -- no check (invariant 7).
+    old := ins_at(ob, i)
+    a : u64 <- old.a
+    b : u64 <- old.b
+    v : u64 <- old.val
+    if op_uses_a(old.op) == 1
+        a <- mapped(ob, old.a)
+    end
+    if op_uses_b(old.op) == 1
+        b <- mapped(ob, old.b)
+    end
+    if op_uses_val(old.op) == 1
+        v <- mapped(ob, old.val)
+    end
+    n := emit_ins(ob, old.op, a, b, old.c, v)
+    ni := ins_at(ob, n)
+    ni.bop <- old.bop
+    ni.node <- old.node
+    ni.w <- old.w
+    ni.site <- old.site
+    ni.site2 <- old.site2
+    ret n
+end
+
+proc finish_terms(ob: rw ref Oir, op: ref OProc)
+    -- The operand of a branch and of a `ret` is a value, so it is mapped once
+    -- every block has been rebuilt. The instruction each value belongs to is
+    -- recorded here too, for the verifier.
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        bk := blk_at(ob, b)
+        i : u64 <- bk.first
+        ilast := bk.first + bk.n
+        while i < ilast
+            cell_set(ob.iblk, i, b)
+            i <- i + 1
+        end
+        if bk.top == O_BRANCH
+            bk.ta <- mapped(ob, bk.ta)
+        end
+        if bk.top == O_RET
+            if bk.tc > 0
+                bk.ta <- mapped(ob, bk.ta)
+            end
+            if bk.tc == 2
+                bk.tb <- mapped(ob, bk.tb)
+            end
+        end
+        b <- b + 1
+    end
+end
+
+proc fill_phis(ob: rw ref Oir, op: ref OProc)
+    -- One operand per predecessor, in predecessor order: the value the place
+    -- of the phi has at the end of that predecessor.
+    permit os.syscall
+    nslot := ob.nslot
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        bk := blk_at(ob, b)
+        i : u64 <- bk.first
+        ilast := bk.first + bk.n
+        while i < ilast
+            ins := ins_at(ob, i)
+            if ins.op != O_PHI
+                i <- ilast
+            else
+                if ob.nphiarg + bk.npred > PHIARG_MAX
+                    put(2, "olic: phi operand arena exhausted\n")
+                    os.syscall(60, 4)
+                end
+                ins.a <- ob.nphiarg
+                k : u64 <- 0
+                while k < bk.npred
+                    p := pred_of(ob, b, k)
+                    pa := phiarg_at(ob, ob.nphiarg)
+                    pa.blk <- p
+                    pa.val <- cell_get(ob.enddef, (p - op.bfirst) * nslot + ins.val) - 1
+                    ob.nphiarg <- ob.nphiarg + 1
+                    k <- k + 1
+                end
+                i <- i + 1
+            end
+        end
+        b <- b + 1
+    end
+end

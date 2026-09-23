@@ -1,0 +1,21 @@
+layout Rect
+    w : u32
+    h : u32
+end
+proc make_rect(z: zone, w: u64, h: u64) -> rw ref Rect
+    r := z.make(Rect)
+    r.w <- w
+    r.h <- h
+    ret r
+end
+proc area(r: ref Rect) -> u64
+    ret r.w * r.h
+end
+proc start
+    entry
+    zone z 4096
+        a := make_rect(z, 6, 7)
+        b := make_rect(z, 2, 3)
+        ret area(a) - area(b) + Rect.size
+    end
+end

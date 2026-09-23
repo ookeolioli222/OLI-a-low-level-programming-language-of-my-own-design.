@@ -1,0 +1,53 @@
+1:1 kw module
+1:8 ident hello
+1:13 nl
+2:1 kw import
+2:8 ident std
+2:11 op .
+2:12 ident os
+2:14 nl
+4:1 doc Milestone 1: write a greeting with a raw Linux syscall, no libc.
+4:69 nl
+5:1 doc The procedure with `entry` starts the program (design 0016); its result is the exit status.
+5:96 nl
+6:1 kw proc
+6:6 ident start
+6:12 op ->
+6:15 ident s32
+6:18 nl
+7:5 kw entry
+7:10 nl
+8:5 kw permit
+8:12 ident os
+8:14 op .
+8:15 ident syscall
+8:22 nl
+9:5 ident msg
+9:9 op :=
+9:12 str "Hello Oli--\n"
+9:27 nl
+10:5 ident os
+10:7 op .
+10:8 ident syscall
+10:15 op (
+10:16 ident os
+10:18 op .
+10:19 ident WRITE
+10:24 op ,
+10:26 int 1
+10:27 op ,
+10:29 ident msg
+10:32 op .
+10:33 kw addr
+10:37 op ,
+10:39 ident msg
+10:42 op .
+10:43 ident len
+10:46 op )
+10:47 nl
+11:5 kw ret
+11:9 int 0
+11:10 nl
+12:1 kw end
+12:4 nl
+13:1 eof

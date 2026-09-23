@@ -1,0 +1,13 @@
+module trap_div_min_wrap
+-- `wrap` clears the overflow trap of `+ - *` and of negation; the two traps of
+-- division stay, because neither has a wrapped answer to name.
+-- expect: trap: overflow at stdin:9
+proc start -> s32
+    entry
+    a : word <- word.bits(9223372036854775808)
+    b : word <- 0 - 1
+    if wrap(a / b) > 0
+        ret 1
+    end
+    ret 0
+end

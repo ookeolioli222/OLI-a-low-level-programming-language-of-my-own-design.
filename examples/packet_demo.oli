@@ -1,0 +1,101 @@
+-- packet_demo.oli — Proposal A
+module packet_demo
+
+import core.mem
+import std.os
+
+PAGE : uword := 4096                       -- module-level binding = compile-time constant
+
+layout Header
+    magic  : u32                           -- native byte order
+    length : be u16                        -- big-endian on the wire; loads emit a byte swap
+    flags  : u16
+end
+
+choice ParseError
+    too_short
+    bad_magic { found : u32 }
+end
+
+proc checksum(data : view u8) -> u32
+    total : u32 <- 0                       -- a place (frame slot), written in the loop
+    each b in data
+        total <- wrap(total + b)           -- explicit wrapping arithmetic
+    end
+    ret total
+end
+
+proc parse_header(pkt : view u8) -> ref Header or ParseError
+    if pkt.len < Header.size then fail too_short
+    hdr := Header.at(pkt)                  -- zero-copy reinterpretation, one alignment CHECK
+    if hdr.magic != 0x4F4C4931 then fail bad_magic { found: hdr.magic }
+    ret hdr
+end
+
+proc write_all(fd : s32, data : view u8) -> uword or os.Error
+permit os.syscall
+    done : uword <- 0
+    while done < data.len
+        rest := data[done..]               -- sub-view: ZERO
+        n := os.syscall(os.WRITE, fd, rest.addr, rest.len)
+        if n < 0 then fail os.Error { code: n }
+        done <- done + uword.bits(n)      -- same-width reinterpretation; n >= 0 was checked
+    end
+    ret done
+end
+
+proc peek(a : addr u8) -> u8
+permit memory.raw
+    ret [a]                                -- unchecked machine load
+end
+
+proc cpu_vendor(out : rw view u8)
+permit cpu.asm
+    b : u32
+    c : u32
+    d : u32
+    machine x64
+        in  eax <- 0
+        cpuid
+        out ebx -> b
+        out ecx -> c
+        out edx -> d
+        clobber eax
+    end
+    mem.put_u32(out[0..4], b)
+    mem.put_u32(out[4..8], d)
+    mem.put_u32(out[8..12], c)
+end
+
+proc main -> s32
+    entry
+permit os.syscall
+    zone scratch 64K                       -- hosted: one mmap SYSCALL; freed as a whole at end
+        pkt := scratch.bytes(PAGE)         -- rw view u8, 4096 bytes: ZONE
+        mem.put_u32(pkt[0..4], 0x4F4C4931)
+        mem.put_be16(pkt[4..6], 12)
+        pkt[6] <- 0
+        pkt[7] <- 0
+
+        case parse_header(pkt[0..12])
+        when ok hdr
+            sum := checksum(pkt[8 .. 8 + uword(hdr.length)])
+            if sum == 0
+                write_all(1, "empty\n") else ret 1
+            end
+        when fail too_short
+            write_all(2, "short\n") else ret 1
+        when fail bad_magic { found }
+            write_all(2, "bad magic\n") else ret 1
+        end
+
+        vendor := scratch.bytes(12)
+        cpu_vendor(vendor)
+        write_all(1, vendor) else ret 1
+        write_all(1, "\n") else ret 1
+
+        first := peek(pkt.addr)            -- raw address of the view's first byte
+        if first != 0x31 then ret 2
+    end
+    ret 0
+end
