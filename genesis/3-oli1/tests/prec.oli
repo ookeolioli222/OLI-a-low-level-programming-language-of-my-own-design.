@@ -1,0 +1,6 @@
+proc start
+ entry
+ a := 5
+ b := 3
+ ret a * b + 1
+end

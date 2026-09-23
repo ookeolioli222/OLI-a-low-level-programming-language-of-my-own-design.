@@ -1,0 +1,50 @@
+module convert
+-- Step 6f: explicit conversions `T(x)`, `T.wrap(x)` and `T.bits(x)`.
+-- `T(x)` is lossless and emits nothing; `.wrap`/`.bits` truncate to the width
+-- of T and extend again with T's signedness, so the 64-bit slot always holds
+-- the value the type says it holds.
+proc widths(n: u64) -> u64
+    a : u64 <- u8.wrap(n)
+    b : u64 <- u16.wrap(n)
+    c : u64 <- u32.wrap(n)
+    ret a + b * 2 + c * 3
+end
+proc signs(a: u64, b: u64, c: u64) -> word
+    s1 : word <- s8.wrap(a)
+    s2 : word <- s16.wrap(b)
+    s3 : word <- s32.wrap(c)
+    ret s1 + s2 + s3
+end
+proc lossless(b: u8) -> u64
+    -- A widening conversion is a no-op: the value goes through unchanged.
+    ret u64(b) + u64(b) + u64(b)
+end
+proc start
+    entry
+    -- 0x0123456789ABCDEF
+    n : u64 <- 81985529216486895
+    if widths(n) != 239 + 52719 * 2 + 2309737967 * 3
+        ret 1
+    end
+    big : u64 <- 4294967295
+    if signs(200, 40000, big) != 0 - 56 - 25536 - 1
+        ret 2
+    end
+    if lossless(7) != 21
+        ret 3
+    end
+    -- `.bits` at the full 64-bit width changes nothing.
+    all_ones : u64 <- 18446744073709551615
+    m : u64 <- u64.bits(all_ones)
+    if m != 18446744073709551615
+        ret 4
+    end
+    -- A converted value is an ordinary integer: it composes with arithmetic.
+    p : u64 <- 300
+    q : u64 <- 1000
+    k : u64 <- u8.wrap(p) + u8.wrap(q)
+    if k != 44 + 232
+        ret 5
+    end
+    ret 42
+end

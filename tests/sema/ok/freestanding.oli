@@ -1,0 +1,57 @@
+-- target: freestanding
+-- Milestone-3 shape: own entry, own stack, no OS, raw memory under permits.
+module boot
+
+boot_stack : [16K]u8
+    section ".bss.boot"
+    align 16
+
+heap_region : [64K]u8
+    section ".bss"
+    align 4096
+
+layout Frame
+    count : u32
+end
+
+pub proc start -> never
+    entry
+    calls none
+    section ".text.boot"
+    permit cpu.asm
+    machine x64
+        lea rsp, [boot_stack + 16K]
+        xor ebp, ebp
+        call boot.main
+        hlt
+    end
+end
+
+proc on_trap(_kind : core.TrapKind, _site : core.Site) -> never
+    traps
+    permit cpu.halt
+    loop
+        cpu.halt()
+    end
+end
+
+proc poke(a : addr u8, v : u8)
+permit memory.raw
+    [a] <- v
+end
+
+proc main -> never
+permit cpu.halt, memory.raw
+    zone boot_zone 4K at addr u8 (0x200000)
+        f := boot_zone.make(Frame)
+        f.count <- 1
+    end
+    zone heap 64K from heap_region
+        buf := heap.bytes(256)
+        buf[0] <- 0x55
+        poke(buf.addr, 1)
+    end
+    loop
+        cpu.halt()
+    end
+end

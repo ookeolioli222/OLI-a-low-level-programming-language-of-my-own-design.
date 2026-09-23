@@ -1,0 +1,88 @@
+(module packet_demo
+  (import core.mem)
+  (import std.os)
+  (const PAGE : uword (int 4096))
+  (layout Header
+    (field magic u32)
+    (field length be u16)
+    (field flags u16))
+  (choice ParseError
+    (variant too_short)
+    (variant bad_magic
+      (field found u32)))
+  (proc checksum ((data view u8)) -> u32
+    (body
+      (place total : u32 (int 0))
+      (each b (name data)
+        (body
+          (store (name total) (wrap (+ (name total) (name b))))))
+      (ret (name total))))
+  (proc parse_header ((pkt view u8)) -> ref Header or ParseError
+    (body
+      (if-then (< (field (name pkt) len) (field (name Header) size))
+        (fail (name too_short)))
+      (bind hdr (call (field (name Header) at) (name pkt)))
+      (if-then (!= (field (name hdr) magic) (int 1330399537))
+        (fail (lit (name bad_magic) (found: (field (name hdr) magic)))))
+      (ret (name hdr))))
+  (proc write_all ((fd s32) (data view u8)) -> uword or os.Error
+    (permit os.syscall)
+    (body
+      (place done : uword (int 0))
+      (while (< (name done) (field (name data) len))
+        (body
+          (bind rest (index (name data) (range (name done) end)))
+          (bind n (call (field (name os) syscall) (field (name os) WRITE) (name fd) (field (name rest) addr) (field (name rest) len)))
+          (if-then (< (name n) (int 0))
+            (fail (lit (field (name os) Error) (code: (name n)))))
+          (store (name done) (+ (name done) (convert uword bits (name n))))))
+      (ret (name done))))
+  (proc peek ((a addr u8)) -> u8
+    (permit memory.raw)
+    (body
+      (ret (raw-load (name a)))))
+  (proc cpu_vendor ((out rw view u8))
+    (permit cpu.asm)
+    (body
+      (place b : u32)
+      (place c : u32)
+      (place d : u32)
+      (machine x64
+        (in eax (int 0))
+        (instr cpuid)
+        (out ebx (name b))
+        (out ecx (name c))
+        (out edx (name d))
+        (clobber eax))
+      (expr (call (field (name mem) put_u32) (index (name out) (range (int 0) (int 4))) (name b)))
+      (expr (call (field (name mem) put_u32) (index (name out) (range (int 4) (int 8))) (name d)))
+      (expr (call (field (name mem) put_u32) (index (name out) (range (int 8) (int 12))) (name c)))))
+  (proc main () -> s32
+    (entry)
+    (permit os.syscall)
+    (body
+      (zone scratch (int 65536)
+        (body
+          (bind pkt (call (field (name scratch) bytes) (name PAGE)))
+          (expr (call (field (name mem) put_u32) (index (name pkt) (range (int 0) (int 4))) (int 1330399537)))
+          (expr (call (field (name mem) put_be16) (index (name pkt) (range (int 4) (int 6))) (int 12)))
+          (store (index (name pkt) (int 6)) (int 0))
+          (store (index (name pkt) (int 7)) (int 0))
+          (case (call (name parse_header) (index (name pkt) (range (int 0) (int 12))))
+            (when ok hdr
+              (bind sum (call (name checksum) (index (name pkt) (range (int 8) (+ (int 8) (convert uword (field (name hdr) length)))))))
+              (if (== (name sum) (int 0))
+                (then
+                  (expr (else (call (name write_all) (int 1) (str "empty\n")) (ret (int 1)))))))
+            (when fail too_short
+              (expr (else (call (name write_all) (int 2) (str "short\n")) (ret (int 1)))))
+            (when fail bad_magic {found}
+              (expr (else (call (name write_all) (int 2) (str "bad magic\n")) (ret (int 1))))))
+          (bind vendor (call (field (name scratch) bytes) (int 12)))
+          (expr (call (name cpu_vendor) (name vendor)))
+          (expr (else (call (name write_all) (int 1) (name vendor)) (ret (int 1))))
+          (expr (else (call (name write_all) (int 1) (str "\n")) (ret (int 1))))
+          (bind first (call (name peek) (field (name pkt) addr)))
+          (if-then (!= (name first) (int 49))
+            (ret (int 2)))))
+      (ret (int 0)))))

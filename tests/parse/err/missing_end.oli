@@ -1,0 +1,6 @@
+proc f
+    if a
+        x := 1
+
+-- expect: E0014 @ 3:15
+-- expect: E0014 @ 3:15

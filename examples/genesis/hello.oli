@@ -1,0 +1,20 @@
+-- Executable genesis subset. Build with genesis/build/asm.bin.
+-- The high-level examples/hello.oli remains the later compiler milestone.
+module hello.machine
+rodata message
+    ascii "Hello Oli--\n"
+end
+proc main
+    entry
+    calls none
+    machine x64
+        mov rax, 1
+        mov rdi, 1
+        mov rsi, message
+        mov rdx, 12
+        syscall
+        mov rax, 60
+        mov rdi, 0
+        syscall
+    end
+end

@@ -1,0 +1,19 @@
+module olic.show_sema
+-- `olic --show-sema`: the semantic graph of the root module and everything it
+-- imports — layouts, choices, constants, statics, procedure signatures, local
+-- tables and typed bodies — in the form of `tests/snapshots/*.sema`.
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 201326592
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        print_program(pg)
+        if pg.nerr > 0
+            ret 1
+        end
+        ret 0
+    end
+end

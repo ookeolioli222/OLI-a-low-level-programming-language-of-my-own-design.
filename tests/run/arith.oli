@@ -1,0 +1,63 @@
+module arith
+-- M2: arithmetic, bit operators, shifts and precedence, checked by execution.
+proc start -> s32
+    entry
+    a : u64 <- 12
+    b : u64 <- 10
+    if a + b != 22
+        ret 1
+    end
+    if a - b != 2
+        ret 2
+    end
+    if a * b != 120
+        ret 3
+    end
+    if a / b != 1
+        ret 4
+    end
+    if a % b != 2
+        ret 5
+    end
+    if a & b != 8
+        ret 6
+    end
+    if a | b != 14
+        ret 7
+    end
+    if a ^ b != 6
+        ret 8
+    end
+    if a << 2 != 48
+        ret 9
+    end
+    if a >> 2 != 3
+        ret 10
+    end
+    if ~a != 18446744073709551603
+        ret 11
+    end
+    -- Precedence: mul above add above shift above and above xor above or.
+    -- The declared type is what gives these literals a width; an expression
+    -- of literals alone would be E0201.
+    p : u64 <- 1 + 2 << 1
+    if p != 6
+        ret 12
+    end
+    q : u64 <- 1 | 2 ^ 3 & 1
+    if q != 3
+        ret 13
+    end
+    r : u64 <- 2 * 3 + 4
+    if r != 10
+        ret 14
+    end
+    s : word <- 0 - 9
+    if s / 2 != 0 - 4
+        ret 15
+    end
+    if 0 - (s / 2) != 4
+        ret 16
+    end
+    ret 42
+end

@@ -1,0 +1,11 @@
+-- forward call: start is declared before fib
+proc start
+    entry
+    ret fib(10)
+end
+proc fib(n: s64) -> s64
+    if n < 2
+        ret n
+    end
+    ret fib(n - 1) + fib(n - 2)
+end

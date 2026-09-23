@@ -1,0 +1,11 @@
+module trap_narrow
+-- expect: trap: overflow at stdin:7
+proc start -> s32
+    entry
+    a : u8 <- 200
+    b : u8 <- 100
+    if a + b > 0
+        ret 1
+    end
+    ret 0
+end

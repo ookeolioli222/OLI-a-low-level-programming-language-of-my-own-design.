@@ -1,0 +1,13 @@
+module consts
+-- Module-level integer constants; a local of the same name shadows one.
+LIMIT := 40
+TWO := 2
+proc f(n: word) -> word
+    ret n + TWO
+end
+proc start
+    entry
+    LIMIT := 1
+    x := f(LIMIT)
+    ret x + TWO + 37       -- 3 + 2 + 37 = 42
+end

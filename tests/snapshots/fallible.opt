@@ -1,0 +1,511 @@
+(oir
+  (static 0 len=27)
+  (static 1 len=25)
+  (static 2 len=25)
+  (static 3 len=27)
+  (static 4 removed)
+  (static 5 len=27)
+  (static 6 len=33)
+  (static 7 len=27)
+  (static 8 len=27)
+  (static 9 removed)
+  (static 10 len=27)
+  (static 11 len=2)
+  (static 12 len=2)
+  (static 13 len=1)
+  (static 14 len=2)
+  (static 15 len=2)
+  (static 16 removed)
+  (static 17 len=5)
+  (static 18 len=34)
+  (proc digit locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 48
+      %2 = cmp.lt %0, %1
+      branch %2, bb1, bb2)
+    (bb1 preds bb0
+      %3 = const 1
+      %4 = const 1
+      ret %3, %4)
+    (bb2 preds bb0
+      %5 = const 57
+      %6 = cmp.gt %0, %5
+      branch %6, bb3, bb4)
+    (bb3 preds bb2
+      %7 = const 1
+      %8 = const 2
+      ret %7, %8)
+    (bb4 preds bb2
+      %9 = const 48
+      %10 = sub.s %0, %9
+      check.overflow %10
+      %11 = const 0
+      ret %11, %10))
+  (proc two_digits locals=3
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = const 2
+      %3 = cmp.lt %1, %2
+      branch %3, bb1, bb2)
+    (bb1 preds bb0
+      %4 = const 1
+      %5 = const 1
+      ret %4, %5)
+    (bb2 preds bb0
+      %6 = const 0
+      check.bounds %6, %1
+      %8 = add %0, %6
+      %9 = raw.load.8 %8
+      arg %9
+      %11 = call digit/1
+      %12 = call.payload
+      %13 = const 0
+      %14 = cmp.eq %11, %13
+      branch %14, bb3, bb8)
+    (bb3 preds bb2
+      jump bb4)
+    (bb4 preds bb3
+      %15 = const 1
+      check.bounds %15, %1
+      %17 = add %0, %15
+      %18 = raw.load.8 %17
+      arg %18
+      %20 = call digit/1
+      %21 = call.payload
+      %22 = const 0
+      %23 = cmp.eq %20, %22
+      branch %23, bb5, bb7)
+    (bb5 preds bb4
+      jump bb6)
+    (bb6 preds bb5
+      %24 = const 10
+      %25 = mul.s %12, %24
+      check.overflow %25
+      %26 = add.s %25, %21
+      check.overflow %26
+      %27 = const 0
+      ret %27, %26)
+    (bb7 preds bb4
+      %28 = const 1
+      ret %28, %21)
+    (bb8 preds bb2
+      %29 = const 1
+      ret %29, %12))
+  (proc value_or locals=2 temps=1
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = param 2
+      arg %0
+      arg %1
+      %5 = call two_digits/2
+      %6 = call.payload
+      %7 = const 0
+      %8 = cmp.eq %5, %7
+      branch %8, bb1, bb2)
+    (bb1 preds bb0
+      jump bb3)
+    (bb2 preds bb0
+      jump bb3)
+    (bb3 preds bb1 bb2
+      %9 = phi [bb1 %6] [bb2 %2]
+      ret %9))
+  (proc find locals=3
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = param 2
+      %3 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb4
+      %4 = phi [bb0 %3] [bb4 %12]
+      %5 = cmp.lt %4, %1
+      branch %5, bb2, bb5)
+    (bb2 preds bb1
+      ; check.bounds %4 -- removed: proof(loop-bound)
+      %7 = add %0, %4
+      %8 = raw.load.8 %7
+      %9 = cmp.eq %8, %2
+      branch %9, bb3, bb4)
+    (bb3 preds bb2
+      %10 = const 0
+      ret %10, %4)
+    (bb4 preds bb2
+      %11 = const 1
+      %12 = add %4, %11
+      check.overflow %12
+      jump bb1)
+    (bb5 preds bb1
+      %13 = const 1
+      %14 = const 0
+      ret %13, %14))
+  (proc make locals=3
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = const 0
+      %3 = cmp.eq %1, %2
+      branch %3, bb1, bb2)
+    (bb1 preds bb0
+      %4 = const 1
+      %5 = const 0
+      ret %4, %5)
+    (bb2 preds bb0
+      %6 = const 8
+      %7 = zone.alloc %0, %6
+      %8 = trunc.32 %1
+      raw.store.32 %7, %8
+      %10 = const 4
+      %11 = add %7, %10
+      %12 = const 2
+      %13 = mul %1, %12
+      check.overflow %13
+      %14 = trunc.32 %13
+      raw.store.32 %11, %14
+      %16 = const 0
+      ret %16, %7))
+  (proc sum locals=3
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      arg %0
+      arg %1
+      %4 = call make/2
+      %5 = call.payload
+      %6 = const 0
+      %7 = cmp.eq %4, %6
+      branch %7, bb1, bb3)
+    (bb1 preds bb0
+      jump bb2)
+    (bb2 preds bb1
+      %8 = raw.load.32 %5
+      %9 = const 4
+      %10 = add %5, %9
+      %11 = raw.load.32 %10
+      %12 = add %8, %11
+      check.overflow %12
+      ret %12)
+    (bb3 preds bb0
+      %13 = const 0
+      ret %13))
+  (proc code_of locals=2
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      arg %0
+      arg %1
+      %4 = call two_digits/2
+      %5 = call.payload
+      %6 = const 0
+      %7 = cmp.eq %4, %6
+      branch %7, bb1, bb2)
+    (bb1 preds bb0
+      ret %5)
+    (bb2 preds bb0
+      %10 = const 18446744073709551615
+      ; check.overflow %10 -- removed: proof(constant)
+      ret %10))
+  (proc start locals=15 temps=4 entry
+    (bb0
+      %0 = const 55
+      arg %0
+      %2 = call digit/1
+      %3 = call.payload
+      %4 = const 0
+      %5 = cmp.eq %2, %4
+      branch %5, bb1, bb2)
+    (bb1 preds bb0
+      jump bb3)
+    (bb2 preds bb0
+      %6 = const 100
+      jump bb3)
+    (bb3 preds bb1 bb2
+      %7 = phi [bb1 %3] [bb2 %6]
+      %8 = const 7
+      %9 = cmp.ne.s %7, %8
+      branch %9, bb4, bb5)
+    (bb4 preds bb3
+      %10 = const 1
+      ret %10)
+    (bb5 preds bb3
+      %11 = const 65
+      arg %11
+      %13 = call digit/1
+      %14 = call.payload
+      %15 = const 0
+      %16 = cmp.eq %13, %15
+      branch %16, bb6, bb7)
+    (bb6 preds bb5
+      jump bb8)
+    (bb7 preds bb5
+      %17 = const 100
+      jump bb8)
+    (bb8 preds bb6 bb7
+      %18 = phi [bb6 %14] [bb7 %17]
+      %19 = const 100
+      %20 = cmp.ne.s %18, %19
+      branch %20, bb9, bb10)
+    (bb9 preds bb8
+      %21 = const 2
+      ret %21)
+    (bb10 preds bb8
+      %23 = const 57
+      arg %23
+      %25 = call digit/1
+      %26 = call.payload
+      %27 = const 0
+      %28 = cmp.eq %25, %27
+      branch %28, bb11, bb12)
+    (bb11 preds bb10
+      %29 = const 2
+      %30 = mul.s %26, %29
+      check.overflow %30
+      jump bb13)
+    (bb12 preds bb10
+      %31 = const 1
+      jump bb13)
+    (bb13 preds bb11 bb12
+      %32 = phi [bb11 %30] [bb12 %31]
+      %33 = const 18
+      %34 = cmp.ne.s %32, %33
+      branch %34, bb14, bb15)
+    (bb14 preds bb13
+      %35 = const 3
+      ret %35)
+    (bb15 preds bb13
+      %37 = const 32
+      arg %37
+      %39 = call digit/1
+      %41 = const 0
+      %42 = cmp.eq %39, %41
+      branch %42, bb16, bb17)
+    (bb16 preds bb15
+      %43 = const 1
+      jump bb18)
+    (bb17 preds bb15
+      %44 = const 5
+      jump bb18)
+    (bb18 preds bb16 bb17
+      %45 = phi [bb16 %43] [bb17 %44]
+      %46 = const 5
+      %47 = cmp.ne.s %45, %46
+      branch %47, bb19, bb20)
+    (bb19 preds bb18
+      %48 = const 4
+      ret %48)
+    (bb20 preds bb18
+      %49 = addr.of static.11
+      %50 = len.of static.11
+      arg %49
+      arg %50
+      %53 = const 9
+      arg %53
+      %55 = call value_or/3
+      %56 = const 42
+      %57 = cmp.ne.s %55, %56
+      branch %57, bb21, bb22)
+    (bb21 preds bb20
+      %58 = const 5
+      ret %58)
+    (bb22 preds bb20
+      %59 = addr.of static.12
+      %60 = len.of static.12
+      arg %59
+      arg %60
+      %63 = const 9
+      arg %63
+      %65 = call value_or/3
+      %66 = const 9
+      %67 = cmp.ne.s %65, %66
+      branch %67, bb23, bb24)
+    (bb23 preds bb22
+      %68 = const 6
+      ret %68)
+    (bb24 preds bb22
+      %69 = addr.of static.13
+      %70 = len.of static.13
+      arg %69
+      arg %70
+      %73 = const 9
+      arg %73
+      %75 = call value_or/3
+      %76 = const 9
+      %77 = cmp.ne.s %75, %76
+      branch %77, bb25, bb26)
+    (bb25 preds bb24
+      %78 = const 7
+      ret %78)
+    (bb26 preds bb24
+      %79 = addr.of static.14
+      %80 = len.of static.14
+      arg %79
+      arg %80
+      %83 = call code_of/2
+      %84 = const 42
+      %85 = cmp.ne.s %83, %84
+      branch %85, bb27, bb28)
+    (bb27 preds bb26
+      %86 = const 8
+      ret %86)
+    (bb28 preds bb26
+      %87 = addr.of static.15
+      %88 = len.of static.15
+      arg %87
+      arg %88
+      %91 = call code_of/2
+      %94 = const 18446744073709551615
+      ; check.overflow %94 -- removed: proof(constant)
+      %95 = cmp.ne.s %91, %94
+      branch %95, bb29, bb30)
+    (bb29 preds bb28
+      %96 = const 9
+      ret %96)
+    (bb30 preds bb28
+      %97 = addr.of static.17
+      %98 = len.of static.17
+      arg %97
+      arg %98
+      %101 = const 108
+      arg %101
+      %103 = call find/3
+      %104 = call.payload
+      %105 = const 0
+      %106 = cmp.eq %103, %105
+      branch %106, bb31, bb32)
+    (bb31 preds bb30
+      jump bb33)
+    (bb32 preds bb30
+      %107 = const 99
+      jump bb33)
+    (bb33 preds bb31 bb32
+      %108 = phi [bb31 %104] [bb32 %107]
+      %109 = const 2
+      %110 = cmp.ne %108, %109
+      branch %110, bb34, bb35)
+    (bb34 preds bb33
+      %111 = const 10
+      ret %111)
+    (bb35 preds bb33
+      arg %97
+      arg %98
+      %114 = const 122
+      arg %114
+      %116 = call find/3
+      %117 = call.payload
+      %118 = const 0
+      %119 = cmp.eq %116, %118
+      branch %119, bb36, bb37)
+    (bb36 preds bb35
+      jump bb38)
+    (bb37 preds bb35
+      %120 = const 99
+      jump bb38)
+    (bb38 preds bb36 bb37
+      %121 = phi [bb36 %117] [bb37 %120]
+      %122 = const 99
+      %123 = cmp.ne %121, %122
+      branch %123, bb39, bb40)
+    (bb39 preds bb38
+      %124 = const 11
+      ret %124)
+    (bb40 preds bb38
+      arg %97
+      arg %98
+      %128 = const 111
+      arg %128
+      %130 = call find/3
+      %131 = call.payload
+      %132 = const 0
+      %133 = cmp.eq %130, %132
+      branch %133, bb41, bb42)
+    (bb41 preds bb40
+      jump bb43)
+    (bb42 preds bb40
+      %134 = const 50
+      jump bb43)
+    (bb43 preds bb41 bb42
+      %135 = phi [bb41 %131] [bb42 %134]
+      %136 = const 4
+      %137 = cmp.ne %135, %136
+      branch %137, bb44, bb45)
+    (bb44 preds bb43
+      %138 = const 12
+      ret %138)
+    (bb45 preds bb43
+      arg %97
+      arg %98
+      %142 = const 113
+      arg %142
+      %144 = call find/3
+      %146 = const 0
+      %147 = cmp.eq %144, %146
+      branch %147, bb46, bb47)
+    (bb46 preds bb45
+      %148 = const 1
+      jump bb48)
+    (bb47 preds bb45
+      %149 = const 20
+      jump bb48)
+    (bb48 preds bb46 bb47
+      %150 = phi [bb46 %148] [bb47 %149]
+      %151 = const 20
+      %152 = cmp.ne %150, %151
+      branch %152, bb49, bb50)
+    (bb49 preds bb48
+      %153 = const 13
+      ret %153)
+    (bb50 preds bb48
+      %154 = addr.of frame.39
+      %155 = const 4096
+      zone.new %154, %155
+      %157 = addr.of frame.39
+      arg %157
+      %159 = const 5
+      arg %159
+      %161 = call sum/2
+      %162 = const 15
+      %163 = cmp.ne %161, %162
+      branch %163, bb51, bb52)
+    (bb51 preds bb50
+      %164 = const 14
+      ret %164)
+    (bb52 preds bb50
+      %165 = addr.of frame.39
+      arg %165
+      %167 = const 0
+      arg %167
+      %169 = call sum/2
+      %170 = const 0
+      %171 = cmp.ne %169, %170
+      branch %171, bb53, bb54)
+    (bb53 preds bb52
+      %172 = const 15
+      ret %172)
+    (bb54 preds bb52
+      zone.end %154
+      arg %97
+      arg %98
+      %176 = const 104
+      arg %176
+      %178 = call find/3
+      %179 = call.payload
+      %180 = const 0
+      %181 = cmp.eq %178, %180
+      branch %181, bb55, bb59)
+    (bb55 preds bb54
+      jump bb56)
+    (bb56 preds bb55
+      %182 = const 0
+      %183 = cmp.ne %179, %182
+      branch %183, bb57, bb58)
+    (bb57 preds bb56
+      %184 = const 17
+      ret %184)
+    (bb58 preds bb56
+      %185 = const 42
+      ret %185)
+    (bb59 preds bb54
+      %186 = const 16
+      ret %186)))

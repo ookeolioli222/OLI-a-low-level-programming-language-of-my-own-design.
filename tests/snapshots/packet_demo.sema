@@ -1,0 +1,127 @@
+(program entry=packet_demo.main
+  (layout Header#0 size=8 align=4 (magic u32 @0) (length be u16 @4) (flags u16 @6))
+  (layout Site#1 size=24 align=8 (file view u8 @0) (line u32 @16))
+  (layout CpuId#2 size=16 align=4 (a u32 @0) (b u32 @4) (c u32 @8) (d u32 @12))
+  (layout Error#3 size=8 align=8 (code word @0))
+  (choice ParseError#0 size=8 align=4 tag=1 payload@4 (too_short) (bad_magic (found u32 @4)))
+  (choice TrapKind#1 size=1 align=1 tag=1 payload@1 (bounds) (overflow) (div_zero) (misaligned) (zone_exhausted) (unreachable) (assert))
+  (const PAGE : uword = 4096)
+  (const READ : word = 0)
+  (const WRITE : word = 1)
+  (const MMAP : word = 9)
+  (const MUNMAP : word = 11)
+  (const EXIT : word = 60)
+  (const EXIT_GROUP : word = 231)
+  (proc packet_demo.checksum -> u32
+    (local 0 data param0 view u8)
+    (local 1 total place u32)
+    (local 2 b bind u8)
+    (body
+      (place total (int 0):u32)
+      (each b (local data):view u8 @param#0
+        (body
+          (store [rw local total] (add/wrap (load [rw local total]):u32 (widen (local b):u8):u32):u32)))
+      (ret (load [rw local total]):u32)))
+  (proc packet_demo.parse_header -> ref Header or ParseError
+    (local 0 pkt param0 view u8)
+    (local 1 hdr bind ref Header)
+    (body
+      (if (lt (len (local pkt):view u8 @param#0):uword (int 8):uword):bool
+        (then
+          (fail (variant too_short):ParseError)))
+      (bind hdr (at Header (local pkt):view u8 @param#0):ref Header @param#0)
+      (if (ne (load [field [deref (local hdr):ref Header @param#0] magic]):u32 (int 1330399537):u32):bool
+        (then
+          (fail (variant bad_magic (load [field [deref (local hdr):ref Header @param#0] magic]):u32):ParseError)))
+      (ret (local hdr):ref Header @param#0)))
+  (proc packet_demo.write_all -> uword or Error permits=[os.syscall]
+    (local 0 fd param0 s32)
+    (local 1 data param1 view u8)
+    (local 2 done place uword)
+    (local 3 rest bind view u8)
+    (local 4 n bind word)
+    (body
+      (place done (int 0):uword)
+      (while (lt (load [rw local done]):uword (len (local data):view u8 @param#1):uword):bool
+        (body
+          (bind rest (slice (local data):view u8 @param#1 (load [rw local done]):uword end):view u8 @param#1)
+          (bind n (intrinsic OsSyscall (int 1):word (widen (local fd):s32):word (addr (local rest):view u8 @param#1):addr u8 (bits (len (local rest):view u8 @param#1):uword):word):word)
+          (if (lt (local n):word (int 0):word):bool
+            (then
+              (fail (layout Error (local n):word):Error)))
+          (store [rw local done] (add (load [rw local done]):uword (bits (local n):word):uword):uword)))
+      (ret (load [rw local done]):uword)))
+  (proc packet_demo.peek -> u8 permits=[memory.raw]
+    (local 0 a param0 addr u8)
+    (body
+      (ret (load [rw raw (local a):addr u8]):u8)))
+  (proc packet_demo.cpu_vendor permits=[cpu.asm]
+    (local 0 out param0 rw view u8)
+    (local 1 b place u32)
+    (local 2 c place u32)
+    (local 3 d place u32)
+    (body
+      (place b)
+      (place c)
+      (place d)
+      (machine x64
+        (in eax (int 0):u32)
+        (instr cpuid)
+        (out ebx [rw local b])
+        (out ecx [rw local c])
+        (out edx [rw local d])
+        (clobber eax))
+      (expr (intrinsic MemPut(None, 32) (slice (local out):rw view u8 @param#0 (int 0):uword (int 4):uword):rw view u8 @param#0 (load [rw local b]):u32):(no value))
+      (expr (intrinsic MemPut(None, 32) (slice (local out):rw view u8 @param#0 (int 4):uword (int 8):uword):rw view u8 @param#0 (load [rw local d]):u32):(no value))
+      (expr (intrinsic MemPut(None, 32) (slice (local out):rw view u8 @param#0 (int 8):uword (int 12):uword):rw view u8 @param#0 (load [rw local c]):u32):(no value))))
+  (proc packet_demo.main -> s32 permits=[os.syscall] entry
+    (local 0 scratch zone zone)
+    (local 1 pkt bind rw view u8)
+    (local 2 hdr pattern ref Header)
+    (local 3 sum bind u32)
+    (local 4 found pattern u32)
+    (local 5 vendor bind rw view u8)
+    (local 6 first bind u8)
+    (body
+      (zone scratch (int 65536):uword os
+        (body
+          (bind pkt (bytes (local scratch):zone @zone scratch (int 4096):uword):rw view u8 @zone scratch)
+          (expr (intrinsic MemPut(None, 32) (slice (local pkt):rw view u8 @zone scratch (int 0):uword (int 4):uword):rw view u8 @zone scratch (int 1330399537):u32):(no value))
+          (expr (intrinsic MemPut(Some(true), 16) (slice (local pkt):rw view u8 @zone scratch (int 4):uword (int 6):uword):rw view u8 @zone scratch (int 12):u16):(no value))
+          (store [rw elem (local pkt):rw view u8 @zone scratch (int 6):uword] (int 0):u8)
+          (store [rw elem (local pkt):rw view u8 @zone scratch (int 7):uword] (int 0):u8)
+          (case (call packet_demo.parse_header (slice (local pkt):rw view u8 @zone scratch (int 0):uword (int 12):uword):view u8 @zone scratch):ref Header or ParseError @zone scratch
+            (when ok hdr
+              (bind sum (call packet_demo.checksum (slice (local pkt):rw view u8 @zone scratch (int 8):uword (add (int 8):uword (widen (load [field [deref (local hdr):ref Header @zone scratch] length]):u16):uword):uword):view u8 @zone scratch):u32)
+              (if (eq (local sum):u32 (int 0):u32):bool
+                (then
+                  (expr (else (call packet_demo.write_all (int 1):s32 (str "empty\n"):view u8):uword or Error (ret (int 1):s32)):uword))))
+            (when fail too_short
+              (expr (else (call packet_demo.write_all (int 2):s32 (str "short\n"):view u8):uword or Error (ret (int 1):s32)):uword))
+            (when fail bad_magic {0=found}
+              (expr (else (call packet_demo.write_all (int 2):s32 (str "bad magic\n"):view u8):uword or Error (ret (int 1):s32)):uword)))
+          (bind vendor (bytes (local scratch):zone @zone scratch (int 12):uword):rw view u8 @zone scratch)
+          (expr (call packet_demo.cpu_vendor (local vendor):rw view u8 @zone scratch):(no value))
+          (expr (else (call packet_demo.write_all (int 1):s32 (local vendor):view u8 @zone scratch):uword or Error (ret (int 1):s32)):uword)
+          (expr (else (call packet_demo.write_all (int 1):s32 (str "\n"):view u8):uword or Error (ret (int 1):s32)):uword)
+          (bind first (call packet_demo.peek (addr (local pkt):rw view u8 @zone scratch):addr u8):u8)
+          (if (ne (local first):u8 (int 49):u8):bool
+            (then
+              (ret (int 2):s32)))))
+      (ret (int 0):s32)))
+  (proc core.mem.equal -> bool
+    (local 0 a param0 view u8)
+    (local 1 b param1 view u8)
+    (local 2 i place uword)
+    (body
+      (if (ne (len (local a):view u8 @param#0):uword (len (local b):view u8 @param#1):uword):bool
+        (then
+          (ret (bool false):bool)))
+      (place i (int 0):uword)
+      (while (lt (load [rw local i]):uword (len (local a):view u8 @param#0):uword):bool
+        (body
+          (if (ne (load [elem (local a):view u8 @param#0 (load [rw local i]):uword]):u8 (load [elem (local b):view u8 @param#1 (load [rw local i]):uword]):u8):bool
+            (then
+              (ret (bool false):bool)))
+          (store [rw local i] (add (load [rw local i]):uword (int 1):uword):uword)))
+      (ret (bool true):bool))))

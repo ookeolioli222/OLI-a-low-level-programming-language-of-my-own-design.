@@ -1,0 +1,9 @@
+proc f
+    x := f(1, y: 2)
+    zone
+    each i in
+end
+end
+-- expect: E0022 @ 2:18
+-- expect: E0011 @ 3:9
+-- expect: E0012 @ 4:14

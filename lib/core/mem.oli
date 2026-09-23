@@ -1,0 +1,15 @@
+--- Memory helpers. The `mem.*` intrinsics (copy, set, zero, secure_zero,
+--- get_*/put_*) are built into the compiler; this module holds procedures
+--- written in Oli-- that build on them.
+module core.mem
+
+--- Compares two byte views for equality.
+pub proc equal(a : view u8, b : view u8) -> bool
+    if a.len != b.len then ret false
+    i : uword <- 0
+    while i < a.len
+        if a[i] != b[i] then ret false
+        i <- i + 1
+    end
+    ret true
+end

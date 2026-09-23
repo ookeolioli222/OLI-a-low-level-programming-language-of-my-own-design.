@@ -1,0 +1,15 @@
+proc count_byte(v: view u8, c: u64) -> u64
+    i := 0
+    n := 0
+    while i < v.len
+        if v[i] == c
+            n <- n + 1
+        end
+        i <- i + 1
+    end
+    ret n
+end
+proc start
+    entry
+    ret count_byte("banana", 97) + count_byte("Oli--", 45) * 10
+end

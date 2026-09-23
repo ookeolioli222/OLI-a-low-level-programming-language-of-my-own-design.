@@ -1,0 +1,841 @@
+{
+ "grammar": {
+  "grammar_ebnf": "(* ===== Oli-- GENESIS ASSEMBLER SOURCE SUBSET (layer 2 = genesis/2-asm/asm.hex2) =====\n   Line-oriented and stateful, so a hand-written hex2 parser can dispatch on the\n   first token of each line. A logical line ends at LF. Tokens are whitespace-\n   separated (any run of SPACE/TAB). \"--\" begins a comment to end of line.\n   Blank and comment-only lines are ignored everywhere. Indentation is\n   insignificant. Case-sensitive. Consistent with docs/design/0013 (newline-\n   terminated statements) and 0009 (machine blocks). *)\n\nmodule       = module-line , { blank | comment-line | data-block | proc-block } ;\nmodule-line  = \"module\" , ws , dotted-ident , eol ;\ndotted-ident = ident , { \".\" , ident } ;               (* becomes the ELF symbol name; dots are legal, ABI.md sec 4 *)\n\n(* ---- static data (byte arrays, 64-bit words, ASCII strings, label addresses) ---- *)\ndata-block   = [ \"pub\" , ws ] , section-kw , ws , dotted-ident , eol ,\n               { data-entry } ,\n               \"end\" , eol ;                            (* block name = one global data symbol at its start *)\nsection-kw   = \"rodata\" | \"data\" | \"bss\" ;              (* selects the .rodata / .data / .bss placement *)\ndata-entry   = byte-entry | word-entry | ascii-entry | asciiz-entry\n             | addr-entry | res-entry | comment-line | blank ;\nbyte-entry   = \"byte\"   , ws , int  , { \",\" , int }  , eol ;   (* each value 0..255, 1 byte *)\nword-entry   = \"word\"   , ws , int  , { \",\" , int }  , eol ;   (* each value u64, 8 bytes little-endian *)\nascii-entry  = \"ascii\"  , ws , string , eol ;                  (* raw bytes, no terminator *)\nasciiz-entry = \"asciiz\" , ws , string , eol ;                  (* raw bytes then one 0x00 *)\naddr-entry   = \"addr\"   , ws , dotted-ident , eol ;            (* 64-bit ABSOLUTE address of a symbol -> abs64 fixup *)\nres-entry    = \"res\"    , ws , int , eol ;                     (* reserve N zero bytes (memsz only in bss) *)\n\n(* ---- procedures: 'proc NAME calls none ... end', body = one or more machine blocks ---- *)\nproc-block   = \"proc\" , ws , dotted-ident , eol ,\n               { proc-clause } ,\n               machine-block , { machine-block } ,\n               \"end\" , eol ;                            (* proc name = one global code symbol at its entry *)\nproc-clause  = ( \"calls\" , ws , \"none\"                  (* the only ABI accepted by the genesis assembler *)\n               | \"entry\"                                (* this proc's address -> ELF e_entry (design 0016) *)\n               | \"pub\"                                  (* STB_GLOBAL in the optional .symtab; else cosmetic *)\n               | \"export\" , [ ws , string ] ) , eol ;\nmachine-block = \"machine\" , ws , \"x64\" , eol ,\n                { instr-line | label-line | comment-line | blank } ,\n                \"end\" , eol ;\nlabel-line   = \".\" , ident , \":\" , eol ;               (* local label, scoped to the enclosing proc *)\n\n(* ---- instructions (the ~40 forms; byte encodings are owned by the other groups) ---- *)\ninstr-line   = mnemonic , [ ws , operand , { \",\" , operand } ] , eol ;\nmnemonic     = \"mov\"|\"lea\"|\"movzx\"|\"movsx\"|\"add\"|\"sub\"|\"and\"|\"or\"|\"xor\"|\"cmp\"\n             | \"test\"|\"shl\"|\"shr\"|\"sar\"|\"inc\"|\"dec\"|\"neg\"|\"not\"|\"imul\"|\"mul\"\n             | \"div\"|\"idiv\"|\"cqo\"|\"push\"|\"pop\"|\"jmp\"|\"call\"|\"ret\"|\"syscall\"\n             | \"je\"|\"jne\"|\"jz\"|\"jnz\"|\"jl\"|\"jle\"|\"jg\"|\"jge\"|\"jb\"|\"jbe\"|\"ja\"|\"jae\"|\"js\"|\"jns\" ;\noperand      = register | mem | immediate | ref-target ;\nref-target   = dotted-ident            (* cross-procedure / data symbol *)\n             | \".\" , ident ;           (* local label in the current proc *)\nregister     = r64 | r32 | r16 | r8 ;\nr64          = \"rax\"|\"rcx\"|\"rdx\"|\"rbx\"|\"rsp\"|\"rbp\"|\"rsi\"|\"rdi\"|\"r8\"|\"r9\"|\"r10\"|\"r11\"|\"r12\"|\"r13\"|\"r14\"|\"r15\" ;\nr32          = \"eax\"|\"ecx\"|\"edx\"|\"ebx\"|\"esp\"|\"ebp\"|\"esi\"|\"edi\"|\"r8d\"|\"r9d\"|\"r10d\"|\"r11d\"|\"r12d\"|\"r13d\"|\"r14d\"|\"r15d\" ;\nr16          = \"ax\"|\"cx\"|\"dx\"|\"bx\"|\"sp\"|\"bp\"|\"si\"|\"di\"|\"r8w\"|\"r9w\"|\"r10w\"|\"r11w\"|\"r12w\"|\"r13w\"|\"r14w\"|\"r15w\" ;\nr8           = \"al\"|\"cl\"|\"dl\"|\"bl\"|\"spl\"|\"bpl\"|\"sil\"|\"dil\"|\"r8b\"|\"r9b\"|\"r10b\"|\"r11b\"|\"r12b\"|\"r13b\"|\"r14b\"|\"r15b\" ;\nmem          = \"[\" , mem-body , \"]\" ;\nmem-body     = base , [ \"+\" , index , [ \"*\" , scale ] ] , [ \"+\" , disp ]\n             | dotted-ident ;          (* absolute memory operand [symbol] -> abs32sx disp32 *)\nbase         = r64 ;\nindex        = r64 ;                   (* rsp is not a legal index, per SIB encoding *)\nscale        = \"1\" | \"2\" | \"4\" | \"8\" ;\ndisp         = int ;\nimmediate    = int ;\nint          = [ \"-\" ] , ( hex-int | dec-int ) ;\nhex-int      = \"0x\" , hex-digit , { hex-digit } ;\ndec-int      = digit , { digit } ;\nstring       = '\"' , { str-char } , '\"' ;   (* escapes: \\n \\t \\0 \\\\ \\\" and \\xHH *)\nident        = ( letter | \"_\" ) , { letter | digit | \"_\" } ;   (* <= 31 chars, matching hex2's name buffer *)\ncomment-line = ws-opt , comment , LF ;\nblank        = ws-opt , LF ;\neol          = ws-opt , [ comment ] , LF ;\ncomment      = \"--\" , { ? any char except LF ? } ;\nws           = ( \" \" | TAB ) , { \" \" | TAB } ;\nws-opt       = { \" \" | TAB } ;",
+  "directives": "Every line is dispatched on its first token; there are no macros, no expressions\nbeyond base+index*scale+disp, and no conditional assembly. Keyword catalogue:\n\nSTRUCTURAL\n  module NAME            first non-blank line; sets the module prefix for symbol names.\n  proc NAME             opens a procedure; NAME is a global code symbol at the proc entry.\n  calls none            required proc clause; the genesis assembler supports only this ABI.\n  entry                 proc clause; records this proc as e_entry (design 0016). Exactly one\n                        proc in the module may carry it; zero is an error (exit 5).\n  pub / export [STR]    proc/data binding clauses; affect only the optional .symtab (STB_GLOBAL\n                        and the exported name). Ignored for execution since output is a single\n                        non-linked executable.\n  machine x64           opens an instruction block inside a proc; only \"x64\" is accepted.\n  end                   closes the innermost open construct (machine block, proc, or data block);\n                        the assembler keeps a 1-deep state (data-block XOR proc, and within a\n                        proc a machine-block flag), so \"end\" is unambiguous.\n  .name:                defines a local label at the current .text offset, scoped to the proc.\n\nDATA PLACEMENT (choose the section, then list entries; block name = symbol at offset 0)\n  rodata NAME ... end   read-only initialized bytes -> .rodata (PT_LOAD R).\n  data   NAME ... end   writable initialized bytes  -> .data   (PT_LOAD R+W).\n  bss    NAME ... end   zero-initialized reservation -> .bss    (memsz only, no file bytes).\n\nDATA ENTRIES\n  byte   v[,v...]       one u8 each (0..255); the primitive for hand-laid tables and headers.\n  word   v[,v...]       one u64 each, little-endian; for 64-bit constants and pointers.\n  ascii  \"text\"         raw bytes of the string, no terminator.\n  asciiz \"text\"         raw bytes plus a trailing 0x00.\n  addr   SYM            an 8-byte absolute address of SYM -> abs64 fixup (the \"label address\"\n                        static; the only way to embed a resolved pointer in data).\n  res    N              N bytes of zero. In .bss it costs memsz only; in .data/.rodata it emits\n                        N zero file bytes.\n\nOPERAND / IMMEDIATE NOTATION\n  Integers are decimal or 0x-hex, optional leading '-'. Registers are bare names\n  (r64/r32/r16/r8). Memory is [base], [base+disp], [base+index*scale+disp], or\n  [SYM] for an absolute operand. A bare identifier or \".local\" in a branch/call/lea\n  operand is a reference resolved by a fixup.\n\nDETERMINISM CONTRACT (what makes two passes sufficient)\n  The encoded LENGTH of every instruction depends ONLY on the operand SHAPE\n  (register width, presence of memory, presence of an immediate, presence of a\n  symbol field) and NEVER on the numeric VALUE of an immediate or address. The\n  assembler therefore knows every size in pass 1 without knowing any address, and\n  never relaxes:\n    - jmp/call/jcc to a symbol or label ALWAYS use the rel32 form (no short-jump\n      selection); e9 cd / e8 cd / 0f 8x cd.\n    - loading a 64-bit immediate or an \"addr\"-style pointer into a register ALWAYS\n      uses the 10-byte movabs (REX.W B8+r io).\n    - immediate ALU forms (add/sub/and/or/xor/cmp/test with an imm) ALWAYS use the\n      imm32 encoding (81 /r id, or the imm8-shift forms for shl/shr/sar); the value\n      must fit the fixed field or it is exit 4.\n  This is the single canonical form required of the encoding groups: one encoding\n  per (mnemonic, operand-shape), fixed length.\n\nDIAGNOSTICS / EXIT CODES (mirroring hex2's convention)\n  0 ok · 1 syntax error or unknown mnemonic/operand shape · 2 undefined symbol\n  (name printed to stderr) · 3 rel8 displacement out of range · 4 immediate/field\n  overflow (value does not fit its fixed field) · 5 zero or multiple 'entry' clauses.",
+  "elf_plan": "TARGET (docs/ABI.md sec 7): static ET_EXEC, EM_X86_64, ELFCLASS64/ELFDATA2LSB, non-PIE, no PT_INTERP, no PT_DYNAMIC, no relocations, base 0x400000. See the detailed plan in the fixups/directives narrative above. Segments: PH0 PT_LOAD R+X (Ehdr+Phdrs+.text at 0x400000), PH1 PT_LOAD R (.rodata, next page), PH2 PT_LOAD R+W (.data + .bss, next page), optional PH3 PT_GNU_STACK. e_entry = vaddr of the 'entry' proc; e_phoff=64, e_phentsize=56. Minimal seed may fold .rodata into PH2 and drop PH3. Two-pass: (1) parse into buffers, size each item from operand shape, assign section bases text_base=0x400000+64+phnum*56, rodata_base/data_base page-aligned, resolve every symbol to section_base+offset; (2) fill Ehdr/Phdrs, patch all fixup holes, stream Ehdr, Phdrs, .text, .rodata, .data (.bss is memsz only). No relocations remain in the file.",
+  "fixups": "A fixup is {section, field-offset, kind, target}. Let F = absolute vaddr of the\nfield's first byte (section_base + field-offset), T = resolved absolute vaddr of\nthe target symbol/label. All fields are written little-endian. Four kinds:\n\n  rel32  - 4-byte signed displacement, value = T - (F + 4).\n           Used by every branch/call to a symbol or \".local\": jmp/call/jcc, and by\n           lea reg,[SYM] when RIP-relative addressing is chosen. This is the\n           default and preferred branch fixup (no relaxation).\n           Example: at F=0x401005, \"e8 00 00 00 00\" (call foo) with foo at\n           T=0x401014 -> disp = 0x14-(0x05+4) ... = 0x0000000a, patched bytes\n           \"0a 00 00 00\", instruction \"e8 0a 00 00 00\".\n           Range: must fit signed 32-bit; overflow -> exit 4 (cannot happen within\n           a single <2GiB image, but checked).\n\n  rel8   - 1-byte signed displacement, value = T - (F + 1).\n           Reserved for any mnemonic the encoding groups define as short-only\n           (e.g. an explicit short jmp/loop); the mainline branches all use rel32,\n           so a portable genesis build need not emit rel8 at all. Out of the\n           signed -128..127 range -> exit 3 (as in hex2's \"!name\").\n           Example: F=0x401010, target T=0x401020 -> 0x20-(0x10+1) ... = 0x0f,\n           byte \"0f\".\n\n  abs32sx - 4-byte field holding the low 32 bits of T (T truncated to 32 bits).\n           The CPU sign-extends it at use; since the whole image lives near\n           0x400000 (< 0x80000000) sign-extension is a no-op, so it equals the\n           absolute address. Used for absolute memory operands [SYM] (ModRM\n           mod=00,rm=100 SIB base=101,index=100 disp32) and for any \"mov r/m,imm32\"\n           that names a low-image symbol. The assembler asserts T < 0x80000000\n           else exit 4.\n           Example: SYM at T=0x402000, field \"00 00 00 00\" -> \"00 20 40 00\".\n\n  abs64  - 8-byte field holding the full 64-bit T.\n           Used by movabs reg,SYM (REX.W B8+r io) and by the \"addr SYM\" / \"word\n           <pointer>\" data directives - i.e. every embedded resolved pointer.\n           Example: SYM at T=0x0000000000402000 -> bytes\n           \"00 20 40 00 00 00 00 00\".\n\nNo other fixup kinds exist; there is no GOT/PLT, no PC-relative data relocation\ntype, and nothing is deferred to a linker or loader - every hole is patched in\npass 2, so the emitted ELF is relocation-free.",
+  "open_questions": "1. Whether the genesis seed emits .symtab/.strtab at all. Proposal: omit by\n   default (--symtab optional); the executable runs without it and it costs the\n   hand-written writer a string-table pass. The self-hosted compiler always emits\n   it per ABI.md sec 7. Needs a call from the maintainer.\n2. Whether .rodata is a distinct PT_LOAD R segment or folded into the R+W data\n   segment in the earliest builds. Folding loses W^X on constants but removes one\n   phdr and one alignment pad from the hand-written writer. Proposed: fold in the\n   first working seed, split to the canonical 3-4 segment layout once asm.hex2 is\n   proven, since both are computed identically in pass 1.\n3. The encoding groups must confirm the \"length = f(operand shape only)\" contract\n   for every one of the ~40 forms (single canonical encoding, no imm8/rel8\n   relaxation). If any form's canonical length is value-dependent, the two-pass\n   model needs a fixed-point sizing loop instead - a real complication for a\n   hand-written assembler. Flag any such form now.\n4. lea reg,[SYM]: rel32 RIP-relative (preferred, position-independent within the\n   image) vs mov reg,imm32 (abs32sx). Recommend RIP-relative lea so code that\n   moves is unaffected; confirm the encoding group emits the RIP form.\n5. Do we need rel8 in the mainline at all? Recommendation: no - use rel32 for all\n   branches for determinism; keep the rel8 fixup defined only for future\n   short-only mnemonics."
+ },
+ "forms": [
+  {
+   "id": "mov_rm64_r64",
+   "mnemonic": "mov",
+   "syntax": "mov r/m64, r64",
+   "example_asm": "mov rbx, rax",
+   "example_bytes": "48 89 c3",
+   "fields": "REX.W = 0100 1000 = 0x48 (W=1 for 64-bit; R=0 src rax<8; X=0; B=0 dst rbx<8). opcode = 89. ModRM = mod(11 register-direct) reg(src rax=000) rm(dst rbx=011) = 1100 0011 = 0xc3. Cross-check existing hex2: 48 89 de = mov rsi,rbx has reg=rbx=011, rm=rsi=110 -> ModRM 1101 1110 = de.",
+   "rule": "reg field carries the SOURCE r64, rm field the DESTINATION r/m64. REX = 0x48 | (src>=8 ? 0x04 (R) : 0) | (dst>=8 ? 0x01 (B) : 0). opcode = 0x89. For register-direct dst: ModRM = 0xC0 | ((src&7)<<3) | (dst&7). For a memory dst use the memory-operand encoding (mod!=11) with reg = (src&7).",
+   "gotchas": "reg-reg mov has two opcodes (89 and 8b); a simple assembler picks by syntactic form: this 'mov r/m64, r64' form always uses 89. Do not emit a redundant REX (0x40) when no extension bit and W are needed — but W=1 here always forces 0x48 minimum."
+  },
+  {
+   "id": "mov_r64_rm64",
+   "mnemonic": "mov",
+   "syntax": "mov r64, r/m64",
+   "example_asm": "mov rax, rbx",
+   "example_bytes": "48 8b c3",
+   "fields": "REX.W = 0x48 (W=1; R=0 dst rax<8; B=0 src rbx<8). opcode = 8b. ModRM = mod(11) reg(dst rax=000) rm(src rbx=011) = 1100 0011 = 0xc3.",
+   "rule": "reg field carries the DESTINATION r64, rm field the SOURCE r/m64. REX = 0x48 | (dst>=8 ? 0x04 (R) : 0) | (src>=8 ? 0x01 (B) : 0). opcode = 0x8b. Register-direct: ModRM = 0xC0 | ((dst&7)<<3) | (src&7). Memory source: use the memory-operand encoding with reg = (dst&7).",
+   "gotchas": "Use 8b when the memory/register operand is the SOURCE (right side). Register-to-register 'mov rax, rbx' could also be 48 89 d8 via the 89 form; the assembler chooses by which operand is written as r/m, so a fixed source-is-r/m rule keeps encoding deterministic."
+  },
+  {
+   "id": "mov_r64_imm32",
+   "mnemonic": "mov",
+   "syntax": "mov r64, imm32 (sign-extended to 64)",
+   "example_asm": "mov rax, 1",
+   "example_bytes": "48 c7 c0 01 00 00 00",
+   "fields": "REX.W = 0x48 (W=1; B=0 rax<8). opcode = c7. ModRM = mod(11) reg(/0 = opcode ext = 000) rm(dst rax=000) = 1100 0000 = 0xc0. imm32 = 01 00 00 00 (little-endian, sign-extended to the full 64-bit register).",
+   "rule": "REX = 0x48 | (dst>=8 ? 0x01 (B) : 0). opcode = 0xC7. ModRM = 0xC0 | (dst&7) (reg field is the /0 opcode extension, always 000). Append imm32 as 4 little-endian bytes. Only valid when the constant fits a signed 32-bit range (-0x80000000..0x7fffffff); it is sign-extended into bits 63:32.",
+   "gotchas": "This is the compact 7-byte form for small/negative constants. For a positive value that fits unsigned 32 bits, the 5-byte b8+rd form (mov r32, imm32, no REX.W, zero-extends) is shorter — but that changes syntax; pick one canonical rule per operand form. Use movabs (below) for any value needing more than 32 bits or where the high bits must not be sign-filled."
+  },
+  {
+   "id": "movabs_r64_imm64",
+   "mnemonic": "movabs",
+   "syntax": "movabs r64, imm64",
+   "example_asm": "movabs rax, 0x1122334455667788",
+   "example_bytes": "48 b8 88 77 66 55 44 33 22 11",
+   "fields": "REX.W = 0x48 (W=1; B=0 rax<8). opcode = B8 + rd, rd = (rax&7) = 0 -> 0xb8. imm64 = 88 77 66 55 44 33 22 11 (8 little-endian bytes). No ModRM byte — the register is encoded in the opcode.",
+   "rule": "REX = 0x48 | (dst>=8 ? 0x01 (B) : 0). opcode = 0xB8 + (dst&7). Append the full imm64 as 8 little-endian bytes. This is the only form that loads a complete arbitrary 64-bit constant.",
+   "gotchas": "REX.B extends the opcode-embedded register (e.g. movabs r8, imm64 = 49 b8 ...). There is NO ModRM byte. This form always takes 10 bytes for r0-r7; prefer c7 /0 for values that fit signed 32 bits when size matters."
+  },
+  {
+   "id": "mov_m64_imm32",
+   "mnemonic": "mov",
+   "syntax": "mov qword [base + disp], imm32",
+   "example_asm": "mov qword [rbx + 0x10], 1",
+   "example_bytes": "48 c7 43 10 01 00 00 00",
+   "fields": "REX.W = 0x48. opcode = c7. ModRM = mod(01 disp8) reg(/0 = 000) rm(base rbx=011) = 0100 0011 = 0x43. disp8 = 10. imm32 = 01 00 00 00 (sign-extended into the 64-bit memory cell).",
+   "rule": "REX = 0x48 | (base>=8 ? 0x01 (B) : 0) (add 0x02 X if a SIB index>=8 is used). opcode = 0xC7, reg field = /0 = 000. Encode the memory operand in mod/rm/SIB/disp exactly as for lea (see memory rules below), then append imm32 (4 LE bytes). Immediate must fit signed 32 bits.",
+   "gotchas": "Same memory addressing traps as lea: base rsp/r12 (rm=100) forces a SIB byte; base rbp/r13 (rm=101) cannot use mod=00, so [rbp]/[r13] needs mod=01 disp8=00. The 'qword' size is implied only by REX.W — without W it becomes a 32-bit store (dword)."
+  },
+  {
+   "id": "mov_rm32_r32",
+   "mnemonic": "mov",
+   "syntax": "mov r/m32, r32 (no REX.W)",
+   "example_asm": "mov ecx, eax",
+   "example_bytes": "89 c1",
+   "fields": "No REX prefix (both regs < r8, 32-bit operand size is the default without REX.W). opcode = 89. ModRM = mod(11) reg(src eax=000) rm(dst ecx=001) = 1100 0001 = 0xc1. Cross-check existing hex2: 44 89 c0 = mov eax, r8d has REX.R=1 for the r8d source, reg=000, rm=eax=000.",
+   "rule": "Identical to mov r/m64, r64 but WITHOUT REX.W: emit a REX byte only if an extended register (r8d-r15d) participates, as 0x40 | (src>=8?0x04) | (dst>=8?0x01). opcode = 0x89, ModRM = 0xC0 | ((src&7)<<3) | (dst&7) for register-direct.",
+   "gotchas": "Writing any 32-bit destination register ZERO-extends bits 63:32 of the full 64-bit register — this is the canonical zero-extension idiom (mov eax, eax = 89 c0 clears the top half of rax). Never add REX.W here or you get a 64-bit op. A bare REX (0x40) is emitted only when spl/bpl/sil/dil low-byte forms are needed elsewhere, not for plain e-registers."
+  },
+  {
+   "id": "mov_r32_rm32",
+   "mnemonic": "mov",
+   "syntax": "mov r32, r/m32 (no REX.W)",
+   "example_asm": "mov eax, ecx",
+   "example_bytes": "8b c1",
+   "fields": "No REX prefix. opcode = 8b. ModRM = mod(11) reg(dst eax=000) rm(src ecx=001) = 1100 0001 = 0xc1.",
+   "rule": "Identical to mov r64, r/m64 but WITHOUT REX.W. REX emitted only for extended regs: 0x40 | (dst>=8?0x04 R) | (src>=8?0x01 B). opcode = 0x8b, register-direct ModRM = 0xC0 | ((dst&7)<<3) | (src&7); memory source uses the memory encoding with reg=(dst&7).",
+   "gotchas": "Also zero-extends the destination's upper 32 bits. Used to load a 32-bit value from memory while implicitly clearing the high half (e.g. mov eax, [rbx] = 8b 03). For a signed 32->64 load use movsxd (63) instead."
+  },
+  {
+   "id": "lea_r64_base_disp",
+   "mnemonic": "lea",
+   "syntax": "lea r64, [base + disp8/disp32]",
+   "example_asm": "lea rax, [rbx + 0x10]",
+   "example_bytes": "48 8d 43 10",
+   "fields": "REX.W = 0x48 (dst rax<8, base rbx<8). opcode = 8d. ModRM = mod(01 => disp8) reg(dst rax=000) rm(base rbx=011) = 0100 0011 = 0x43. disp8 = 10. For a larger offset, e.g. lea rax,[rbx+0x100] = 48 8d 83 00 01 00 00: mod(10 => disp32) rm(011) = 1000 0011 = 0x83, disp32 = 00 01 00 00.",
+   "rule": "REX = 0x48 | (dst>=8?0x04 R) | (base>=8?0x01 B). opcode = 0x8d, reg = (dst&7). Choose mod by disp: mod=00 (no disp) only if disp==0 AND base not in {rbp,r13}; mod=01 with 1-byte disp if disp fits signed 8 bits; else mod=10 with 4-byte LE disp32. rm = (base&7). If base is rsp/r12 (rm==100) a SIB byte must follow (see next form).",
+   "gotchas": "base rbp/r13 (rm==101) has NO mod=00 form (that slot means rip-relative), so [rbp] and [r13] must be encoded as mod=01 with disp8=00: lea rax,[rbp] = 48 8d 45 00, lea rax,[r13] = 49 8d 45 00. base rsp/r12 (rm==100) forces a SIB: lea rax,[rsp+0x10] = 48 8d 44 24 10 (ModRM 44, SIB 24 = scale0 index100(none) base100), lea rax,[r12+0x10] = 49 8d 44 24 10 (REX.B extends the base)."
+  },
+  {
+   "id": "lea_r64_index_scale",
+   "mnemonic": "lea",
+   "syntax": "lea r64, [base + index*scale + disp]",
+   "example_asm": "lea rax, [rbx + rcx*4 + 0x10]",
+   "example_bytes": "48 8d 44 8b 10",
+   "fields": "REX.W = 0x48 (R=0 rax; X=0 rcx<8; B=0 rbx<8). opcode = 8d. ModRM = mod(01 disp8) reg(rax=000) rm(100 => SIB follows) = 0100 0100 = 0x44. SIB = scale(10 => x4) index(rcx=001) base(rbx=011) = 1000 1011 = 0x8b. disp8 = 10.",
+   "rule": "rm field of ModRM = 100 to signal a SIB byte; reg = (dst&7); mod chosen from disp as usual. SIB = (log2(scale)<<6) | ((index&7)<<3) | (base&7), scale in {1,2,4,8} -> {00,01,10,11}. REX = 0x48 | (dst>=8?0x04 R) | (index>=8?0x02 X) | (base>=8?0x01 B).",
+   "gotchas": "index==100 (rsp) means NO index register — rsp can never be a scaled index; use r12 as index freely (index=100 with REX.X=1 distinguishes it). If base is rbp/r13 (base field==101) AND mod==00, there is no base and a disp32 must be present; to get [rbp+index] with zero disp use mod=01 disp8=00. A pure [index*scale+disp32] with no base uses mod=00, base=101, and a 4-byte disp32."
+  },
+  {
+   "id": "lea_r64_rip",
+   "mnemonic": "lea",
+   "syntax": "lea r64, [rip + disp32]",
+   "example_asm": "lea rax, [rip + 0x100]",
+   "example_bytes": "48 8d 05 00 01 00 00",
+   "fields": "REX.W = 0x48. opcode = 8d. ModRM = mod(00) reg(dst rax=000) rm(101 => RIP-relative) = 0000 0101 = 0x05. disp32 = 00 01 00 00 (signed, relative to the address of the NEXT instruction).",
+   "rule": "REX = 0x48 | (dst>=8?0x04 R). opcode = 0x8d. ModRM = 0x05 | ((dst&7)<<3) (i.e. mod=00, rm=101). Always followed by a 4-byte LE disp32 = target - (address_of_instruction_end). The assembler computes disp32 after layout as target - rip_after.",
+   "gotchas": "mod=00 rm=101 is the ONE case that means rip-relative, not [rbp]. There is no disp8 rip-relative form — always disp32. REX.B has no effect on the rm=101 rip meaning (it is not a register). This is the standard way to take the address of a static in position-independent code."
+  },
+  {
+   "id": "movzx_r64_rm8",
+   "mnemonic": "movzx",
+   "syntax": "movzx r64, r/m8",
+   "example_asm": "movzx rax, bl",
+   "example_bytes": "48 0f b6 c3",
+   "fields": "REX.W = 0x48. opcode = 0f b6 (two-byte). ModRM = mod(11) reg(dst rax=000) rm(src bl=011) = 1100 0011 = 0xc3. Memory form movzx rax, byte [rbx] = 48 0f b6 03 (mod=00, rm=011); cf. existing hex2 0f b6 03 = movzx eax, byte [rbx] without REX.W.",
+   "rule": "REX = 0x48 | (dst>=8?0x04 R) | (src>=8?0x01 B). opcode bytes = 0F B6. reg = (dst&7); rm = the r/m8 source, register-direct ModRM = 0xC0 | ((dst&7)<<3) | (src&7), or a memory operand encoded as usual. Result is zero-extended across all 64 bits.",
+   "gotchas": "With a REX prefix present, the low-byte registers of rsp/rbp/rsi/rdi are spl/bpl/sil/dil (rm=100/101/110/111); the legacy high-byte regs ah/ch/dh/bh become UNENCODABLE once any REX byte exists. Since REX.W is mandatory for a 64-bit destination, ah/bh/ch/dh can never be a movzx r64 source."
+  },
+  {
+   "id": "movzx_r64_rm16",
+   "mnemonic": "movzx",
+   "syntax": "movzx r64, r/m16",
+   "example_asm": "movzx rax, bx",
+   "example_bytes": "48 0f b7 c3",
+   "fields": "REX.W = 0x48. opcode = 0f b7. ModRM = mod(11) reg(rax=000) rm(bx=011) = 0xc3.",
+   "rule": "Same as movzx r/m8 but opcode second byte is B7. REX = 0x48 | (dst>=8?0x04) | (src>=8?0x01). ModRM register-direct = 0xC0 | ((dst&7)<<3) | (src&7); memory source encoded normally. Zero-extends the 16-bit value to 64 bits.",
+   "gotchas": "No 0x66 operand-size prefix is needed — the 0F B7 opcode already specifies a 16-bit source; the destination width comes from REX.W. Do not add 0x66 (that would be wrong/redundant)."
+  },
+  {
+   "id": "movsx_r64_rm8",
+   "mnemonic": "movsx",
+   "syntax": "movsx r64, r/m8",
+   "example_asm": "movsx rax, bl",
+   "example_bytes": "48 0f be c3",
+   "fields": "REX.W = 0x48. opcode = 0f be. ModRM = mod(11) reg(rax=000) rm(bl=011) = 0xc3. Cross-check existing hex2: 48 0f be c8 = movsx rcx, al -> reg=rcx=001, rm=al=000, ModRM 1100 1000 = c8.",
+   "rule": "REX = 0x48 | (dst>=8?0x04 R) | (src>=8?0x01 B). opcode = 0F BE. reg = (dst&7); register-direct ModRM = 0xC0 | ((dst&7)<<3) | (src&7); memory source encoded normally. Sign-extends bit 7 across all 64 bits.",
+   "gotchas": "Same REX/8-bit-register rule as movzx: with REX present, spl/bpl/sil/dil replace ah/ch/dh/bh, and ah/bh/ch/dh are unencodable. Sign extension fills the upper 56 bits from bit 7 of the source byte."
+  },
+  {
+   "id": "movsx_r64_rm16",
+   "mnemonic": "movsx",
+   "syntax": "movsx r64, r/m16",
+   "example_asm": "movsx rax, bx",
+   "example_bytes": "48 0f bf c3",
+   "fields": "REX.W = 0x48. opcode = 0f bf. ModRM = mod(11) reg(rax=000) rm(bx=011) = 0xc3.",
+   "rule": "Same as movsx r/m8 but opcode second byte is BF. REX = 0x48 | (dst>=8?0x04) | (src>=8?0x01). ModRM register-direct = 0xC0 | ((dst&7)<<3) | (src&7); memory encoded normally. Sign-extends the 16-bit value to 64 bits.",
+   "gotchas": "No 0x66 prefix — 0F BF already fixes the 16-bit source width; destination width is set by REX.W."
+  },
+  {
+   "id": "movsxd_r64_rm32",
+   "mnemonic": "movsxd",
+   "syntax": "movsxd r64, r/m32",
+   "example_asm": "movsxd rax, ecx",
+   "example_bytes": "48 63 c1",
+   "fields": "REX.W = 0x48 (W=1 selects the 64-bit sign-extending form). opcode = 63 (one byte). ModRM = mod(11) reg(dst rax=000) rm(src ecx=001) = 1100 0001 = 0xc1.",
+   "rule": "REX = 0x48 | (dst>=8?0x04 R) | (src>=8?0x01 B) (add 0x02 X for an extended SIB index in memory forms). opcode = 0x63. reg = (dst&7); register-direct ModRM = 0xC0 | ((dst&7)<<3) | (src&7); a 32-bit memory source is encoded with the normal mod/rm/SIB/disp rules. Sign-extends the 32-bit value into all 64 bits.",
+   "gotchas": "REX.W is REQUIRED — without it, opcode 63 is the legacy ARPL/MOVSXD-16 form and does not do the 32->64 sign extend you want. This is the correct instruction to widen a signed 32-bit value; use mov r32,r/m32 (8b, no W) instead when zero-extension is intended. Memory example: movsxd rax, dword [rbx] = 48 63 03."
+  },
+  {
+   "id": "add_rm64_r64",
+   "mnemonic": "add",
+   "syntax": "add r/m64, r64",
+   "example_asm": "add rbx, rax",
+   "example_bytes": "48 01 c3",
+   "fields": "REX=0x48 (0100 1000: W=1, R=0, X=0, B=0). opcode=01. ModRM=0xc3 = 11(mod, register-direct) 000(reg=rax, source) 011(rm=rbx, dest).",
+   "rule": "opcode is 01 (the /r store form: reg field = SOURCE r64, rm field = DEST r/m64). REX=0x40|8|(R<<2)|(X<<1)|B with W=1 always, R=1 if source reg is r8-r15, B=1 if dest reg is r8-r15, X=0. ModRM = 0xC0 | ((src&7)<<3) | (dst&7). No SIB/disp/imm for reg-direct.",
+   "gotchas": "add rbx,rax and add rax,rbx (r64,r/m64 form, opcode 03) can both express reg,reg; a simple assembler picks the opcode from the written syntactic form. r8-r15: e.g. add r8,rax => REX.WB=0x49, ModRM=0xc0."
+  },
+  {
+   "id": "or_rm64_r64",
+   "mnemonic": "or",
+   "syntax": "or r/m64, r64",
+   "example_asm": "or rbx, rax",
+   "example_bytes": "48 09 c3",
+   "fields": "REX=0x48 (W=1). opcode=09. ModRM=0xc3 = 11 000(reg=rax,src) 011(rm=rbx,dst).",
+   "rule": "opcode 09 (/r store form). REX and ModRM computed exactly as add_rm64_r64: REX.W=1, R=src r8-r15, B=dst r8-r15; ModRM = 0xC0 | ((src&7)<<3) | (dst&7).",
+   "gotchas": "Same reg,reg duality with the r64,r/m64 form (0b)."
+  },
+  {
+   "id": "and_rm64_r64",
+   "mnemonic": "and",
+   "syntax": "and r/m64, r64",
+   "example_asm": "and rbx, rax",
+   "example_bytes": "48 21 c3",
+   "fields": "REX=0x48 (W=1). opcode=21. ModRM=0xc3 = 11 000(reg=rax,src) 011(rm=rbx,dst).",
+   "rule": "opcode 21 (/r store form). REX/ModRM as add_rm64_r64: ModRM = 0xC0 | ((src&7)<<3) | (dst&7), REX.W=1 with R/B extension bits.",
+   "gotchas": "Same reg,reg duality with the r64,r/m64 form (23)."
+  },
+  {
+   "id": "sub_rm64_r64",
+   "mnemonic": "sub",
+   "syntax": "sub r/m64, r64",
+   "example_asm": "sub rbx, rax",
+   "example_bytes": "48 29 c3",
+   "fields": "REX=0x48 (W=1). opcode=29. ModRM=0xc3 = 11 000(reg=rax,src) 011(rm=rbx,dst).",
+   "rule": "opcode 29 (/r store form). REX/ModRM as add_rm64_r64: ModRM = 0xC0 | ((src&7)<<3) | (dst&7).",
+   "gotchas": "Same reg,reg duality with the r64,r/m64 form (2b)."
+  },
+  {
+   "id": "xor_rm64_r64",
+   "mnemonic": "xor",
+   "syntax": "xor r/m64, r64",
+   "example_asm": "xor rbx, rax",
+   "example_bytes": "48 31 c3",
+   "fields": "REX=0x48 (W=1). opcode=31. ModRM=0xc3 = 11 000(reg=rax,src) 011(rm=rbx,dst).",
+   "rule": "opcode 31 (/r store form). REX/ModRM as add_rm64_r64: ModRM = 0xC0 | ((src&7)<<3) | (dst&7).",
+   "gotchas": "xor reg,same-reg is the idiomatic zero-idiom; still encodes normally (e.g. xor rax,rax = 48 31 c0). Duality with 33."
+  },
+  {
+   "id": "cmp_rm64_r64",
+   "mnemonic": "cmp",
+   "syntax": "cmp r/m64, r64",
+   "example_asm": "cmp rbx, rax",
+   "example_bytes": "48 39 c3",
+   "fields": "REX=0x48 (W=1). opcode=39. ModRM=0xc3 = 11 000(reg=rax,src) 011(rm=rbx,dst).",
+   "rule": "opcode 39 (/r store form). REX/ModRM as add_rm64_r64: ModRM = 0xC0 | ((src&7)<<3) | (dst&7). cmp writes no result, only flags.",
+   "gotchas": "cmp r/m64,r64 computes (rm - reg) for flags; operand order matters for CF/SF. Duality with 3b."
+  },
+  {
+   "id": "add_r64_rm64",
+   "mnemonic": "add",
+   "syntax": "add r64, r/m64",
+   "example_asm": "add rax, rbx",
+   "example_bytes": "48 03 c3",
+   "fields": "REX=0x48 (W=1). opcode=03. ModRM=0xc3 = 11 000(reg=rax, DEST) 011(rm=rbx, SRC).",
+   "rule": "opcode 03 (the /r load form: reg field = DEST r64, rm field = SRC r/m64 — reversed roles vs 01). REX.W=1, R=1 if dest reg is r8-r15, B=1 if src reg is r8-r15, X=0. ModRM = 0xC0 | ((dst&7)<<3) | (src&7).",
+   "gotchas": "Note reg/rm roles are swapped relative to the r/m64,r64 form. add rax,rbx (03) vs add rbx,rax (01) both are reg,reg."
+  },
+  {
+   "id": "or_r64_rm64",
+   "mnemonic": "or",
+   "syntax": "or r64, r/m64",
+   "example_asm": "or rax, rbx",
+   "example_bytes": "48 0b c3",
+   "fields": "REX=0x48 (W=1). opcode=0b. ModRM=0xc3 = 11 000(reg=rax,dest) 011(rm=rbx,src).",
+   "rule": "opcode 0b (/r load form). REX/ModRM as add_r64_rm64: reg=dest, rm=src; ModRM = 0xC0 | ((dst&7)<<3) | (src&7).",
+   "gotchas": "reg/rm roles swapped vs the 09 form."
+  },
+  {
+   "id": "and_r64_rm64",
+   "mnemonic": "and",
+   "syntax": "and r64, r/m64",
+   "example_asm": "and rax, rbx",
+   "example_bytes": "48 23 c3",
+   "fields": "REX=0x48 (W=1). opcode=23. ModRM=0xc3 = 11 000(reg=rax,dest) 011(rm=rbx,src).",
+   "rule": "opcode 23 (/r load form). REX/ModRM as add_r64_rm64: ModRM = 0xC0 | ((dst&7)<<3) | (src&7).",
+   "gotchas": "reg/rm roles swapped vs the 21 form."
+  },
+  {
+   "id": "sub_r64_rm64",
+   "mnemonic": "sub",
+   "syntax": "sub r64, r/m64",
+   "example_asm": "sub rax, rbx",
+   "example_bytes": "48 2b c3",
+   "fields": "REX=0x48 (W=1). opcode=2b. ModRM=0xc3 = 11 000(reg=rax,dest) 011(rm=rbx,src).",
+   "rule": "opcode 2b (/r load form). REX/ModRM as add_r64_rm64: ModRM = 0xC0 | ((dst&7)<<3) | (src&7).",
+   "gotchas": "reg/rm roles swapped vs the 29 form."
+  },
+  {
+   "id": "xor_r64_rm64",
+   "mnemonic": "xor",
+   "syntax": "xor r64, r/m64",
+   "example_asm": "xor rax, rbx",
+   "example_bytes": "48 33 c3",
+   "fields": "REX=0x48 (W=1). opcode=33. ModRM=0xc3 = 11 000(reg=rax,dest) 011(rm=rbx,src).",
+   "rule": "opcode 33 (/r load form). REX/ModRM as add_r64_rm64: ModRM = 0xC0 | ((dst&7)<<3) | (src&7).",
+   "gotchas": "reg/rm roles swapped vs the 31 form."
+  },
+  {
+   "id": "cmp_r64_rm64",
+   "mnemonic": "cmp",
+   "syntax": "cmp r64, r/m64",
+   "example_asm": "cmp rax, rbx",
+   "example_bytes": "48 3b c3",
+   "fields": "REX=0x48 (W=1). opcode=3b. ModRM=0xc3 = 11 000(reg=rax,dest/left) 011(rm=rbx,right).",
+   "rule": "opcode 3b (/r load form). REX/ModRM as add_r64_rm64: ModRM = 0xC0 | ((reg&7)<<3) | (rm&7). cmp writes only flags, computing (reg - rm).",
+   "gotchas": "Flags reflect (reg - rm) here vs (rm - reg) for the 39 form; pick the opcode matching operand order."
+  },
+  {
+   "id": "add_rm64_imm32",
+   "mnemonic": "add",
+   "syntax": "add r/m64, imm32",
+   "example_asm": "add rbx, 0x12345678",
+   "example_bytes": "48 81 c3 78 56 34 12",
+   "fields": "REX=0x48 (W=1). opcode=81. ModRM=0xc3 = 11 000(reg=/digit 0 for add) 011(rm=rbx). imm32 LE = 78 56 34 12.",
+   "rule": "opcode 81, group /digit goes in ModRM.reg; for add digit=0. REX.W=1, B=1 if rm reg is r8-r15 (R/X=0). ModRM = 0xC0 | (0<<3) | (rm&7). Append imm32 little-endian (4 bytes).",
+   "gotchas": "imm32 is sign-extended to 64 bits by the CPU. If the constant fits signed [-128,127] a simple assembler may instead emit the 83 imm8 form; emit 81 only when the written form/size demands it. Constants needing full 64 bits require a mov into a register first."
+  },
+  {
+   "id": "or_rm64_imm32",
+   "mnemonic": "or",
+   "syntax": "or r/m64, imm32",
+   "example_asm": "or rbx, 0x12345678",
+   "example_bytes": "48 81 cb 78 56 34 12",
+   "fields": "REX=0x48 (W=1). opcode=81. ModRM=0xcb = 11 001(reg=/digit 1 for or) 011(rm=rbx). imm32 LE = 78 56 34 12.",
+   "rule": "opcode 81, /digit=1 (or) in ModRM.reg. ModRM = 0xC0 | (1<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append imm32 LE.",
+   "gotchas": "imm32 sign-extended to 64 bits; 83 imm8 form preferred for small signed constants."
+  },
+  {
+   "id": "and_rm64_imm32",
+   "mnemonic": "and",
+   "syntax": "and r/m64, imm32",
+   "example_asm": "and rbx, 0x12345678",
+   "example_bytes": "48 81 e3 78 56 34 12",
+   "fields": "REX=0x48 (W=1). opcode=81. ModRM=0xe3 = 11 100(reg=/digit 4 for and) 011(rm=rbx). imm32 LE = 78 56 34 12.",
+   "rule": "opcode 81, /digit=4 (and) in ModRM.reg. ModRM = 0xC0 | (4<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append imm32 LE.",
+   "gotchas": "imm32 sign-extended to 64 bits (note: a mask like 0xFFFFFFFF becomes -1 = all-ones 64-bit); 83 imm8 form for small signed constants."
+  },
+  {
+   "id": "sub_rm64_imm32",
+   "mnemonic": "sub",
+   "syntax": "sub r/m64, imm32",
+   "example_asm": "sub rbx, 0x12345678",
+   "example_bytes": "48 81 eb 78 56 34 12",
+   "fields": "REX=0x48 (W=1). opcode=81. ModRM=0xeb = 11 101(reg=/digit 5 for sub) 011(rm=rbx). imm32 LE = 78 56 34 12.",
+   "rule": "opcode 81, /digit=5 (sub) in ModRM.reg. ModRM = 0xC0 | (5<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append imm32 LE.",
+   "gotchas": "imm32 sign-extended to 64 bits; 83 imm8 form for small signed constants."
+  },
+  {
+   "id": "xor_rm64_imm32",
+   "mnemonic": "xor",
+   "syntax": "xor r/m64, imm32",
+   "example_asm": "xor rbx, 0x12345678",
+   "example_bytes": "48 81 f3 78 56 34 12",
+   "fields": "REX=0x48 (W=1). opcode=81. ModRM=0xf3 = 11 110(reg=/digit 6 for xor) 011(rm=rbx). imm32 LE = 78 56 34 12.",
+   "rule": "opcode 81, /digit=6 (xor) in ModRM.reg. ModRM = 0xC0 | (6<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append imm32 LE.",
+   "gotchas": "imm32 sign-extended to 64 bits; 83 imm8 form for small signed constants."
+  },
+  {
+   "id": "cmp_rm64_imm32",
+   "mnemonic": "cmp",
+   "syntax": "cmp r/m64, imm32",
+   "example_asm": "cmp rbx, 0x12345678",
+   "example_bytes": "48 81 fb 78 56 34 12",
+   "fields": "REX=0x48 (W=1). opcode=81. ModRM=0xfb = 11 111(reg=/digit 7 for cmp) 011(rm=rbx). imm32 LE = 78 56 34 12.",
+   "rule": "opcode 81, /digit=7 (cmp) in ModRM.reg. ModRM = 0xC0 | (7<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append imm32 LE. Writes only flags (rm - imm).",
+   "gotchas": "imm32 sign-extended to 64 bits; 83 imm8 form for small signed constants."
+  },
+  {
+   "id": "add_rm64_imm8",
+   "mnemonic": "add",
+   "syntax": "add r/m64, imm8 (sign-extended)",
+   "example_asm": "add rbx, 0x7f",
+   "example_bytes": "48 83 c3 7f",
+   "fields": "REX=0x48 (W=1). opcode=83. ModRM=0xc3 = 11 000(reg=/digit 0 for add) 011(rm=rbx). imm8 = 7f.",
+   "rule": "opcode 83, /digit=0 (add) in ModRM.reg. ModRM = 0xC0 | (0<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append one imm8 byte, sign-extended to 64 bits at execution.",
+   "gotchas": "imm8 is SIGNED [-128,127]; 0x80..0xff encode negative values (e.g. 0xff = -1). For 0x80..0x7fffffff use the 81 imm32 form instead."
+  },
+  {
+   "id": "or_rm64_imm8",
+   "mnemonic": "or",
+   "syntax": "or r/m64, imm8 (sign-extended)",
+   "example_asm": "or rbx, 0x7f",
+   "example_bytes": "48 83 cb 7f",
+   "fields": "REX=0x48 (W=1). opcode=83. ModRM=0xcb = 11 001(reg=/digit 1 for or) 011(rm=rbx). imm8 = 7f.",
+   "rule": "opcode 83, /digit=1 (or) in ModRM.reg. ModRM = 0xC0 | (1<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append sign-extended imm8.",
+   "gotchas": "imm8 signed; use 81 imm32 form for values outside [-128,127]."
+  },
+  {
+   "id": "and_rm64_imm8",
+   "mnemonic": "and",
+   "syntax": "and r/m64, imm8 (sign-extended)",
+   "example_asm": "and rbx, 0x7f",
+   "example_bytes": "48 83 e3 7f",
+   "fields": "REX=0x48 (W=1). opcode=83. ModRM=0xe3 = 11 100(reg=/digit 4 for and) 011(rm=rbx). imm8 = 7f.",
+   "rule": "opcode 83, /digit=4 (and) in ModRM.reg. ModRM = 0xC0 | (4<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append sign-extended imm8.",
+   "gotchas": "imm8 signed and sign-extended: and rbx,0xf0 (=-16) masks to ...ffffff0, NOT 0x000000f0. Use 81 imm32 for an unsigned low mask."
+  },
+  {
+   "id": "sub_rm64_imm8",
+   "mnemonic": "sub",
+   "syntax": "sub r/m64, imm8 (sign-extended)",
+   "example_asm": "sub rbx, 0x7f",
+   "example_bytes": "48 83 eb 7f",
+   "fields": "REX=0x48 (W=1). opcode=83. ModRM=0xeb = 11 101(reg=/digit 5 for sub) 011(rm=rbx). imm8 = 7f.",
+   "rule": "opcode 83, /digit=5 (sub) in ModRM.reg. ModRM = 0xC0 | (5<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append sign-extended imm8.",
+   "gotchas": "imm8 signed; use 81 imm32 form for values outside [-128,127]."
+  },
+  {
+   "id": "xor_rm64_imm8",
+   "mnemonic": "xor",
+   "syntax": "xor r/m64, imm8 (sign-extended)",
+   "example_asm": "xor rbx, 0x7f",
+   "example_bytes": "48 83 f3 7f",
+   "fields": "REX=0x48 (W=1). opcode=83. ModRM=0xf3 = 11 110(reg=/digit 6 for xor) 011(rm=rbx). imm8 = 7f.",
+   "rule": "opcode 83, /digit=6 (xor) in ModRM.reg. ModRM = 0xC0 | (6<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append sign-extended imm8.",
+   "gotchas": "imm8 signed; use 81 imm32 form for values outside [-128,127]."
+  },
+  {
+   "id": "cmp_rm64_imm8",
+   "mnemonic": "cmp",
+   "syntax": "cmp r/m64, imm8 (sign-extended)",
+   "example_asm": "cmp rbx, 0x7f",
+   "example_bytes": "48 83 fb 7f",
+   "fields": "REX=0x48 (W=1). opcode=83. ModRM=0xfb = 11 111(reg=/digit 7 for cmp) 011(rm=rbx). imm8 = 7f.",
+   "rule": "opcode 83, /digit=7 (cmp) in ModRM.reg. ModRM = 0xC0 | (7<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append sign-extended imm8. Writes only flags (rm - imm).",
+   "gotchas": "imm8 signed; use 81 imm32 form for values outside [-128,127]."
+  },
+  {
+   "id": "test_rm64_r64",
+   "mnemonic": "test",
+   "syntax": "test r/m64, r64",
+   "example_asm": "test rbx, rax",
+   "example_bytes": "48 85 c3",
+   "fields": "REX=0x48 (W=1). opcode=85. ModRM=0xc3 = 11 000(reg=rax) 011(rm=rbx). test is commutative so operand roles do not affect the result.",
+   "rule": "opcode 85 (/r). REX.W=1, R=1 if the r64 (reg field) is r8-r15, B=1 if the r/m64 (rm field) is r8-r15, X=0. ModRM = 0xC0 | ((reg&7)<<3) | (rm&7). Computes rm AND reg, sets flags only, discards result.",
+   "gotchas": "Only one opcode (85) for r/m64,r64 — there is no 87-style reversed test, since AND is commutative. test rax,rax is the common zero/sign check (48 85 c0)."
+  },
+  {
+   "id": "test_rm64_imm32",
+   "mnemonic": "test",
+   "syntax": "test r/m64, imm32",
+   "example_asm": "test rbx, 0x12345678",
+   "example_bytes": "48 f7 c3 78 56 34 12",
+   "fields": "REX=0x48 (W=1). opcode=f7. ModRM=0xc3 = 11 000(reg=/digit 0) 011(rm=rbx). imm32 LE = 78 56 34 12.",
+   "rule": "opcode f7, /digit=0 in ModRM.reg (the f7 group's /1 is a second, redundant test encoding that a simple assembler never emits — always use /0). ModRM = 0xC0 | (0<<3) | (rm&7). REX.W=1, B for r8-r15 rm. Append imm32 LE. Computes rm AND sign-extended-imm32, flags only.",
+   "gotchas": "imm32 sign-extended to 64 bits before the AND. There is no imm8 test form; test always takes imm32 here (no 83-analogue)."
+  },
+  {
+   "id": "shl_rm64_imm8",
+   "mnemonic": "shl",
+   "syntax": "shl r/m64, imm8",
+   "example_asm": "shl rax, 5",
+   "example_bytes": "48 c1 e0 05",
+   "fields": "REX.W=48 (0100 1000). opcode=c1. ModRM=e0 = mod 11 | reg 100(/4) | rm 000(rax) = 11 100 000. imm8=05.",
+   "rule": "48 + REX.B (49) if rm is r8-r15. opcode c1. ModRM = 0xC0 + (4<<3) + (rm&7) for a register operand (mod=11); for memory use mod 00/01/10, low-3 rm, plus SIB/disp as needed and REX.X for an extended index. Append the one imm8 shift-count byte. Canonical shift-by-immediate is c1 /4 (never d1 unless the count is literally 1).",
+   "gotchas": "The CPU masks the count to 6 bits at run time, but the encoding still stores a full imm8. Assembling `shl rax, 1` as c1 /4 05... no — count is 1: a simple assembler still emits the imm8 form c1 e0 01 unless it special-cases the d1 form; pick ONE convention and keep it (see shl_rm64_1)."
+  },
+  {
+   "id": "shr_rm64_imm8",
+   "mnemonic": "shr",
+   "syntax": "shr r/m64, imm8",
+   "example_asm": "shr rax, 5",
+   "example_bytes": "48 c1 e8 05",
+   "fields": "REX.W=48. opcode=c1. ModRM=e8 = 11 101 000 = mod 11 | reg 101(/5) | rm 000(rax). imm8=05.",
+   "rule": "Same as shl_rm64_imm8 but reg field = 101 (/5): ModRM = 0xC8 + (rm&7) for register direct.",
+   "gotchas": "shr is /5 (logical, zero-fill); do not confuse with sar (/7, sign-fill)."
+  },
+  {
+   "id": "sar_rm64_imm8",
+   "mnemonic": "sar",
+   "syntax": "sar r/m64, imm8",
+   "example_asm": "sar rax, 5",
+   "example_bytes": "48 c1 f8 05",
+   "fields": "REX.W=48. opcode=c1. ModRM=f8 = 11 111 000 = mod 11 | reg 111(/7) | rm 000(rax). imm8=05.",
+   "rule": "Same as shl_rm64_imm8 but reg field = 111 (/7): ModRM = 0xF8 + (rm&7) for register direct.",
+   "gotchas": "sar is /7 (arithmetic, replicates sign bit). /6 is not a defined shift group opcode."
+  },
+  {
+   "id": "shl_rm64_cl",
+   "mnemonic": "shl",
+   "syntax": "shl r/m64, cl",
+   "example_asm": "shl rbx, cl",
+   "example_bytes": "48 d3 e3",
+   "fields": "REX.W=48. opcode=d3. ModRM=e3 = 11 100 011 = mod 11 | reg 100(/4) | rm 011(rbx). No immediate.",
+   "rule": "48 + REX.B (49) if rm is r8-r15. opcode d3, reg field /4 = 100. ModRM = 0xE0 + (rm&7) for register direct. The count register is implicitly cl; it is NOT encoded in ModRM.",
+   "gotchas": "Only cl (not other registers) is the variable-count source; there is no imm byte."
+  },
+  {
+   "id": "shr_rm64_cl",
+   "mnemonic": "shr",
+   "syntax": "shr r/m64, cl",
+   "example_asm": "shr rbx, cl",
+   "example_bytes": "48 d3 eb",
+   "fields": "REX.W=48. opcode=d3. ModRM=eb = 11 101 011 = mod 11 | reg 101(/5) | rm 011(rbx).",
+   "rule": "opcode d3, reg /5 = 101. ModRM = 0xE8 + (rm&7) for register direct.",
+   "gotchas": "d3 /5 = shr; count is implicit cl, no immediate."
+  },
+  {
+   "id": "sar_rm64_cl",
+   "mnemonic": "sar",
+   "syntax": "sar r/m64, cl",
+   "example_asm": "sar rbx, cl",
+   "example_bytes": "48 d3 fb",
+   "fields": "REX.W=48. opcode=d3. ModRM=fb = 11 111 011 = mod 11 | reg 111(/7) | rm 011(rbx).",
+   "rule": "opcode d3, reg /7 = 111. ModRM = 0xF8 + (rm&7) for register direct.",
+   "gotchas": "d3 /7 = sar; count is implicit cl, no immediate."
+  },
+  {
+   "id": "shl_rm64_1",
+   "mnemonic": "shl",
+   "syntax": "shl r/m64, 1",
+   "example_asm": "shl rdx, 1",
+   "example_bytes": "48 d1 e2",
+   "fields": "REX.W=48. opcode=d1. ModRM=e2 = 11 100 010 = mod 11 | reg 100(/4) | rm 010(rdx). No immediate.",
+   "rule": "48 + REX.B (49) if rm is r8-r15. opcode d1, reg /4 = 100. ModRM = 0xE0 + (rm&7) for register direct. shr-by-1 uses /5 (ModRM 0xE8+rm), sar-by-1 uses /7 (ModRM 0xF8+rm).",
+   "gotchas": "d1 is the dedicated shift-by-one opcode (count of 1 is implicit, no imm byte). A simple assembler must pick ONE canonical form for `shl r,1`: EITHER always d1 (shorter, no imm) OR always c1 with imm8=01 — not both. The genesis table should choose the c1/imm8 path for all immediate shifts to keep a single code path, OR add d1 as a special case; document whichever it picks."
+  },
+  {
+   "id": "inc_rm64",
+   "mnemonic": "inc",
+   "syntax": "inc r/m64",
+   "example_asm": "inc rax",
+   "example_bytes": "48 ff c0",
+   "fields": "REX.W=48. opcode=ff. ModRM=c0 = 11 000 000 = mod 11 | reg 000(/0) | rm 000(rax).",
+   "rule": "48 + REX.B (49) if rm is r8-r15. opcode ff, reg /0 = 000. ModRM = 0xC0 + (rm&7) for register direct.",
+   "gotchas": "In 64-bit mode the old single-byte inc (40+rr) is repurposed as REX prefixes, so inc r/m64 MUST use ff /0. Do not emit 40-4f as inc."
+  },
+  {
+   "id": "dec_rm64",
+   "mnemonic": "dec",
+   "syntax": "dec r/m64",
+   "example_asm": "dec rcx",
+   "example_bytes": "48 ff c9",
+   "fields": "REX.W=48. opcode=ff. ModRM=c9 = 11 001 001 = mod 11 | reg 001(/1) | rm 001(rcx).",
+   "rule": "opcode ff, reg /1 = 001. ModRM = 0xC8 + (rm&7) for register direct.",
+   "gotchas": "ff /1 = dec; ff shares its opcode across a group so the /digit (reg field) is what distinguishes inc(/0) from dec(/1). No single-byte 48-4f dec in 64-bit mode."
+  },
+  {
+   "id": "neg_rm64",
+   "mnemonic": "neg",
+   "syntax": "neg r/m64",
+   "example_asm": "neg rax",
+   "example_bytes": "48 f7 d8",
+   "fields": "REX.W=48. opcode=f7. ModRM=d8 = 11 011 000 = mod 11 | reg 011(/3) | rm 000(rax).",
+   "rule": "48 + REX.B (49) if rm is r8-r15. opcode f7, reg /3 = 011. ModRM = 0xD8 + (rm&7) for register direct.",
+   "gotchas": "f7 is a group opcode; /3 selects neg. Two's-complement negate."
+  },
+  {
+   "id": "not_rm64",
+   "mnemonic": "not",
+   "syntax": "not r/m64",
+   "example_asm": "not rbx",
+   "example_bytes": "48 f7 d3",
+   "fields": "REX.W=48. opcode=f7. ModRM=d3 = 11 010 011 = mod 11 | reg 010(/2) | rm 011(rbx).",
+   "rule": "opcode f7, reg /2 = 010. ModRM = 0xD0 + (rm&7) for register direct.",
+   "gotchas": "f7 /2 = not (bitwise complement); distinct from neg (/3)."
+  },
+  {
+   "id": "imul_r64_rm64",
+   "mnemonic": "imul",
+   "syntax": "imul r64, r/m64",
+   "example_asm": "imul rax, rbx",
+   "example_bytes": "48 0f af c3",
+   "fields": "REX.W=48 (add REX.R for an r8-r15 destination, REX.B for an r8-r15 source). two-byte opcode 0f af. ModRM=c3 = 11 000 011 = mod 11 | reg 000(rax=dst) | rm 011(rbx=src).",
+   "rule": "REX = 0x48 | (dst>=8?0x04:0) | (src>=8?0x01:0). opcode 0f af. ModRM = 0xC0 + ((dst&7)<<3) + (src&7) for register direct. The destination is ModRM.reg, the source r/m; result is truncated to 64 bits (the two-operand form is a plain signed multiply, no rdx side effect).",
+   "gotchas": "reg is the DESTINATION here (opposite of the /digit-group forms where reg is an opcode extension). imul r9, r10 = 4d 0f af ca (REX.R+REX.B)."
+  },
+  {
+   "id": "imul_r64_rm64_imm32",
+   "mnemonic": "imul",
+   "syntax": "imul r64, r/m64, imm32",
+   "example_asm": "imul rax, rbx, 0x100",
+   "example_bytes": "48 69 c3 00 01 00 00",
+   "fields": "REX.W=48. opcode=69. ModRM=c3 = 11 000 011 = mod 11 | reg 000(rax=dst) | rm 011(rbx=src). imm32 = 00 01 00 00 (little-endian 0x00000100).",
+   "rule": "REX = 0x48 | (dst>=8?0x04:0) | (rm-reg>=8?0x01:0) (+REX.X for an extended memory index). opcode 69. ModRM = 0xC0 + ((dst&7)<<3) + (src&7) for register direct. Append imm32 in little-endian (4 bytes). Computes dst = src * sign_extend64(imm32).",
+   "gotchas": "Immediate is a 4-byte imm32 sign-extended to 64 bits at execution, so it can only encode multipliers in the signed 32-bit range. The related 6b /r form (imm8) is an ALTERNATE compact encoding — a simple assembler emits only 69/imm32, never 6b, for the canonical single form."
+  },
+  {
+   "id": "imul_rm64",
+   "mnemonic": "imul",
+   "syntax": "imul r/m64",
+   "example_asm": "imul rbx",
+   "example_bytes": "48 f7 eb",
+   "fields": "REX.W=48. opcode=f7. ModRM=eb = 11 101 011 = mod 11 | reg 101(/5) | rm 011(rbx).",
+   "rule": "48 + REX.B (49) if rm is r8-r15. opcode f7, reg /5 = 101. ModRM = 0xE8 + (rm&7) for register direct. Signed: rdx:rax = rax * r/m64 (128-bit product, high half in rdx).",
+   "gotchas": "One-operand imul is f7 /5 and clobbers rdx; the two-operand 0f af form does not. rax is the implicit multiplicand."
+  },
+  {
+   "id": "mul_rm64",
+   "mnemonic": "mul",
+   "syntax": "mul r/m64",
+   "example_asm": "mul rbx",
+   "example_bytes": "48 f7 e3",
+   "fields": "REX.W=48. opcode=f7. ModRM=e3 = 11 100 011 = mod 11 | reg 100(/4) | rm 011(rbx).",
+   "rule": "opcode f7, reg /4 = 100. ModRM = 0xE0 + (rm&7) for register direct. Unsigned: rdx:rax = rax * r/m64.",
+   "gotchas": "f7 /4 = unsigned mul (vs /5 signed imul). Clobbers rdx with the high 64 bits."
+  },
+  {
+   "id": "div_rm64",
+   "mnemonic": "div",
+   "syntax": "div r/m64",
+   "example_asm": "div rbx",
+   "example_bytes": "48 f7 f3",
+   "fields": "REX.W=48. opcode=f7. ModRM=f3 = 11 110 011 = mod 11 | reg 110(/6) | rm 011(rbx).",
+   "rule": "opcode f7, reg /6 = 110. ModRM = 0xF0 + (rm&7) for register direct. Unsigned: rax = rdx:rax / r/m64, rdx = remainder.",
+   "gotchas": "Dividend is the 128-bit rdx:rax; clear rdx (e.g. xor edx,edx) before an unsigned divide of a 64-bit value, or you get a #DE. Divide-by-zero and quotient-overflow raise #DE."
+  },
+  {
+   "id": "idiv_rm64",
+   "mnemonic": "idiv",
+   "syntax": "idiv r/m64",
+   "example_asm": "idiv rbx",
+   "example_bytes": "48 f7 fb",
+   "fields": "REX.W=48. opcode=f7. ModRM=fb = 11 111 011 = mod 11 | reg 111(/7) | rm 011(rbx).",
+   "rule": "48 + REX.B (49) if rm is r8-r15. opcode f7, reg /7 = 111. ModRM = 0xF8 + (rm&7) for register direct. Signed: rax = rdx:rax / r/m64, rdx = remainder.",
+   "gotchas": "Sign-extend the dividend into rdx first with cqo (48 99), NOT xor edx,edx. f7 /7 is idiv; note /7 is also sar in the c1/d3/d1 groups — same reg value, different base opcode."
+  },
+  {
+   "id": "cqo",
+   "mnemonic": "cqo",
+   "syntax": "cqo",
+   "example_asm": "cqo",
+   "example_bytes": "48 99",
+   "fields": "REX.W=48. opcode=99. No ModRM, no operands. With REX.W the 99 opcode (cwd/cdq/cqo) becomes cqo.",
+   "rule": "Fixed two bytes: 48 99. Always exactly these bytes; there are no operand variations.",
+   "gotchas": "cqo sign-extends rax's bit 63 across all of rdx, setting up rdx:rax for a signed idiv. Without REX.W, 99 = cdq (eax->edx:eax). Use cqo before idiv; use xor edx,edx before unsigned div."
+  },
+  {
+   "id": "push_r64",
+   "mnemonic": "push",
+   "syntax": "push r64",
+   "example_asm": "push rbx",
+   "example_bytes": "53",
+   "fields": "opcode = 0x50 + rd, where rd is the register's low 3 bits. rbx = 3 -> 0x50+3 = 0x53. No REX.W: push/pop are 64-bit by default in long mode (the operand-size field does not apply). For r8-r15 the high register bit goes in REX.B, so prepend 0x41 (REX = 0100 0001, only B set) and use reg-8 as rd.",
+   "rule": "reg 0-7 (rax..rdi): one byte 0x50+reg. reg 8-15 (r8..r15): two bytes 0x41 (REX.B) then 0x50+(reg-8). Register codes: rax=0 rcx=1 rdx=2 rbx=3 rsp=4 rbp=5 rsi=6 rdi=7; r8..r15 = 0..7 with REX.B.",
+   "gotchas": "Never emit REX.W here (0x48) - it is redundant and not the canonical form. A 0x66 prefix would demote this to push r16; the genesis assembler never uses it. push r12 = 41 54, push r15 = 41 57."
+  },
+  {
+   "id": "push_imm32",
+   "mnemonic": "push",
+   "syntax": "push imm32",
+   "example_asm": "push 0x12345678",
+   "example_bytes": "68 78 56 34 12",
+   "fields": "opcode = 0x68, followed by the 4-byte immediate in little-endian two's-complement order. 0x12345678 -> bytes 78 56 34 12. The value is sign-extended to 64 bits and 8 bytes are pushed onto the stack.",
+   "rule": "Emit 0x68, then imm32 as 4 little-endian bytes. Use this form when the immediate does NOT fit in a signed 8-bit range (i.e. outside -128..+127); otherwise the canonical assembler chooses push imm8.",
+   "gotchas": "Pushes 8 bytes despite the 32-bit immediate (sign-extended). There is no push imm64 encoding: a full 64-bit constant must be built in a register (mov r64, imm64) and then pushed."
+  },
+  {
+   "id": "push_imm8",
+   "mnemonic": "push",
+   "syntax": "push imm8",
+   "example_asm": "push 0x7f",
+   "example_bytes": "6a 7f",
+   "fields": "opcode = 0x6a, followed by one immediate byte (two's-complement). 0x7f -> 6a 7f. The byte is sign-extended to 64 bits and 8 bytes are pushed.",
+   "rule": "Emit 0x6a, then the single immediate byte. The canonical assembler selects this form precisely when the signed immediate satisfies -128 <= imm <= 127; larger values use push imm32 (0x68).",
+   "gotchas": "Sign-extends, so push -1 = 6a ff pushes 0xffffffffffffffff. The imm8/imm32 choice must be deterministic: fits-in-signed-8-bits -> 6a, else 68."
+  },
+  {
+   "id": "pop_r64",
+   "mnemonic": "pop",
+   "syntax": "pop r64",
+   "example_asm": "pop rbp",
+   "example_bytes": "5d",
+   "fields": "opcode = 0x58 + rd (register low 3 bits). rbp = 5 -> 0x58+5 = 0x5d. No REX.W (64-bit default in long mode). For r8-r15 prepend REX.B = 0x41 and use reg-8.",
+   "rule": "reg 0-7: one byte 0x58+reg. reg 8-15: 0x41 (REX.B) then 0x58+(reg-8). Same register-code table as push.",
+   "gotchas": "pop r13 = 41 5d, pop r8 = 41 58. As with push, a 0x48 REX.W is never emitted. There is no pop imm."
+  },
+  {
+   "id": "jmp_rel8",
+   "mnemonic": "jmp",
+   "syntax": "jmp rel8",
+   "example_asm": "jmp $  (jump to self, 2-byte instruction)",
+   "example_bytes": "eb fe",
+   "fields": "opcode = 0xeb, then one signed displacement byte. Displacement is relative to the END of this instruction: disp8 = target - (instr_start + 2). Self-jump: target = instr_start, end = instr_start+2, so disp = -2 = 0xfe -> eb fe.",
+   "rule": "Emit 0xeb, then disp8 = target - (instr_start + 2) as one two's-complement byte. Only usable when that value is in the signed 8-bit range -128..+127; otherwise use jmp rel32.",
+   "gotchas": "Range is measured from the instruction's end: reachable targets span (end-128)..(end+127). Displacement 0 (eb 00) jumps to the immediately following instruction, a no-op-style fallthrough."
+  },
+  {
+   "id": "jmp_rel32",
+   "mnemonic": "jmp",
+   "syntax": "jmp rel32",
+   "example_asm": "jmp target  (target = instr_start + 0x100)",
+   "example_bytes": "e9 fb 00 00 00",
+   "fields": "opcode = 0xe9, then a 4-byte signed displacement in little-endian. disp32 = target - (instr_start + 5). With target-instr_start = 0x100: disp = 0x100 - 5 = 0xfb -> bytes fb 00 00 00.",
+   "rule": "Emit 0xe9, then disp32 = target - (instr_start + 5) as 4 little-endian two's-complement bytes. Signed 32-bit range -2147483648..+2147483647, always relative to the instruction end.",
+   "gotchas": "This is a 5-byte instruction, so subtract 5, not 2. A backward jump has a negative disp, e.g. self-jump = e9 fb ff ff ff (disp -5). No jmp rel16 in 64-bit mode."
+  },
+  {
+   "id": "jmp_rm64",
+   "mnemonic": "jmp",
+   "syntax": "jmp r/m64 (register indirect)",
+   "example_asm": "jmp rax",
+   "example_bytes": "ff e0",
+   "fields": "opcode = 0xff with the /4 extension in ModRM.reg. Register form: ModRM = mod(11) reg(100 = /4) rm(reg low 3). jmp rax: 11 100 000 = 0xe0 -> ff e0. No REX.W (indirect jmp is 64-bit by default). r8-r15: prepend REX.B = 0x41 and set rm = reg-8.",
+   "rule": "Emit 0xff, then ModRM byte 0xE0 + (reg & 7) for the mod=11 register form; if reg >= 8 prepend 0x41 (REX.B). ModRM.reg is fixed at 100 (the /4 opcode extension).",
+   "gotchas": "jmp r11 = 41 ff e3. This jumps to the ADDRESS HELD IN the register (indirect), not a relative offset. Memory-indirect forms (jmp [reg]) use mod!=11 with disp/SIB and are a separate encoding not in this canonical register-only form."
+  },
+  {
+   "id": "jcc_rel8",
+   "mnemonic": "jcc",
+   "syntax": "jcc rel8",
+   "example_asm": "je target  (target = instr_start + 0x10)",
+   "example_bytes": "74 0e",
+   "fields": "opcode = 0x70 + cc (the condition-code nibble), then one signed displacement byte. disp8 = target - (instr_start + 2). je has cc=4 -> 0x74; target-instr_start=0x10 -> disp = 0x10-2 = 0x0e -> 74 0e. Condition-code nibbles (cc): o=0, no=1, b/c/nae=2, ae/nb/nc=3, e/z=4, ne/nz=5, be/na=6, a/nbe=7, s=8, ns=9, p/pe=a, np/po=b, l/nge=c, ge/nl=d, le/ng=e, g/nle=f.",
+   "rule": "Emit (0x70 + cc), then disp8 = target - (instr_start + 2) as one two's-complement byte (range -128..+127). Requested set: je/jz=74, jne/jnz=75, jl=7c, jle=7e, jg=7f, jge=7d, jb/jc=72, jbe=76, ja=77, jae/jnc=73, js=78, jns=79, jo=70, jno=71.",
+   "gotchas": "Signed vs unsigned matters: l/le/g/ge (c/e/f/d) test signed flags; b/be/a/ae (2/6/7/3) test unsigned (carry). c == b (2) and nc == ae (3) are the same opcode. e==z, ne==nz. 2-byte instruction, so subtract 2."
+  },
+  {
+   "id": "jcc_rel32",
+   "mnemonic": "jcc",
+   "syntax": "jcc rel32",
+   "example_asm": "je target  (target = instr_start + 0x20)",
+   "example_bytes": "0f 84 1a 00 00 00",
+   "fields": "opcode = 0x0f 0x8(cc): a two-byte opcode, 0x0f then 0x80 + cc, followed by a 4-byte signed little-endian displacement. disp32 = target - (instr_start + 6) because the instruction is 6 bytes. je cc=4 -> 0f 84; target-instr_start=0x20 -> disp = 0x20-6 = 0x1a -> 0f 84 1a 00 00 00. Same cc nibbles as jcc rel8.",
+   "rule": "Emit 0x0f, then (0x80 + cc), then disp32 = target - (instr_start + 6) as 4 little-endian two's-complement bytes (signed 32-bit range). Requested set: je/jz=0f 84, jne/jnz=0f 85, jl=0f 8c, jle=0f 8e, jg=0f 8f, jge=0f 8d, jb/jc=0f 82, jbe=0f 86, ja=0f 87, jae/jnc=0f 83, js=0f 88, jns=0f 89, jo=0f 80, jno=0f 81.",
+   "gotchas": "6-byte instruction: subtract 6, not 5 or 2. cc nibble is identical to the rel8 form (just opcode base 0x80 with a 0x0f prefix instead of 0x70). Same signed/unsigned condition aliasing (c==b, nc==ae, e==z)."
+  },
+  {
+   "id": "call_rel32",
+   "mnemonic": "call",
+   "syntax": "call rel32",
+   "example_asm": "call target  (target = instr_start + 5, the next instruction)",
+   "example_bytes": "e8 00 00 00 00",
+   "fields": "opcode = 0xe8, then a 4-byte signed little-endian displacement. disp32 = target - (instr_start + 5). Calling the immediately following instruction gives disp 0 -> e8 00 00 00 00. Return address pushed is instr_start + 5.",
+   "rule": "Emit 0xe8, then disp32 = target - (instr_start + 5) as 4 little-endian two's-complement bytes. Signed 32-bit range -2147483648..+2147483647, relative to the instruction end.",
+   "gotchas": "There is NO call rel8 in x86-64 - all direct calls are rel32. Backward call has negative disp (self-call = e8 fb ff ff ff). The pushed return address is the end of the call instruction."
+  },
+  {
+   "id": "call_rm64",
+   "mnemonic": "call",
+   "syntax": "call r/m64 (register indirect)",
+   "example_asm": "call rax",
+   "example_bytes": "ff d0",
+   "fields": "opcode = 0xff with the /2 extension in ModRM.reg. Register form: ModRM = mod(11) reg(010 = /2) rm(reg low 3). call rax: 11 010 000 = 0xd0 -> ff d0. No REX.W (64-bit default). r8-r15: prepend REX.B = 0x41, rm = reg-8.",
+   "rule": "Emit 0xff, then ModRM byte 0xD0 + (reg & 7) for the mod=11 register form; if reg >= 8 prepend 0x41 (REX.B). ModRM.reg is fixed at 010 (the /2 opcode extension).",
+   "gotchas": "call r10 = 41 ff d2. Differs from jmp r/m64 only in ModRM.reg: /2 (call) vs /4 (jmp), giving base ModRM 0xd0 vs 0xe0. Calls the address held in the register (indirect); pushes the return address as usual."
+  },
+  {
+   "id": "ret",
+   "mnemonic": "ret",
+   "syntax": "ret (near return)",
+   "example_asm": "ret",
+   "example_bytes": "c3",
+   "fields": "opcode = 0xc3, single byte. Pops the 8-byte return address from the top of the stack into RIP. No operands, no ModRM, no REX.",
+   "rule": "Always exactly one byte: c3.",
+   "gotchas": "0xc2 iw is a different instruction (ret imm16 - pop imm16 extra bytes after returning); the far returns 0xcb/0xca are far ret and not used by the System V near-call convention. The canonical near ret is c3 only."
+  },
+  {
+   "id": "syscall",
+   "mnemonic": "syscall",
+   "syntax": "syscall",
+   "example_asm": "syscall",
+   "example_bytes": "0f 05",
+   "fields": "two-byte opcode 0x0f 0x05, no operands. Enters the kernel: syscall number in rax, arguments in rdi, rsi, rdx, r10, r8, r9 (System V syscall ABI); clobbers rcx (saved RIP) and r11 (saved RFLAGS); result returned in rax.",
+   "rule": "Always exactly two bytes: 0f 05.",
+   "gotchas": "The syscall ABI uses r10 for the 4th argument, NOT rcx (rcx is destroyed by the instruction to hold the return RIP). r11 is also destroyed. This is the seed's only kernel entry (read/write/exit) per design 0017."
+  },
+  {
+   "id": "modrm_reg_direct",
+   "mnemonic": "mov",
+   "syntax": "mov r/m64, r64  (mod=11, register direct)",
+   "example_asm": "mov rax, rbx",
+   "example_bytes": "48 89 d8",
+   "fields": "REX = 0x48 (0100 W=1 R=0 X=0 B=0, W selects 64-bit). Opcode = 0x89 (MOV r/m64, r64 — the canonical reg-direct MOV; reg field holds the SOURCE, rm holds the DEST). ModRM = 0xd8 = 11 011 000: mod=11 (register direct, rm names a register not memory), reg=011=rbx (source), rm=000=rax (dest). No SIB, no disp, no imm.",
+   "rule": "mod=11 means the rm field is a register, not a memory operand — no SIB/disp ever follow. Encode reg=src, rm=dst each as its 3-bit code; set REX.W=1 for 64-bit, REX.R for reg>=r8, REX.B for rm>=r8. ModRM = 0xC0 | (reg<<3) | rm.",
+   "gotchas": "This is the ONE mod value where no memory decode happens; the four addressing gotchas below apply only to mod=00/01/10. mov has two encodings (89 /r reg=src, and 8B /r reg=dst); a deterministic assembler must pick one canonical direction — this table uses 89 /r for reg->reg."
+  },
+  {
+   "id": "mem_base_only",
+   "mnemonic": "mov",
+   "syntax": "mov r64, [base]  (mod=00, no displacement)",
+   "example_asm": "mov rax, [rbx]",
+   "example_bytes": "48 8b 03",
+   "fields": "REX = 0x48 (W=1). Opcode = 0x8b (MOV r64, r/m64; reg field = DEST). ModRM = 0x03 = 00 000 011: mod=00 (memory, no disp), reg=000=rax (dest), rm=011=rbx (base). No SIB (rm!=100), no disp (mod=00 with rm!=101).",
+   "rule": "For [base] with base in {rax,rcx,rdx,rbx,rsi,rdi} (low 3 bits != 100 and != 101): mod=00, rm=base's 3-bit code. ModRM = (reg<<3) | rm. REX.B if base>=r8. Bases rsp/r12 (rm=100) and rbp/r13 (rm=101) are the exceptions handled in their own forms.",
+   "gotchas": "rm=100 and rm=101 are NOT plain bases at mod=00: 100 forces a SIB byte, 101 means rip-relative. So [rsp],[rbp],[r12],[r13] cannot use this simple form."
+  },
+  {
+   "id": "mem_base_disp8",
+   "mnemonic": "mov",
+   "syntax": "mov r64, [base + disp8]  (mod=01, signed 8-bit disp)",
+   "example_asm": "mov rax, [rbx+16]",
+   "example_bytes": "48 8b 43 10",
+   "fields": "REX = 0x48. Opcode = 0x8b. ModRM = 0x43 = 01 000 011: mod=01 (disp8 follows), reg=000=rax, rm=011=rbx. disp8 = 0x10 (=16, sign-extended to 64 bits). One trailing byte.",
+   "rule": "Use mod=01 when disp fits a signed byte (-128..127). ModRM = 0x40 | (reg<<3) | rm, then one disp byte (two's complement). If rm=100 a SIB byte is inserted BEFORE the disp8; if base is rbp/r13 this form (or disp32) is mandatory even for disp=0.",
+   "gotchas": "disp8 is SIGN-extended: 0xff means -1, not +255. For disp outside -128..127 use mod=10 (disp32)."
+  },
+  {
+   "id": "mem_base_disp32",
+   "mnemonic": "mov",
+   "syntax": "mov r64, [base + disp32]  (mod=10, signed 32-bit disp)",
+   "example_asm": "mov rax, [rbx+0x1000]",
+   "example_bytes": "48 8b 83 00 10 00 00",
+   "fields": "REX = 0x48. Opcode = 0x8b. ModRM = 0x83 = 10 000 011: mod=10 (disp32 follows), reg=000=rax, rm=011=rbx. disp32 = 00 10 00 00 (little-endian 0x00001000 = 4096). Four trailing bytes.",
+   "rule": "Use mod=10 when disp exceeds signed-byte range. ModRM = 0x80 | (reg<<3) | rm, then 4 little-endian disp bytes (two's complement, sign-extended to 64). SIB inserted before disp32 when rm=100.",
+   "gotchas": "disp32 is little-endian and sign-extended to 64 bits. A simple assembler still prefers disp8 (mod=01) whenever the value fits, to keep one canonical form."
+  },
+  {
+   "id": "mem_rsp_r12_sib",
+   "mnemonic": "mov",
+   "syntax": "mov r64, [rsp | r12 (+disp)]  (rm=100 forces SIB) — GOTCHA 1",
+   "example_asm": "mov rax, [rsp]",
+   "example_bytes": "48 8b 04 24",
+   "fields": "REX = 0x48. Opcode = 0x8b. ModRM = 0x04 = 00 000 100: mod=00, reg=000=rax, rm=100 -> a SIB byte MUST follow. SIB = 0x24 = 00 100 100: scale=00, index=100 (=NO index), base=100 (=rsp). No disp (mod=00, base low bits != 101). For [r12]: add REX.B -> REX=0x49, same ModRM 0x04, same SIB 0x24: 49 8b 04 24.",
+   "rule": "Whenever the base's low 3 bits = 100 (rsp or r12), you cannot name it in ModRM.rm directly; set rm=100 and emit a SIB with index=100 (no index) and base=100. REX.B distinguishes r12 from rsp. disp handling (none/disp8/disp32) follows mod exactly as for other bases.",
+   "gotchas": "[rsp] and [r12] ALWAYS need a SIB byte even with no index and no scale, because rm=100 is the SIB escape. r12 is just rsp+REX.B, so it inherits the requirement. SIB base=100 at mod=00 is a real base (rsp/r12) — only base=101 at mod=00 means 'no base'."
+  },
+  {
+   "id": "mem_rbp_r13_disp0",
+   "mnemonic": "mov",
+   "syntax": "mov r64, [rbp | r13]  (must use mod=01 disp8=0) — GOTCHA 2",
+   "example_asm": "mov rax, [rbp]",
+   "example_bytes": "48 8b 45 00",
+   "fields": "REX = 0x48. Opcode = 0x8b. ModRM = 0x45 = 01 000 101: mod=01 (disp8 follows), reg=000=rax, rm=101=rbp. disp8 = 0x00. The mod=00 encoding is forbidden here (00/rm=101 means [rip+disp32]). For [r13]: add REX.B -> REX=0x49, same ModRM 0x45, disp8 00: 49 8b 45 00.",
+   "rule": "When the base's low 3 bits = 101 (rbp or r13) and you want [base] with no displacement, you MUST promote to mod=01 with an explicit disp8 of 0 (or mod=10 disp32=0). REX.B distinguishes r13 from rbp. With a nonzero disp there is no problem — mod=01/10 are used normally.",
+   "gotchas": "[rbp] and [r13] have NO zero-length form: mod=00,rm=101 is stolen for rip-relative addressing, so a disp byte is always emitted. Same hazard reappears inside SIB: base=101 at mod=00 means 'no base' (disp32-only), so a SIB whose base is rbp/r13 also needs mod>=01."
+  },
+  {
+   "id": "mem_rip_relative",
+   "mnemonic": "mov",
+   "syntax": "mov r64, [rip + disp32]  (mod=00, rm=101)",
+   "example_asm": "mov rax, [rip+0]",
+   "example_bytes": "48 8b 05 00 00 00 00",
+   "fields": "REX = 0x48. Opcode = 0x8b. ModRM = 0x05 = 00 000 101: mod=00, reg=000=rax, rm=101 -> RIP-relative in 64-bit mode. disp32 = 00 00 00 00, added to the address of the NEXT instruction. No SIB.",
+   "rule": "mod=00 with rm=101 (and no SIB) always means [rip+disp32] in long mode. The disp32 is signed and relative to the end of the whole instruction. Used for position-independent references to statics; the assembler computes disp32 = target - (address_after_this_instruction).",
+   "gotchas": "This is why plain [rbp]/[r13] are impossible at mod=00 — 101 is reserved for rip. The displacement's origin is the instruction END, not its start, so all following bytes (imm etc.) count when resolving labels."
+  },
+  {
+   "id": "mem_abs_disp32_no_base",
+   "mnemonic": "mov",
+   "syntax": "mov r64, [disp32]  (absolute, SIB base=101 no base)",
+   "example_asm": "mov rax, [0x1000]",
+   "example_bytes": "48 8b 04 25 00 10 00 00",
+   "fields": "REX = 0x48. Opcode = 0x8b. ModRM = 0x04 = 00 000 100: mod=00, reg=000=rax, rm=100 -> SIB follows. SIB = 0x25 = 00 100 101: scale=00, index=100 (no index), base=101 with mod=00 -> NO base, disp32 follows instead. disp32 = 00 10 00 00 (0x00001000).",
+   "rule": "To encode a bare absolute address [disp32] with no base and no index: mod=00, rm=100 (SIB), SIB index=100, SIB base=101. The 4-byte disp32 is then the full (zero-extended, non-rip) address. This is the ONLY way to get a base-less absolute; a base-less [index*scale+disp32] uses the same base=101 trick with a real index.",
+   "gotchas": "SIB base=101 means 'no base' ONLY when mod=00; at mod=01/10 base=101 is real rbp/r13 plus the disp. So [rbp+idx] and [disp32+idx] are told apart purely by the mod field."
+  },
+  {
+   "id": "mem_sib_full",
+   "mnemonic": "mov",
+   "syntax": "mov r64, [base + index*scale + disp]  (full SIB)",
+   "example_asm": "mov rax, [rbx + rcx*4 + 16]",
+   "example_bytes": "48 8b 44 8b 10",
+   "fields": "REX = 0x48. Opcode = 0x8b. ModRM = 0x44 = 01 000 100: mod=01 (disp8), reg=000=rax, rm=100 -> SIB. SIB = 0x8b = 10 001 011: scale=10 (=*4), index=001=rcx, base=011=rbx. disp8 = 0x10 (16). Order on the wire: REX, opcode, ModRM, SIB, disp.",
+   "rule": "Scale encodes as 1->00, 2->01, 4->10, 8->11 (scale = log2). SIB = (scale<<6) | (index<<3) | base. ModRM.rm=100 selects the SIB; mod chooses the disp width (00 none / 01 disp8 / 10 disp32) exactly as for a plain base, EXCEPT base=rbp/r13 at mod=00 forces disp32-no-base, so use mod>=01 for those. REX.X extends index, REX.B extends base.",
+   "gotchas": "index=100 is impossible to express as a real index — it always means 'no index'. So rsp can NEVER be an index register (there is no [base+rsp*n]); rbp/r13 CAN be an index (index=101 is fine, unlike base=101). Scale is ignored when there is no index."
+  },
+  {
+   "id": "rex_extension_bits",
+   "mnemonic": "mov",
+   "syntax": "REX.R / REX.X / REX.B extending reg / index / base — GOTCHA 3",
+   "example_asm": "mov r8, [r9 + r10*2]",
+   "example_bytes": "4f 8b 04 51",
+   "fields": "REX = 0x4f = 0100 1111: W=1 (64-bit), R=1 (extends ModRM.reg), X=1 (extends SIB.index), B=1 (extends SIB.base). Opcode = 0x8b. ModRM = 0x04 = 00 000 100: mod=00, reg=000 -> with REX.R = r8 (dest), rm=100 -> SIB. SIB = 0x51 = 01 010 001: scale=01 (*2), index=010 -> with REX.X = r10, base=001 -> with REX.B = r9.",
+   "rule": "REX = 0x40 | (W<<3) | (R<<2) | (X<<1) | B. Each register's 4th (high) bit goes into a different REX bit by ROLE: ModRM.reg -> REX.R; SIB.index -> REX.X; ModRM.rm OR SIB.base OR opcode-embedded reg -> REX.B. Low 3 bits stay in their field. Set W=1 for 64-bit operand size. Emit REX only when some bit is needed (or to force spl/bpl/sil/dil).",
+   "gotchas": "REX.B is overloaded: it extends ModRM.rm when there is no SIB, but SIB.base when a SIB is present (and the opcode-embedded reg for +rd opcodes). Determine which field REX.B applies to by whether a SIB byte exists. When [base] has no SIB and no index, REX.X is meaningless (0)."
+  },
+  {
+   "id": "load_matrix_base_disp",
+   "mnemonic": "mov",
+   "syntax": "mov rax, [BASE + disp]  — canonical bytes for the six tricky bases at disp=0 and disp=16",
+   "example_asm": "mov rax, [rbp+16]",
+   "example_bytes": "48 8b 45 10",
+   "fields": "reg=rax=000 throughout; opcode=8b; REX.W=1 (0x48), plus REX.B (0x49) for r8/r12/r13. disp=16 is a disp8 (mod=01, one 0x10 byte). TABLE (bytes for disp=0 | disp=16):\n  rax : 48 8b 00            | 48 8b 40 10\n  rcx : 48 8b 01            | 48 8b 41 10\n  rbp : 48 8b 45 00        | 48 8b 45 10   (mod=01 forced even at disp=0)\n  rsp : 48 8b 04 24        | 48 8b 44 24 10 (SIB 24 always)\n  r12 : 49 8b 04 24        | 49 8b 44 24 10 (SIB + REX.B)\n  r13 : 49 8b 45 00        | 49 8b 45 10   (mod=01 forced + REX.B)\n  r8  : 49 8b 00            | 49 8b 40 10",
+   "rule": "Pick REX = 0x48 | (0x01 if base>=r8). ModRM.reg=000 (rax dest). Then classify the base by its low 3 bits: 100 (rsp/r12) -> rm=100 + SIB 0x24 (index=100 none, base=100); 101 (rbp/r13) -> rm=101 but mod must be >=01, so even disp=0 emits mod=01 disp8=00; anything else -> rm=base directly. Choose mod by disp: 0 -> mod=00 (unless rbp/r13 -> mod=01), fits int8 -> mod=01 + 1 byte, else mod=10 + 4 bytes.",
+   "gotchas": "The two irregular rows are rsp/r12 (extra SIB byte, so 4 bytes even for [base]) and rbp/r13 (extra disp8=0, so also 4 bytes for [base]); the regular bases give 3 bytes for [base]. r8 stays regular (low bits 000) and only differs from rax by REX.B. All disp=16 cases here use disp8, never disp32."
+  }
+ ]
+}

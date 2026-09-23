@@ -1,0 +1,8 @@
+48 c7 c7 01 00 00 00   ; mov rdi, 1     (fail marker)
+48 c7 c0 0a 00 00 00   ; mov rax, 10
+48 c7 c1 0a 00 00 00   ; mov rcx, 10
+48 39 c8               ; cmp rax, rcx
+75 07                  ; jne +7 (skip next)
+48 c7 c7 2a 00 00 00   ; mov rdi, 42   (taken when equal)
+b8 3c 00 00 00         ; mov eax, 60
+0f 05                  ; syscall

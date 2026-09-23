@@ -1,0 +1,12 @@
+module hello
+import std.os
+
+--- Milestone 1: write a greeting with a raw Linux syscall, no libc.
+--- The procedure with `entry` starts the program (design 0016); its result is the exit status.
+proc start -> s32
+    entry
+    permit os.syscall
+    msg := "Hello Oli--\n"
+    os.syscall(os.WRITE, 1, msg.addr, msg.len)
+    ret 0
+end

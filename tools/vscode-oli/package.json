@@ -1,0 +1,22 @@
+{
+    "name": "oli-minus-minus",
+    "displayName": "Oli-- (syntax)",
+    "description": "Syntax highlighting for Oli-- source files. The language service and editor of the roadmap (olis, olide) are written in Oli--; this is only a TextMate grammar so that .oli files read well in VS Code meanwhile.",
+    "version": "0.0.1",
+    "publisher": "oli",
+    "engines": { "vscode": "^1.60.0" },
+    "categories": ["Programming Languages"],
+    "contributes": {
+        "languages": [{
+            "id": "oli",
+            "aliases": ["Oli--", "oli"],
+            "extensions": [".oli"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "oli",
+            "scopeName": "source.oli",
+            "path": "./syntaxes/oli.tmLanguage.json"
+        }]
+    }
+}

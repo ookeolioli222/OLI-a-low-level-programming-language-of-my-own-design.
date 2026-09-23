@@ -1,0 +1,7 @@
+proc start
+    entry
+    permit os.syscall
+    msg := "Hello Oli--\n"
+    os.syscall(1, 1, msg.addr, msg.len)
+    os.syscall(60, 0)
+end

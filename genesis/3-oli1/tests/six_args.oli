@@ -1,0 +1,7 @@
+proc weigh(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64) -> u64
+    ret a + b * 2 + c * 3 + d * 4 + e * 5 + f * 6
+end
+proc start
+    entry
+    ret weigh(1, 2, 3, 4, 5, 6)
+end

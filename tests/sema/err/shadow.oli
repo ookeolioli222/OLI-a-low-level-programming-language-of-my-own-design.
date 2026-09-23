@@ -1,0 +1,14 @@
+N := 4
+proc main -> s32
+    entry
+    x : u8 <- 1
+    if true
+        x : u8 <- 2
+        _y := x
+    end
+    N : u8 <- 3
+    _z := x + N
+    ret 0
+end
+-- expect: E0101 @ 6:9
+-- expect: E0101 @ 9:5

@@ -1,0 +1,80 @@
+#!/bin/sh
+# olic - the Oli-- compiler, as a command on the PATH.
+#
+# The compiler proper is genesis/build/olic, written in Oli-- and built by
+# ./genesis/test.sh; it reads the source on stdin and writes the executable
+# on stdout, because no Oli-- program can read its command line yet
+# (docs/COMMANDS.md 10). This script is the command line until then: it only
+# chooses the driver and redirects. Nothing here is part of the toolchain.
+#
+#   olic FILE.oli [-o OUT]       compile to OUT (default: FILE without .oli)
+#   olic --check FILE.oli        analyse only, report diagnostics
+#   olic --show-tokens FILE.oli  one token per line
+#   olic --show-ast FILE.oli     the syntax tree
+#   olic --show-sema FILE.oli    the semantic graph and every check
+#   olic --show-oir FILE.oli     the OIR in blocks, before any pass
+#   olic --show-ssa FILE.oli     after mem2reg
+#   olic --show-opt FILE.oli     after the passes, with every removed check and its proof
+#
+# Exit status: the compiler's (0 built, 1 diagnostics, 4 a defect in the
+# compiler itself), or 2 for a usage error.
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+build="$root/genesis/build"
+
+die() { echo "olic: $*" >&2; exit 2; }
+
+[ -x "$build/olic" ] || die "the compiler is not built; run ./genesis/test.sh once in $root"
+
+mode=compile
+out=
+case "$1" in
+    --check)       mode=check;  shift ;;
+    --show-tokens) mode=show_tokens; shift ;;
+    --show-ast)    mode=show_ast;    shift ;;
+    --show-sema)   mode=show_sema;   shift ;;
+    --show-oir)    mode=show_oir;    shift ;;
+    --show-ssa)    mode=show_ssa;    shift ;;
+    --show-opt|--show-oir=opt) mode=show_opt; shift ;;
+    -h|--help)     sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --*)           die "unknown option $1" ;;
+esac
+
+src=$1
+[ -n "$src" ] || die "usage: olic [--check|--show-STAGE] FILE.oli [-o OUT]"
+[ -f "$src" ] || die "no such file: $src"
+shift
+if [ "$1" = "-o" ]; then
+    out=$2
+    [ -n "$out" ] || die "-o needs a file name"
+fi
+
+# Imports resolve under lib/ of the compiler's working directory
+# (docs/COMMANDS.md 10; `--lib DIR` is planned), so the compiler runs from
+# the repository root whatever directory the command was given in, and the
+# paths it was given are made absolute first.
+abs() { case "$1" in /*) echo "$1" ;; *) echo "$PWD/$1" ;; esac; }
+src=$(abs "$src")
+[ -z "$out" ] || out=$(abs "$out")
+cd "$root" || die "cannot enter $root"
+
+case "$mode" in
+    compile)
+        [ -n "$out" ] || out=${src%.oli}
+        [ "$out" != "$src" ] || die "the output would overwrite the source; give -o"
+        tmp="$out.tmp.$$"
+        if "$build/olic" < "$src" > "$tmp"; then
+            chmod +x "$tmp" && mv "$tmp" "$out"
+        else
+            st=$?
+            rm -f "$tmp"
+            exit $st
+        fi
+        ;;
+    check)
+        "$build/show_sema" < "$src" > /dev/null
+        ;;
+    *)
+        "$build/$mode" < "$src"
+        ;;
+esac

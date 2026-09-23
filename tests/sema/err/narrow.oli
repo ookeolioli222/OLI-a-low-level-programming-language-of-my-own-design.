@@ -1,0 +1,19 @@
+-- Implicit narrowing of a computed value is lossy: V0 has no `as`, so the
+-- conversion has to be written. The accepted forms are checked here too, so
+-- the fixture fails if `T.wrap` or `T.bits` stops being accepted.
+proc main -> s32
+    entry
+    a : u32 := 70000
+    _b : u16
+    _b <- a
+    _c : u16 := u16.wrap(a)
+    d : word := 0 - 1
+    _e : u64
+    _e <- d
+    _f : u64 := u64.bits(d)
+    _g : u16 := u16(a)
+    ret 0
+end
+-- expect: E0202 @ 8:11
+-- expect: E0202 @ 12:11
+-- expect: E0202 @ 14:17

@@ -1,0 +1,15 @@
+--- Linux x86-64 system call numbers and the OS error type (`docs/ABI.md` §5).
+--- `os.syscall(nr, args...)` itself is an intrinsic.
+module std.os
+
+pub READ : word := 0
+pub WRITE : word := 1
+pub MMAP : word := 9
+pub MUNMAP : word := 11
+pub EXIT : word := 60
+pub EXIT_GROUP : word := 231
+
+--- A negative `errno` value returned by the kernel.
+pub layout Error
+    code : word
+end

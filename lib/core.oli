@@ -1,0 +1,27 @@
+--- The core library: no operating system, no heap. Always available as `core`.
+module core
+
+--- Why a trap fired (`docs/MACHINE_MODEL.md` §4).
+pub choice TrapKind
+    bounds
+    overflow
+    div_zero
+    misaligned
+    zone_exhausted
+    unreachable
+    assert
+end
+
+--- Where a trap fired: the source file and line.
+pub layout Site
+    file : view u8
+    line : u32
+end
+
+--- The four registers written by `cpu.id(leaf)` (design 0015).
+pub layout CpuId
+    a : u32
+    b : u32
+    c : u32
+    d : u32
+end

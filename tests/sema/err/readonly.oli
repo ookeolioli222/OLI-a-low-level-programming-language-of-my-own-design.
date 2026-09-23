@@ -1,0 +1,13 @@
+T : [2]u8 := { 1, 2 }
+proc main -> s32
+    entry
+    x := u8(1)
+    x <- 2
+    T[0] <- 3
+    s := "abc"
+    s[0] <- 1
+    ret 0
+end
+-- expect: E0110 @ 5:5
+-- expect: E0111 @ 6:5
+-- expect: E0111 @ 8:5

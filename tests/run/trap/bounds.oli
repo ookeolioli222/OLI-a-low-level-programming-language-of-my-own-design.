@@ -1,0 +1,12 @@
+module trap_bounds
+-- An index one past the end of a view.
+-- expect: trap: bounds at stdin:8
+proc start -> s32
+    entry
+    v := "abc"
+    i : uword <- 3
+    if v[i] == 0
+        ret 1
+    end
+    ret 0
+end

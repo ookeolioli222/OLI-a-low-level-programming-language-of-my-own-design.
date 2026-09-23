@@ -1,0 +1,27 @@
+module genesis.memory_run
+proc main
+    calls none
+    entry
+    machine x64
+        sub rsp, 64
+        mov rbp, rsp
+        mov r12, rsp
+        mov r13, rsp
+        mov [rsp], 6
+        mov [rbp+8], 7
+        mov rax, [r12]
+        mov r8, [r13+8]
+        imul rax, r8
+        mov rcx, 2
+        mov [r12+rcx*8], rax
+        inc [r12+rcx*8]
+        dec [r12+rcx*8]
+        shl [r12+rcx*8], 1
+        sar [r12+rcx*8], 1
+        lea r15, [r13+rcx*8]
+        mov rdi, [r15]
+        add rsp, 64
+        mov rax, 60
+        syscall
+    end
+end

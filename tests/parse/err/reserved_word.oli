@@ -1,0 +1,10 @@
+const := 1
+proc static
+end
+proc f(extern : u8)
+    volatile : u8
+end
+-- expect: E0010 @ 1:1
+-- expect: E0010 @ 2:6
+-- expect: E0010 @ 4:8
+-- expect: E0010 @ 5:5

@@ -1,0 +1,11 @@
+(module hello
+  (import std.os)
+  (proc start () -> s32
+    (doc "Milestone 1: write a greeting with a raw Linux syscall, no libc.")
+    (doc "The procedure with `entry` starts the program (design 0016); its result is the exit status.")
+    (entry)
+    (permit os.syscall)
+    (body
+      (bind msg (str "Hello Oli--\n"))
+      (expr (call (field (name os) syscall) (field (name os) WRITE) (int 1) (field (name msg) addr) (field (name msg) len)))
+      (ret (int 0)))))

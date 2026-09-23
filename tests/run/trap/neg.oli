@@ -1,0 +1,10 @@
+module trap_neg
+-- expect: trap: overflow at stdin:6
+proc start -> s32
+    entry
+    a : u64 <- 7
+    if 0 - a > 0
+        ret 1
+    end
+    ret 0
+end

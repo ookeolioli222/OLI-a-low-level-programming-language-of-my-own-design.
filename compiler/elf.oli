@@ -1,0 +1,76 @@
+module olic.elf
+-- The ELF64 writer (docs/ABI.md §4): a static, non-PIE executable with one
+-- loadable segment holding the whole image.
+--
+-- Image: header (64) | program header (56) | statics | code. The segment is
+-- mapped at `BASE_ADDR` with `p_offset = 0`, so a file offset and a virtual
+-- address differ by exactly `BASE_ADDR` and a static's address is known
+-- before any code is emitted. Section headers and a symbol table are what
+-- ABI.md asks for next; this stage writes neither, and says so rather than
+-- writing an empty one.
+
+EHDR_SIZE := 64
+PHDR_SIZE := 56
+HDR_SIZE := 120
+
+proc put_u8(b: rw view u8, off: u64, v: u64)
+    b[off] <- u8.wrap(v)
+end
+
+proc put_u16(b: rw view u8, off: u64, v: u64)
+    b[off] <- u8.wrap(v)
+    b[off + 1] <- u8.wrap(v >> 8)
+end
+
+proc put_u32(b: rw view u8, off: u64, v: u64)
+    put_u16(b, off, v)
+    put_u16(b, off + 2, v >> 16)
+end
+
+proc put_u64v(b: rw view u8, off: u64, v: u64)
+    put_u32(b, off, v)
+    put_u32(b, off + 4, v >> 32)
+end
+
+proc elf_header(b: rw view u8, epoint: u64, total: u64)
+    i : u64 <- 0
+    while i < HDR_SIZE
+        b[i] <- 0
+        i <- i + 1
+    end
+    put_u8(b, 0, 127)
+    put_u8(b, 1, 69)
+    put_u8(b, 2, 76)
+    put_u8(b, 3, 70)
+    put_u8(b, 4, 2)
+    put_u8(b, 5, 1)
+    put_u8(b, 6, 1)
+    put_u16(b, 16, 2)
+    put_u16(b, 18, 62)
+    put_u32(b, 20, 1)
+    put_u64v(b, 24, epoint)
+    put_u64v(b, 32, EHDR_SIZE)
+    put_u16(b, 52, EHDR_SIZE)
+    put_u16(b, 54, PHDR_SIZE)
+    put_u16(b, 56, 1)
+    put_u32(b, 64, 1)
+    put_u32(b, 68, 7)
+    put_u64v(b, 72, 0)
+    put_u64v(b, 80, BASE_ADDR)
+    put_u64v(b, 88, BASE_ADDR)
+    put_u64v(b, 96, total)
+    put_u64v(b, 104, total)
+    put_u64v(b, 112, 4096)
+end
+
+proc write_elf(ob: ref Oir, mc: ref Mach, z: zone)
+    total : u64 <- HDR_SIZE + ob.ndata + ob.ncode
+    epoint : u64 <- BASE_ADDR + HDR_SIZE + ob.ndata + mc.entrypos
+    hdr := z.bytes(HDR_SIZE)
+    elf_header(hdr, epoint, total)
+    put(1, hdr)
+    d := ob.data
+    put(1, d[..ob.ndata])
+    c := ob.code
+    put(1, c[..ob.ncode])
+end

@@ -1,0 +1,6 @@
+48 c7 c0 64 00 00 00   ; mov rax, 100
+48 c7 c3 3a 00 00 00   ; mov rbx, 58
+48 2b c3               ; sub rax, rbx      -> 42
+48 89 c7               ; mov rdi, rax
+b8 3c 00 00 00         ; mov eax, 60
+0f 05                  ; syscall

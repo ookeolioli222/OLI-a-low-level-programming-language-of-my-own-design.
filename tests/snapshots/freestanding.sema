@@ -1,0 +1,44 @@
+(program entry=boot.start
+  (layout Frame#0 size=4 align=4 (count u32 @0))
+  (layout Site#1 size=24 align=8 (file view u8 @0) (line u32 @16))
+  (layout CpuId#2 size=16 align=4 (a u32 @0) (b u32 @4) (c u32 @8) (d u32 @12))
+  (choice TrapKind#0 size=1 align=1 tag=1 payload@1 (bounds) (overflow) (div_zero) (misaligned) (zone_exhausted) (unreachable) (assert))
+  (static boot_stack#0 : [16384]u8 = zero section=".bss.boot" align=16)
+  (static heap_region#1 : [65536]u8 = zero section=".bss" align=4096)
+  (proc boot.start -> never permits=[cpu.asm] calls=none entry section=".text.boot"
+    (body
+      (machine x64
+        (instr lea rsp (mem +static:boot_stack +16384))
+        (instr xor ebp ebp)
+        (instr call proc:boot.main)
+        (instr hlt))))
+  (proc boot.on_trap -> never permits=[cpu.halt] traps
+    (local 0 _kind param0 TrapKind)
+    (local 1 _site param1 Site)
+    (body
+      (loop
+        (body
+          (expr (intrinsic CpuHalt):(no value))))))
+  (proc boot.poke permits=[memory.raw]
+    (local 0 a param0 addr u8)
+    (local 1 v param1 u8)
+    (body
+      (store [rw raw (local a):addr u8] (local v):u8)))
+  (proc boot.main -> never permits=[cpu.halt,memory.raw]
+    (local 0 boot_zone zone zone)
+    (local 1 f bind rw ref Frame)
+    (local 2 heap zone zone)
+    (local 3 buf bind rw view u8)
+    (body
+      (zone boot_zone (int 4096):uword at=(inttoaddr (int 2097152):uword):addr u8
+        (body
+          (bind f (make (local boot_zone):zone @zone boot_zone Frame):rw ref Frame @zone boot_zone)
+          (store [rw field [rw deref (local f):rw ref Frame @zone boot_zone] count] (int 1):u32)))
+      (zone heap (int 65536):uword from-buffer=(view-of [rw static heap_region]):rw view u8
+        (body
+          (bind buf (bytes (local heap):zone @zone heap (int 256):uword):rw view u8 @zone heap)
+          (store [rw elem (local buf):rw view u8 @zone heap (int 0):uword] (int 85):u8)
+          (expr (call boot.poke (addr (local buf):rw view u8 @zone heap):addr u8 (int 1):u8):(no value))))
+      (loop
+        (body
+          (expr (intrinsic CpuHalt):(no value)))))))

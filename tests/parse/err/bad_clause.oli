@@ -1,0 +1,12 @@
+proc f
+    align 3
+    calls fast
+    entry
+    entry
+end
+s : u8
+    permit cpu.asm
+-- expect: E0018 @ 2:11
+-- expect: E0018 @ 3:11
+-- expect: E0018 @ 5:5
+-- expect: E0018 @ 8:5

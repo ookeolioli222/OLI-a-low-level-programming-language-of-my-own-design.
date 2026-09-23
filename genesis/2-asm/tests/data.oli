@@ -1,0 +1,16 @@
+module genesis.data
+rodata values
+    byte 0, 255, 42
+    word 0x0123456789abcdef, -1
+    ascii "A\n\t\0\\\"\x42"
+    asciiz ""
+    res 3
+    addr main
+end
+proc main
+    calls none
+    entry
+    machine x64
+        ret
+    end
+end

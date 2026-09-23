@@ -1,0 +1,5 @@
+proc f
+    s := "abc
+    t := 1
+end
+-- expect: E0002 @ 2:10

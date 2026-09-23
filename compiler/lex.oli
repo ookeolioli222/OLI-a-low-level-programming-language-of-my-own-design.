@@ -1,0 +1,688 @@
+module olic.lex
+-- The Oli-- V0 lexer (spec/OLI_SYNTAX_V0.md §2), written in oli-core so that
+-- oli1 compiles it. Tokens go into a table of Tok records; diagnostics are
+-- printed as they are found (the lexer runs in source order) and counted.
+
+-- Token kinds (spec §2.6 plus Doc, docs/COMPILER_ARCHITECTURE.md).
+TK_EOF := 0
+TK_NL := 1
+TK_IDENT := 2
+TK_INT := 3
+TK_CHAR := 4
+TK_STR := 5
+TK_KW := 6
+TK_OP := 7
+TK_DOC := 8
+
+-- Diagnostic codes E000N.
+E_CHAR := 1
+E_STRING := 2
+E_INTBIG := 3
+E_INTBAD := 4
+E_CHARLIT := 5
+E_ESCAPE := 6
+
+-- Bytes.
+B_TAB := 9
+B_NL := 10
+B_CR := 13
+B_SPACE := 32
+B_QUOTE := 34
+B_APOS := 39
+B_MINUS := 45
+B_ZERO := 48
+B_BACKSLASH := 92
+B_UNDERSCORE := 95
+
+-- Integer literals are u64 in the genesis compiler (V0: u128). oli-core
+-- compares signed, so a value with the top bit set reads as negative here.
+
+layout Tok
+    kind : u8
+    sub : u64
+    start : u64
+    len : u64
+    line : u64
+    col : u64
+    val : u64
+end
+
+layout Lex
+    file : view u8
+    src : view u8
+    toks : rw view u8
+    tmp : rw view u8
+    pos : u64
+    line : u64
+    col : u64
+    tline : u64
+    tcol : u64
+    ntok : u64
+    nerr : u64
+end
+
+proc lex_new(z: zone, src: view u8, max_tokens: u64) -> rw ref Lex
+    lx := z.make(Lex)
+    lx.file <- "stdin"
+    lx.src <- src
+    lx.toks <- z.bytes(max_tokens * Tok.size)
+    lx.tmp <- z.bytes(32)
+    lx.pos <- 0
+    lx.line <- 1
+    lx.col <- 1
+    lx.ntok <- 0
+    lx.nerr <- 0
+    ret lx
+end
+
+proc tok_at(lx: ref Lex, i: u64) -> rw ref Tok
+    toks := lx.toks
+    off := i * Tok.size
+    ret Tok.at(toks[off..off + Tok.size])
+end
+
+proc peek(lx: ref Lex, off: u64) -> word
+    src := lx.src
+    p := lx.pos + off
+    if p >= src.len
+        ret 0
+    end
+    ret src[p]
+end
+
+proc advance(lx: rw ref Lex)
+    src := lx.src
+    p := lx.pos
+    c := src[p]
+    lx.pos <- p + 1
+    -- Columns count characters: a UTF-8 continuation byte starts none.
+    if c >= 128
+        if c < 192
+            ret
+        end
+    end
+    lx.col <- lx.col + 1
+end
+
+proc push(lx: rw ref Lex, kind: u64, start: u64, len: u64) -> rw ref Tok
+    n := lx.ntok
+    t := tok_at(lx, n)
+    t.kind <- u8.wrap(kind)
+    t.sub <- 0
+    t.start <- start
+    t.len <- len
+    t.line <- lx.tline
+    t.col <- lx.tcol
+    t.val <- 0
+    lx.ntok <- n + 1
+    ret t
+end
+
+proc diag_msg(code: u64) -> view u8
+    if code == E_CHAR
+        ret "invalid character"
+    end
+    if code == E_STRING
+        ret "unterminated string literal"
+    end
+    if code == E_INTBIG
+        ret "integer literal too large"
+    end
+    if code == E_INTBAD
+        ret "bad digits or suffix on an integer literal"
+    end
+    if code == E_CHARLIT
+        ret "bad character literal"
+    end
+    if code == E_ESCAPE
+        ret "invalid escape sequence"
+    end
+    ret "lexical error"
+end
+
+proc diag(lx: rw ref Lex, code: u64, line: u64, col: u64)
+    tmp := lx.tmp
+    put(2, "error[E000")
+    put_uint(2, tmp, code)
+    put(2, "]: ")
+    put(2, diag_msg(code))
+    diag_head(lx.file, tmp, line, col)
+    excerpt(lx.src, tmp, line, col)
+    lx.nerr <- lx.nerr + 1
+end
+
+proc is_digit(c: word) -> word
+    if c < 48
+        ret 0
+    end
+    if c > 57
+        ret 0
+    end
+    ret 1
+end
+
+proc is_letter(c: word) -> word
+    if c == B_UNDERSCORE
+        ret 1
+    end
+    if c >= 65
+        if c <= 90
+            ret 1
+        end
+    end
+    if c >= 97
+        if c <= 122
+            ret 1
+        end
+    end
+    ret 0
+end
+
+proc is_ident_char(c: word) -> word
+    if is_letter(c)
+        ret 1
+    end
+    ret is_digit(c)
+end
+
+proc digit_value(c: word, base: word) -> word
+    -- The value of c as a digit in base, or -1.
+    v : word <- -1
+    if is_digit(c)
+        v <- c - 48
+    end
+    if c >= 97
+        if c <= 102
+            v <- c - 87
+        end
+    end
+    if c >= 65
+        if c <= 70
+            v <- c - 55
+        end
+    end
+    if v >= base
+        ret -1
+    end
+    ret v
+end
+
+proc digit_limit(base: word, d: word) -> word
+    -- The largest n such that n * base + d fits in 64 bits.
+    if base == 16
+        ret 1152921504606846975
+    end
+    if base == 8
+        ret 2305843009213693951
+    end
+    if base == 2
+        ret 9223372036854775807
+    end
+    if d <= 5
+        ret 1844674407370955161
+    end
+    ret 1844674407370955160
+end
+
+proc scale_limit(scale: word) -> word
+    -- The largest n such that n * scale fits in 64 bits.
+    if scale == 1024
+        ret 18014398509481983
+    end
+    if scale == 1048576
+        ret 17592186044415
+    end
+    ret 17179869183
+end
+
+proc view_eq(a: view u8, b: view u8) -> word
+    if a.len != b.len
+        ret 0
+    end
+    i : u64 <- 0
+    while i < a.len
+        if a[i] != b[i]
+            ret 0
+        end
+        i <- i + 1
+    end
+    ret 1
+end
+
+proc kw_index(name: view u8) -> word
+    -- 1-based index into the keyword list of spec §2.3 (reserved words last), 0 if none.
+    tab := "module import pub proc permit calls section align entry export traps ret fail if then elif else end while each in loop break continue zone at from case when layout choice packed machine clobber and or not true false none never rw mmio addr ref view own port be le wrap sat checked bit bits atomic thread extern generic const static volatile "
+    i : u64 <- 0
+    idx : u64 <- 1
+    while i < tab.len
+        j : u64 <- i
+        while tab[j] != B_SPACE
+            j <- j + 1
+        end
+        if view_eq(tab[i..j], name)
+            ret word.bits(idx)
+        end
+        i <- j + 1
+        idx <- idx + 1
+    end
+    ret 0
+end
+
+proc op2_index(c: word, d: word) -> word
+    -- 1-based index of a two-character operator (spec §2.5), 0 if none.
+    tab := ":=<-<~->..==!=<=>=<<>>"
+    i : u64 <- 0
+    while i < tab.len
+        if word(tab[i]) == c
+            if word(tab[i + 1]) == d
+                ret word.bits(i / 2 + 1)
+            end
+        end
+        i <- i + 2
+    end
+    ret 0
+end
+
+proc op1_ok(c: word) -> word
+    tab := ":,.+-*/%<>&|^~()[]{}"
+    i : u64 <- 0
+    while i < tab.len
+        if word(tab[i]) == c
+            ret 1
+        end
+        i <- i + 1
+    end
+    ret 0
+end
+
+proc simple_escape(c: word) -> word
+    -- The byte an escape letter stands for (spec §2.4), or -1.
+    if c == 110
+        ret 10
+    end
+    if c == 116
+        ret 9
+    end
+    if c == 114
+        ret 13
+    end
+    if c == 48
+        ret 0
+    end
+    if c == 92
+        ret 92
+    end
+    if c == 34
+        ret 34
+    end
+    if c == 39
+        ret 39
+    end
+    ret -1
+end
+
+proc escape(lx: ref Lex) -> word
+    -- After the backslash: consumes the escape and yields its byte, or -1.
+    c := peek(lx, 0)
+    if c == 120
+        advance(lx)
+        h1 := digit_value(peek(lx, 0), 16)
+        if h1 < 0
+            ret -1
+        end
+        advance(lx)
+        h2 := digit_value(peek(lx, 0), 16)
+        if h2 < 0
+            ret -1
+        end
+        advance(lx)
+        ret h1 * 16 + h2
+    end
+    v := simple_escape(c)
+    if v < 0
+        if c == B_NL
+            ret -1
+        end
+        if c == 0
+            ret -1
+        end
+        advance(lx)
+        ret -1
+    end
+    advance(lx)
+    ret v
+end
+
+proc newline(lx: rw ref Lex)
+    -- Runs of newlines collapse into one NL; leading newlines are dropped.
+    n := lx.ntok
+    emit : u64 <- 1
+    if n == 0
+        emit <- 0
+    else
+        last := tok_at(lx, n - 1)
+        if last.kind == TK_NL
+            emit <- 0
+        end
+    end
+    if emit
+        push(lx, TK_NL, lx.pos, 1)
+    end
+    lx.pos <- lx.pos + 1
+    lx.line <- lx.line + 1
+    lx.col <- 1
+end
+
+proc comment(lx: ref Lex)
+    -- `--` vanishes; `---` becomes a Doc token holding the text after it.
+    doc : u64 <- 0
+    if peek(lx, 2) == B_MINUS
+        doc <- 1
+    end
+    advance(lx)
+    advance(lx)
+    if doc
+        advance(lx)
+        if peek(lx, 0) == B_SPACE
+            advance(lx)
+        end
+    end
+    start := lx.pos
+    src := lx.src
+    while lx.pos < src.len
+        if peek(lx, 0) == B_NL
+            break
+        end
+        advance(lx)
+    end
+    stop : u64 <- lx.pos
+    if stop > start
+        if src[stop - 1] == B_CR
+            stop <- stop - 1
+        end
+    end
+    if doc
+        push(lx, TK_DOC, start, stop - start)
+    end
+end
+
+proc lex_word(lx: ref Lex)
+    start := lx.pos
+    while is_ident_char(peek(lx, 0))
+        advance(lx)
+    end
+    src := lx.src
+    len := lx.pos - start
+    k := kw_index(src[start..start + len])
+    if k > 0
+        t := push(lx, TK_KW, start, len)
+        t.sub <- u64.bits(k)
+        ret
+    end
+    push(lx, TK_IDENT, start, len)
+end
+
+proc lex_number(lx: ref Lex)
+    start := lx.pos
+    line := lx.tline
+    col := lx.tcol
+    base : u64 <- 10
+    if peek(lx, 0) == B_ZERO
+        c1 := peek(lx, 1)
+        if c1 == 120
+            base <- 16
+        end
+        if c1 == 98
+            base <- 2
+        end
+        if c1 == 111
+            base <- 8
+        end
+    end
+    if base != 10
+        advance(lx)
+        advance(lx)
+    end
+    n : u64 <- 0
+    ndig : u64 <- 0
+    big : u64 <- 0
+    loop
+        c := peek(lx, 0)
+        if c == B_UNDERSCORE
+            advance(lx)
+            continue
+        end
+        d := digit_value(c, word.bits(base))
+        if d < 0
+            break
+        end
+        if n < 0
+            big <- 1
+        else
+            if n > digit_limit(word.bits(base), d)
+                big <- 1
+            else
+                n <- n * base + u64.bits(d)
+            end
+        end
+        ndig <- ndig + 1
+        advance(lx)
+    end
+    bad : u64 <- 0
+    if ndig == 0
+        diag(lx, E_INTBAD, line, col)
+        bad <- 1
+    end
+    scale : u64 <- 0
+    c2 := peek(lx, 0)
+    if c2 == 75
+        scale <- 1024
+    end
+    if c2 == 77
+        scale <- 1048576
+    end
+    if c2 == 71
+        scale <- 1073741824
+    end
+    if scale > 0
+        advance(lx)
+        if n < 0
+            big <- 1
+        else
+            if n > scale_limit(word.bits(scale))
+                big <- 1
+            else
+                n <- n * scale
+            end
+        end
+    end
+    if is_ident_char(peek(lx, 0))
+        if bad == 0
+            diag(lx, E_INTBAD, lx.line, lx.col)
+            bad <- 1
+        end
+        while is_ident_char(peek(lx, 0))
+            advance(lx)
+        end
+    end
+    if big
+        if bad == 0
+            diag(lx, E_INTBIG, line, col)
+        end
+        n <- 0
+    end
+    t := push(lx, TK_INT, start, lx.pos - start)
+    t.val <- n
+end
+
+proc lex_string(lx: ref Lex)
+    start := lx.pos
+    advance(lx)
+    src := lx.src
+    closed : u64 <- 0
+    while lx.pos < src.len
+        c := peek(lx, 0)
+        if c == B_NL
+            break
+        end
+        if c == B_QUOTE
+            advance(lx)
+            closed <- 1
+            break
+        end
+        if c == B_BACKSLASH
+            eline := lx.line
+            ecol := lx.col
+            advance(lx)
+            if escape(lx) < 0
+                diag(lx, E_ESCAPE, eline, ecol)
+            end
+            continue
+        end
+        advance(lx)
+    end
+    if closed == 0
+        diag(lx, E_STRING, lx.tline, lx.tcol)
+    end
+    push(lx, TK_STR, start, lx.pos - start)
+end
+
+proc lex_char(lx: ref Lex)
+    start := lx.pos
+    advance(lx)
+    c := peek(lx, 0)
+    val : u64 <- 0
+    good : u64 <- 1
+    reported : u64 <- 0
+    if c == B_BACKSLASH
+        eline := lx.line
+        ecol := lx.col
+        advance(lx)
+        val <- escape(lx)
+        if val < 0
+            diag(lx, E_ESCAPE, eline, ecol)
+            reported <- 1
+            good <- 0
+            val <- 0
+        end
+    else
+        if c == B_APOS
+            good <- 0
+        end
+        if c == B_NL
+            good <- 0
+        end
+        if c == 0
+            good <- 0
+        end
+        if good
+            advance(lx)
+            val <- u64.bits(c)
+        end
+    end
+    if peek(lx, 0) == B_APOS
+        advance(lx)
+    else
+        good <- 0
+    end
+    if good == 0
+        if reported == 0
+            diag(lx, E_CHARLIT, lx.tline, lx.tcol)
+        end
+    end
+    t := push(lx, TK_CHAR, start, lx.pos - start)
+    t.val <- val
+end
+
+proc lex_op(lx: ref Lex)
+    start := lx.pos
+    c := peek(lx, 0)
+    two := op2_index(c, peek(lx, 1))
+    if two > 0
+        advance(lx)
+        advance(lx)
+        t := push(lx, TK_OP, start, 2)
+        t.sub <- u64.bits(two)
+        ret
+    end
+    if op1_ok(c)
+        advance(lx)
+        t2 := push(lx, TK_OP, start, 1)
+        t2.sub <- u64.bits(100 + c)
+        ret
+    end
+    diag(lx, E_CHAR, lx.tline, lx.tcol)
+    advance(lx)
+    -- Skip the rest of a multi-byte character so it is reported once.
+    while peek(lx, 0) >= 128
+        if peek(lx, 0) >= 192
+            break
+        end
+        advance(lx)
+    end
+end
+
+proc lex_one(lx: rw ref Lex)
+    c := peek(lx, 0)
+    lx.tline <- lx.line
+    lx.tcol <- lx.col
+    if c == B_NL
+        newline(lx)
+        ret
+    end
+    if c == B_CR
+        advance(lx)
+        ret
+    end
+    if c == B_SPACE
+        advance(lx)
+        ret
+    end
+    if c == B_TAB
+        advance(lx)
+        ret
+    end
+    if c == B_MINUS
+        if peek(lx, 1) == B_MINUS
+            comment(lx)
+            ret
+        end
+    end
+    if is_letter(c)
+        lex_word(lx)
+        ret
+    end
+    if is_digit(c)
+        lex_number(lx)
+        ret
+    end
+    if c == B_QUOTE
+        lex_string(lx)
+        ret
+    end
+    if c == B_APOS
+        lex_char(lx)
+        ret
+    end
+    lex_op(lx)
+end
+
+proc lex_all(lx: rw ref Lex)
+    src := lx.src
+    while lx.pos < src.len
+        lex_one(lx)
+    end
+    -- The stream ends with NL then Eof even when the file has no final newline.
+    n := lx.ntok
+    if n > 0
+        last := tok_at(lx, n - 1)
+        if last.kind != TK_NL
+            lx.tline <- lx.line
+            lx.tcol <- lx.col
+            push(lx, TK_NL, lx.pos, 0)
+        end
+    end
+    lx.tline <- lx.line
+    lx.tcol <- lx.col
+    push(lx, TK_EOF, lx.pos, 0)
+end

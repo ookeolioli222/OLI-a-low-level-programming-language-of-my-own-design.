@@ -1,0 +1,1204 @@
+module olic.ast
+-- The Oli-- V0 syntax tree and its S-expression printer (`--show-ast`, the
+-- format of tests/snapshots/*.ast). Nodes live in a zone arena: every node has
+-- a kind, a token range, a value and a list of children, so the printer is one
+-- dispatch over kinds and the parser never needs a per-node layout.
+
+-- Node kinds. Expressions 1..49, statements 50..79, declarations 80..99,
+-- machine lines 100..119, fragments 120..139.
+N_INT := 1
+N_STR := 2
+N_CHAR := 3
+N_NAME := 4
+N_FIELD := 5
+N_INDEX := 6
+N_CALL := 7
+N_RANGE := 8
+N_UNOP := 9
+N_BINOP := 10
+N_CONVERT := 11
+N_TYPEARG := 12
+N_LIT := 13
+N_LITFIELD := 14
+N_ARRAY := 15
+N_FALLBACK := 16
+N_DEFAULT := 17
+N_RAWLOAD := 18
+N_MODE := 19
+N_TRUE := 20
+N_FALSE := 21
+N_NONE := 22
+
+N_BIND := 50
+N_PLACE := 51
+N_STORE := 52
+N_MOVE := 53
+N_EXPR := 54
+N_RET := 55
+N_FAIL := 56
+N_BREAK := 57
+N_CONTINUE := 58
+N_IF := 59
+N_IFTHEN := 60
+N_THEN := 61
+N_ELIF := 62
+N_ELSE := 63
+N_WHILE := 64
+N_EACH := 65
+N_LOOP := 66
+N_CASE := 67
+N_WHEN := 68
+N_ZONE := 69
+N_MACHINE := 70
+N_BODY := 71
+
+N_MODULE := 80
+N_IMPORT := 81
+N_LAYOUT := 82
+N_FIELDDECL := 83
+N_CHOICE := 84
+N_VARIANT := 85
+N_CONST := 86
+N_STATIC := 87
+N_PROC := 88
+N_PARAM := 89
+N_CLAUSE := 90
+N_DOC := 91
+N_PARAMS := 92
+
+N_INSTR := 100
+N_LABEL := 101
+N_CLOBBER := 102
+N_MIN := 103
+N_MOUT := 104
+N_MEM := 105
+N_MTERM := 106
+N_MWORD := 107
+
+N_TYPE := 120
+N_PAT := 121
+N_PATOK := 122
+N_PATFAIL := 123
+
+-- Unary operator codes (N_UNOP.sub).
+U_NEG := 1
+U_BITNOT := 2
+U_NOT := 3
+U_ADDROF := 4
+U_REFOF := 5
+U_WRAP := 6
+U_SAT := 7
+U_CHECKED := 8
+
+-- Clause codes (N_CLAUSE.sub); the clause text is its token range.
+C_PERMIT := 1
+C_CALLS := 2
+C_SECTION := 3
+C_ALIGN := 4
+C_ENTRY := 5
+C_EXPORT := 6
+C_TRAPS := 7
+
+NODE_MAX := 200000
+TOK_MAX := 200000
+OUT_MAX := 4194304
+
+layout Node
+    kind : u32
+    sub : u32
+    val : u64
+    t0 : u64
+    t1 : u64
+    kid : u64
+    tail : u64
+    next : u64
+end
+
+layout Ctx
+    file : view u8
+    src : view u8
+    toks : rw view u8
+    nodes : rw view u8
+    out : rw view u8
+    tmp : rw view u8
+    ntok : u64
+    nnode : u64
+    pos : u64
+    nerr : u64
+    nout : u64
+    depth : u64
+    nolit : u64
+    docs : u64
+    ndecl : u64
+    noelse : u64
+    contnl : u64
+    errmark : u64
+    nwarn : u64
+    root : u64
+end
+
+proc ctx_init(cx: rw ref Ctx, z: zone, src: view u8, lx: ref Lex)
+    cx.file <- "stdin"
+    cx.src <- src
+    cx.toks <- lx.toks
+    cx.ntok <- lx.ntok
+    cx.nodes <- z.bytes(NODE_MAX * Node.size)
+    cx.out <- z.bytes(OUT_MAX)
+    cx.tmp <- z.bytes(32)
+    cx.nnode <- 1
+    cx.pos <- 0
+    cx.nerr <- 0
+    cx.nout <- 0
+    cx.depth <- 0
+    cx.nolit <- 0
+    cx.docs <- 0
+    cx.ndecl <- 0
+    cx.noelse <- 0
+    cx.contnl <- 0
+    cx.errmark <- 0
+    cx.nwarn <- 0
+    cx.root <- 0
+end
+
+proc ctx_new(z: zone, src: view u8, lx: ref Lex) -> rw ref Ctx
+    cx := z.make(Ctx)
+    ctx_init(cx, z, src, lx)
+    ret cx
+end
+
+proc mod_text(cx: ref Ctx, a: u64, b: u64) -> view u8
+    -- The source text spanned by tokens a..b, used for module and import paths.
+    if b <= a
+        src0 := cx.src
+        ret src0[0..0]
+    end
+    ta := ctok(cx, a)
+    tb := ctok(cx, b - 1)
+    src := cx.src
+    s := ta.start
+    e := tb.start + tb.len
+    ret src[s..e]
+end
+
+proc node_at(cx: ref Ctx, n: u64) -> rw ref Node
+    nodes := cx.nodes
+    off := n * Node.size
+    ret Node.at(nodes[off..off + Node.size])
+end
+
+proc ctok(cx: ref Ctx, i: u64) -> rw ref Tok
+    toks := cx.toks
+    j : u64 <- i
+    if j >= cx.ntok
+        j <- cx.ntok - 1
+    end
+    off := j * Tok.size
+    ret Tok.at(toks[off..off + Tok.size])
+end
+
+proc tok_text(cx: ref Ctx, i: u64) -> view u8
+    t := ctok(cx, i)
+    src := cx.src
+    s := t.start
+    ret src[s..s + t.len]
+end
+
+proc new_node(cx: rw ref Ctx, kind: u64, t0: u64) -> rw ref Node
+    permit os.syscall
+    n := cx.nnode
+    if n >= NODE_MAX
+        put(2, "olic: node arena exhausted\n")
+        os.syscall(60, 4)
+    end
+    nd := node_at(cx, n)
+    nd.kind <- u32.wrap(kind)
+    nd.sub <- 0
+    nd.val <- 0
+    nd.t0 <- t0
+    nd.t1 <- t0
+    nd.kid <- 0
+    nd.tail <- 0
+    nd.next <- 0
+    cx.nnode <- n + 1
+    ret nd
+end
+
+proc node_index(cx: ref Ctx, nd: ref Node) -> u64
+    -- The arena index of a node the caller holds a ref to.
+    ret cx.nnode - 1
+end
+
+proc add_kid(cx: ref Ctx, parent: u64, kid: u64)
+    if kid == 0
+        ret
+    end
+    p := node_at(cx, parent)
+    t := p.tail
+    if t == 0
+        p.kid <- kid
+    else
+        prev := node_at(cx, t)
+        prev.next <- kid
+    end
+    p.tail <- kid
+end
+
+proc kid1(cx: ref Ctx, n: u64) -> u64
+    nd := node_at(cx, n)
+    ret nd.kid
+end
+
+proc sibling(cx: ref Ctx, n: u64) -> u64
+    nd := node_at(cx, n)
+    ret nd.next
+end
+
+proc kid2(cx: ref Ctx, n: u64) -> u64
+    ret sibling(cx, kid1(cx, n))
+end
+
+proc kid3(cx: ref Ctx, n: u64) -> u64
+    ret sibling(cx, kid2(cx, n))
+end
+
+-- Output buffer ------------------------------------------------------------
+
+proc emit(cx: rw ref Ctx, s: view u8)
+    out := cx.out
+    n := cx.nout
+    i : u64 <- 0
+    while i < s.len
+        out[n + i] <- s[i]
+        i <- i + 1
+    end
+    cx.nout <- n + s.len
+end
+
+proc emit_byte(cx: rw ref Ctx, b: u64)
+    out := cx.out
+    n := cx.nout
+    out[n] <- u8.wrap(b)
+    cx.nout <- n + 1
+end
+
+proc emit_uint(cx: ref Ctx, n: u64)
+    -- oli-core divides signed, so values >= 2^63 are split first.
+    if n < 0
+        r := n - HALF
+        rem := 8 + r % 10
+        emit_uint(cx, r / 10 + 922337203685477580 + rem / 10)
+        emit_byte(cx, 48 + rem % 10)
+        ret
+    end
+    if n >= 10
+        emit_uint(cx, n / 10)
+    end
+    emit_byte(cx, 48 + n % 10)
+end
+
+proc emit_indent(cx: ref Ctx, ind: u64)
+    i : u64 <- 0
+    while i < ind
+        emit(cx, " ")
+        i <- i + 1
+    end
+end
+
+proc emit_nl(cx: ref Ctx, ind: u64)
+    emit(cx, "\n")
+    emit_indent(cx, ind)
+end
+
+proc emit_tok(cx: ref Ctx, i: u64)
+    emit(cx, tok_text(cx, i))
+end
+
+proc is_word_tok(cx: ref Ctx, i: u64) -> word
+    t := ctok(cx, i)
+    k := t.kind
+    if k == TK_IDENT
+        ret 1
+    end
+    if k == TK_KW
+        ret 1
+    end
+    if k == TK_INT
+        ret 1
+    end
+    ret 0
+end
+
+proc emit_toks(cx: ref Ctx, a: u64, b: u64)
+    -- Tokens a..b joined; a space only between two word tokens, so
+    -- `be u16`, `ref Shape` and `[16384]u8` all come out canonical. An
+    -- integer prints its value, so `16K` in a type is `16384`.
+    i : u64 <- a
+    while i < b
+        if i > a
+            if is_word_tok(cx, i)
+                if is_word_tok(cx, i - 1)
+                    emit(cx, " ")
+                end
+            end
+        end
+        t := ctok(cx, i)
+        if t.kind == TK_INT
+            emit_uint(cx, t.val)
+        else
+            emit_tok(cx, i)
+        end
+        i <- i + 1
+    end
+end
+
+proc emit_type(cx: ref Ctx, n: u64)
+    if n == 0
+        ret
+    end
+    nd := node_at(cx, n)
+    emit_toks(cx, nd.t0, nd.t1)
+end
+
+proc flush(cx: rw ref Ctx)
+    out := cx.out
+    put(1, out[..cx.nout])
+    cx.nout <- 0
+end
+
+-- Expression printer --------------------------------------------------------
+
+proc pe_list(cx: ref Ctx, first: u64)
+    -- Children printed inline, each preceded by a space.
+    n : u64 <- first
+    while n != 0
+        emit(cx, " ")
+        pe(cx, n)
+        n <- sibling(cx, n)
+    end
+end
+
+proc pe_call(cx: ref Ctx, n: u64)
+    emit(cx, "(call ")
+    pe(cx, kid1(cx, n))
+    pe_list(cx, kid2(cx, n))
+    emit(cx, ")")
+end
+
+proc pe_convert(cx: ref Ctx, n: u64)
+    nd := node_at(cx, n)
+    emit(cx, "(convert ")
+    emit_toks(cx, nd.t0, nd.t1)
+    m : u64 <- kid1(cx, n)
+    mn := node_at(cx, m)
+    if mn.kind == N_MODE
+        emit(cx, " ")
+        emit_tok(cx, mn.t0)
+        m <- sibling(cx, m)
+    end
+    emit(cx, " ")
+    pe(cx, m)
+    emit(cx, ")")
+end
+
+proc pe_lit(cx: ref Ctx, n: u64)
+    emit(cx, "(lit ")
+    pe(cx, kid1(cx, n))
+    f : u64 <- kid2(cx, n)
+    while f != 0
+        fn := node_at(cx, f)
+        emit(cx, " (")
+        emit_tok(cx, fn.t0)
+        emit(cx, ": ")
+        pe(cx, kid1(cx, f))
+        emit(cx, ")")
+        f <- sibling(cx, f)
+    end
+    emit(cx, ")")
+end
+
+proc range_lo(cx: ref Ctx, n: u64) -> u64
+    -- The low bound of a range, or 0 when it was left out (`..b`).
+    nd := node_at(cx, n)
+    if nd.sub % 2 == 1
+        ret kid1(cx, n)
+    end
+    ret 0
+end
+
+proc range_hi(cx: ref Ctx, n: u64) -> u64
+    -- The high bound of a range, or 0 when it was left out (`a..`).
+    nd := node_at(cx, n)
+    if nd.sub < 2
+        ret 0
+    end
+    if nd.sub % 2 == 1
+        ret kid2(cx, n)
+    end
+    ret kid1(cx, n)
+end
+
+proc pe_range(cx: ref Ctx, n: u64)
+    emit(cx, "(range ")
+    a := range_lo(cx, n)
+    if a == 0
+        emit(cx, "begin")
+    else
+        pe(cx, a)
+    end
+    emit(cx, " ")
+    b := range_hi(cx, n)
+    if b == 0
+        emit(cx, "end")
+    else
+        pe(cx, b)
+    end
+    emit(cx, ")")
+end
+
+proc unop_name(sub: u64) -> view u8
+    if sub == U_NEG
+        ret "neg"
+    end
+    if sub == U_BITNOT
+        ret "bitnot"
+    end
+    if sub == U_NOT
+        ret "not"
+    end
+    if sub == U_ADDROF
+        ret "addr-of"
+    end
+    if sub == U_REFOF
+        ret "ref-of"
+    end
+    if sub == U_WRAP
+        ret "wrap"
+    end
+    if sub == U_SAT
+        ret "sat"
+    end
+    ret "checked"
+end
+
+proc pe(cx: ref Ctx, n: u64)
+    if n == 0
+        emit(cx, "()")
+        ret
+    end
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_INT
+        emit(cx, "(int ")
+        if nd.sub == 1
+            emit(cx, "-")
+        end
+        emit_uint(cx, nd.val)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_STR
+        emit(cx, "(str ")
+        emit_tok(cx, nd.t0)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_CHAR
+        t := ctok(cx, nd.t0)
+        src := cx.src
+        s := t.start
+        emit(cx, "(char \"")
+        emit(cx, src[s + 1..s + t.len - 1])
+        emit(cx, "\")")
+        ret
+    end
+    if k == N_NAME
+        emit(cx, "(name ")
+        emit_tok(cx, nd.t0)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_TRUE
+        emit(cx, "(true)")
+        ret
+    end
+    if k == N_FALSE
+        emit(cx, "(false)")
+        ret
+    end
+    if k == N_NONE
+        emit(cx, "(none)")
+        ret
+    end
+    if k == N_FIELD
+        emit(cx, "(field ")
+        pe(cx, kid1(cx, n))
+        emit(cx, " ")
+        emit_tok(cx, nd.t0)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_INDEX
+        emit(cx, "(index ")
+        pe(cx, kid1(cx, n))
+        emit(cx, " ")
+        pe(cx, kid2(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_CALL
+        pe_call(cx, n)
+        ret
+    end
+    if k == N_RANGE
+        pe_range(cx, n)
+        ret
+    end
+    if k == N_UNOP
+        emit(cx, "(")
+        if nd.sub == U_REFOF
+            if nd.val == 1
+                emit(cx, "rw-")
+            end
+        end
+        emit(cx, unop_name(nd.sub))
+        emit(cx, " ")
+        pe(cx, kid1(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_BINOP
+        emit(cx, "(")
+        emit_tok(cx, nd.t0)
+        emit(cx, " ")
+        pe(cx, kid1(cx, n))
+        emit(cx, " ")
+        pe(cx, kid2(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_CONVERT
+        pe_convert(cx, n)
+        ret
+    end
+    if k == N_TYPEARG
+        emit(cx, "(type ")
+        emit_toks(cx, nd.t0, nd.t1)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_LIT
+        pe_lit(cx, n)
+        ret
+    end
+    if k == N_ARRAY
+        emit(cx, "(array")
+        pe_list(cx, kid1(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_RAWLOAD
+        emit(cx, "(raw-load ")
+        pe(cx, kid1(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_FALLBACK
+        emit(cx, "(else ")
+        pe(cx, kid1(cx, n))
+        emit(cx, " ")
+        pe(cx, kid2(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_DEFAULT
+        emit(cx, "(default ")
+        pe(cx, kid1(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_FAIL
+        emit(cx, "(fail")
+        c := kid1(cx, n)
+        if c != 0
+            emit(cx, " ")
+            pe(cx, c)
+        end
+        emit(cx, ")")
+        ret
+    end
+    if k == N_RET
+        emit(cx, "(ret")
+        c2 := kid1(cx, n)
+        if c2 != 0
+            emit(cx, " ")
+            pe(cx, c2)
+        end
+        emit(cx, ")")
+        ret
+    end
+    emit(cx, "(?)")
+end
+
+-- Block printer -------------------------------------------------------------
+
+proc mk(cx: ref Ctx, kind: u64, t0: u64) -> u64
+    nd := new_node(cx, kind, t0)
+    ret cx.nnode - 1
+end
+
+proc pkids(cx: ref Ctx, first: u64, ind: u64)
+    -- Every child on its own line, indented, as a statement or declaration.
+    k : u64 <- first
+    while k != 0
+        emit_nl(cx, ind)
+        ps(cx, k, ind)
+        k <- sibling(cx, k)
+    end
+end
+
+proc pbody(cx: ref Ctx, n: u64, ind: u64)
+    emit(cx, "(body")
+    pkids(cx, kid1(cx, n), ind + 2)
+    emit(cx, ")")
+end
+
+proc pr_params(cx: ref Ctx, pnode: u64)
+    emit(cx, "(")
+    k : u64 <- kid1(cx, pnode)
+    sep : u64 <- 0
+    while k != 0
+        if sep
+            emit(cx, " ")
+        end
+        sep <- 1
+        kn := node_at(cx, k)
+        emit(cx, "(")
+        emit_tok(cx, kn.t0)
+        emit(cx, " ")
+        emit_type(cx, kid1(cx, k))
+        emit(cx, ")")
+        k <- sibling(cx, k)
+    end
+    emit(cx, ")")
+end
+
+proc clause_name(sub: u64) -> view u8
+    if sub == C_PERMIT
+        ret "permit"
+    end
+    if sub == C_CALLS
+        ret "calls"
+    end
+    if sub == C_SECTION
+        ret "section"
+    end
+    if sub == C_ALIGN
+        ret "align"
+    end
+    if sub == C_ENTRY
+        ret "entry"
+    end
+    if sub == C_EXPORT
+        ret "export"
+    end
+    ret "traps"
+end
+
+proc p_clause_arg(cx: ref Ctx, k: u64)
+    kn := node_at(cx, k)
+    if kn.kind == N_INT
+        emit_uint(cx, kn.val)
+        ret
+    end
+    emit_toks(cx, kn.t0, kn.t1)
+end
+
+proc p_clause(cx: ref Ctx, n: u64)
+    nd := node_at(cx, n)
+    emit(cx, "(")
+    emit(cx, clause_name(nd.sub))
+    k : u64 <- kid1(cx, n)
+    while k != 0
+        emit(cx, " ")
+        p_clause_arg(cx, k)
+        k <- sibling(cx, k)
+    end
+    emit(cx, ")")
+end
+
+proc p_pattern(cx: ref Ctx, n: u64)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_PATOK
+        emit(cx, "ok")
+        if nd.t1 > nd.t0
+            emit(cx, " ")
+            emit_tok(cx, nd.t0)
+        end
+        ret
+    end
+    if k == N_PATFAIL
+        emit(cx, "fail")
+        sub := kid1(cx, n)
+        if sub != 0
+            emit(cx, " ")
+            p_pattern(cx, sub)
+        end
+        ret
+    end
+    if k == N_PAT
+        emit_tok(cx, nd.t0)
+        f : u64 <- kid1(cx, n)
+        if f != 0
+            emit(cx, " {")
+            sep : u64 <- 0
+            while f != 0
+                if sep
+                    emit(cx, " ")
+                end
+                sep <- 1
+                fn := node_at(cx, f)
+                emit_tok(cx, fn.t0)
+                f <- sibling(cx, f)
+            end
+            emit(cx, "}")
+        end
+        ret
+    end
+    pe(cx, n)
+end
+
+proc p_mterm(cx: ref Ctx, n: u64)
+    nd := node_at(cx, n)
+    if nd.sub == 1
+        emit(cx, "-")
+    else
+        emit(cx, "+")
+    end
+    k := kid1(cx, n)
+    kn := node_at(cx, k)
+    if kn.kind == N_INT
+        emit_uint(cx, kn.val)
+    else
+        emit_toks(cx, kn.t0, kn.t1)
+    end
+    if nd.val > 0
+        emit(cx, "*")
+        emit_uint(cx, nd.val)
+    end
+end
+
+proc p_moperand(cx: ref Ctx, n: u64)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_MEM
+        emit(cx, "(mem")
+        if nd.val == 1
+            emit(cx, " ")
+            emit_tok(cx, nd.t0)
+        end
+        t : u64 <- kid1(cx, n)
+        while t != 0
+            emit(cx, " ")
+            p_mterm(cx, t)
+            t <- sibling(cx, t)
+        end
+        emit(cx, ")")
+        ret
+    end
+    if k == N_INT
+        if nd.sub == 1
+            emit(cx, "-")
+        end
+        emit_uint(cx, nd.val)
+        ret
+    end
+    emit_toks(cx, nd.t0, nd.t1)
+end
+
+proc p_machine_line(cx: ref Ctx, n: u64)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_LABEL
+        emit(cx, "(label ")
+        emit_tok(cx, nd.t0)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_CLOBBER
+        emit(cx, "(clobber")
+        c : u64 <- kid1(cx, n)
+        while c != 0
+            emit(cx, " ")
+            p_moperand(cx, c)
+            c <- sibling(cx, c)
+        end
+        emit(cx, ")")
+        ret
+    end
+    if k == N_MIN
+        emit(cx, "(in ")
+        emit_tok(cx, nd.t0)
+        emit(cx, " ")
+        pe(cx, kid1(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_MOUT
+        emit(cx, "(out ")
+        emit_tok(cx, nd.t0)
+        emit(cx, " ")
+        pe(cx, kid1(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    emit(cx, "(instr ")
+    emit_tok(cx, nd.t0)
+    o : u64 <- kid1(cx, n)
+    while o != 0
+        emit(cx, " ")
+        p_moperand(cx, o)
+        o <- sibling(cx, o)
+    end
+    emit(cx, ")")
+end
+
+proc p_head_name(cx: ref Ctx, head: view u8, n: u64)
+    nd := node_at(cx, n)
+    emit(cx, "(")
+    emit(cx, head)
+    emit(cx, " ")
+    emit_tok(cx, nd.t0)
+end
+
+proc ps_if(cx: ref Ctx, n: u64, ind: u64)
+    emit(cx, "(if ")
+    pe(cx, kid1(cx, n))
+    k : u64 <- kid2(cx, n)
+    while k != 0
+        kn := node_at(cx, k)
+        emit_nl(cx, ind + 2)
+        if kn.kind == N_THEN
+            emit(cx, "(then")
+            pkids(cx, kid1(cx, k), ind + 4)
+            emit(cx, ")")
+        end
+        if kn.kind == N_ELIF
+            emit(cx, "(elif ")
+            pe(cx, kid1(cx, k))
+            pkids(cx, kid2(cx, k), ind + 4)
+            emit(cx, ")")
+        end
+        if kn.kind == N_ELSE
+            emit(cx, "(else")
+            pkids(cx, kid1(cx, k), ind + 4)
+            emit(cx, ")")
+        end
+        k <- sibling(cx, k)
+    end
+    emit(cx, ")")
+end
+
+proc ps_case(cx: ref Ctx, n: u64, ind: u64)
+    emit(cx, "(case ")
+    pe(cx, kid1(cx, n))
+    k : u64 <- kid2(cx, n)
+    while k != 0
+        kn := node_at(cx, k)
+        emit_nl(cx, ind + 2)
+        if kn.kind == N_ELSE
+            emit(cx, "(else")
+            pkids(cx, kid1(cx, k), ind + 4)
+            emit(cx, ")")
+        else
+            emit(cx, "(when ")
+            p_pattern(cx, kid1(cx, k))
+            pkids(cx, kid2(cx, k), ind + 4)
+            emit(cx, ")")
+        end
+        k <- sibling(cx, k)
+    end
+    emit(cx, ")")
+end
+
+proc ps_zone(cx: ref Ctx, n: u64, ind: u64)
+    nd := node_at(cx, n)
+    emit(cx, "(zone ")
+    emit_tok(cx, nd.t0)
+    emit(cx, " ")
+    pe(cx, kid1(cx, n))
+    b : u64 <- kid2(cx, n)
+    if nd.sub == 1
+        emit(cx, " at ")
+        pe(cx, b)
+        b <- sibling(cx, b)
+    end
+    if nd.sub == 2
+        emit(cx, " from ")
+        pe(cx, b)
+        b <- sibling(cx, b)
+    end
+    emit_nl(cx, ind + 2)
+    pbody(cx, b, ind + 2)
+    emit(cx, ")")
+end
+
+proc ps_proc(cx: ref Ctx, n: u64, ind: u64)
+    nd := node_at(cx, n)
+    emit(cx, "(")
+    if nd.sub == 1
+        emit(cx, "pub ")
+    end
+    emit(cx, "proc ")
+    emit_tok(cx, nd.t0)
+    emit(cx, " ")
+    k : u64 <- kid1(cx, n)
+    pr_params(cx, k)
+    k <- sibling(cx, k)
+    if nd.val == 1
+        emit(cx, " -> ")
+        emit_type(cx, k)
+        k <- sibling(cx, k)
+    end
+    while k != 0
+        emit_nl(cx, ind + 2)
+        ps(cx, k, ind + 2)
+        k <- sibling(cx, k)
+    end
+    emit(cx, ")")
+end
+
+proc ps_const(cx: ref Ctx, n: u64, ind: u64)
+    nd := node_at(cx, n)
+    emit(cx, "(")
+    if nd.kind == N_CONST
+        emit(cx, "const ")
+    else
+        emit(cx, "static ")
+    end
+    emit_tok(cx, nd.t0)
+    k : u64 <- kid1(cx, n)
+    if nd.val >= 2
+        emit(cx, " : ")
+        emit_type(cx, k)
+        k <- sibling(cx, k)
+    end
+    if nd.sub == 1
+        emit(cx, " ")
+        pe(cx, k)
+        k <- sibling(cx, k)
+    end
+    while k != 0
+        emit_nl(cx, ind + 2)
+        ps(cx, k, ind + 2)
+        k <- sibling(cx, k)
+    end
+    emit(cx, ")")
+end
+
+proc ps_layout(cx: ref Ctx, n: u64, ind: u64)
+    nd := node_at(cx, n)
+    p_head_name(cx, "layout", n)
+    if nd.sub == 1
+        emit(cx, " packed")
+    end
+    if nd.val > 0
+        emit(cx, " align ")
+        emit_uint(cx, nd.val)
+    end
+    pkids(cx, kid1(cx, n), ind + 2)
+    emit(cx, ")")
+end
+
+proc ps_field(cx: ref Ctx, n: u64)
+    nd := node_at(cx, n)
+    p_head_name(cx, "field", n)
+    emit(cx, " ")
+    emit_type(cx, kid1(cx, n))
+    if nd.val > 0
+        emit(cx, " align ")
+        emit_uint(cx, nd.val)
+    end
+    emit(cx, ")")
+end
+
+proc ps(cx: ref Ctx, n: u64, ind: u64)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_BODY
+        pbody(cx, n, ind)
+        ret
+    end
+    if k == N_BIND
+        emit(cx, "(bind ")
+        emit_tok(cx, nd.t0)
+        v : u64 <- kid1(cx, n)
+        if nd.val >= 2
+            emit(cx, " : ")
+            emit_type(cx, v)
+            v <- sibling(cx, v)
+        end
+        emit(cx, " ")
+        pe(cx, v)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_PLACE
+        emit(cx, "(place ")
+        emit_tok(cx, nd.t0)
+        emit(cx, " : ")
+        emit_type(cx, kid1(cx, n))
+        v := kid2(cx, n)
+        if v != 0
+            emit(cx, " ")
+            pe(cx, v)
+        end
+        emit(cx, ")")
+        ret
+    end
+    if k == N_STORE
+        emit(cx, "(store ")
+        pe(cx, kid1(cx, n))
+        emit(cx, " ")
+        pe(cx, kid2(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_MOVE
+        emit(cx, "(move ")
+        pe(cx, kid1(cx, n))
+        emit(cx, " ")
+        pe(cx, kid2(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_EXPR
+        emit(cx, "(expr ")
+        pe(cx, kid1(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_BREAK
+        emit(cx, "(break)")
+        ret
+    end
+    if k == N_CONTINUE
+        emit(cx, "(continue)")
+        ret
+    end
+    if k == N_IF
+        ps_if(cx, n, ind)
+        ret
+    end
+    if k == N_IFTHEN
+        emit(cx, "(if-then ")
+        pe(cx, kid1(cx, n))
+        emit_nl(cx, ind + 2)
+        ps(cx, kid2(cx, n), ind + 2)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_WHILE
+        emit(cx, "(while ")
+        pe(cx, kid1(cx, n))
+        emit_nl(cx, ind + 2)
+        pbody(cx, kid2(cx, n), ind + 2)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_EACH
+        emit(cx, "(each ")
+        emit_tok(cx, nd.t0)
+        emit(cx, " ")
+        pe(cx, kid1(cx, n))
+        emit_nl(cx, ind + 2)
+        pbody(cx, kid2(cx, n), ind + 2)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_LOOP
+        emit(cx, "(loop")
+        emit_nl(cx, ind + 2)
+        pbody(cx, kid1(cx, n), ind + 2)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_CASE
+        ps_case(cx, n, ind)
+        ret
+    end
+    if k == N_ZONE
+        ps_zone(cx, n, ind)
+        ret
+    end
+    if k == N_MACHINE
+        emit(cx, "(machine ")
+        emit_tok(cx, nd.t0)
+        m : u64 <- kid1(cx, n)
+        while m != 0
+            emit_nl(cx, ind + 2)
+            p_machine_line(cx, m)
+            m <- sibling(cx, m)
+        end
+        emit(cx, ")")
+        ret
+    end
+    if k == N_CLAUSE
+        p_clause(cx, n)
+        ret
+    end
+    if k == N_DOC
+        emit(cx, "(doc \"")
+        emit_tok(cx, nd.t0)
+        emit(cx, "\")")
+        ret
+    end
+    if k == N_PROC
+        ps_proc(cx, n, ind)
+        ret
+    end
+    if k == N_CONST
+        ps_const(cx, n, ind)
+        ret
+    end
+    if k == N_STATIC
+        ps_const(cx, n, ind)
+        ret
+    end
+    if k == N_LAYOUT
+        ps_layout(cx, n, ind)
+        ret
+    end
+    if k == N_FIELDDECL
+        ps_field(cx, n)
+        ret
+    end
+    if k == N_CHOICE
+        p_head_name(cx, "choice", n)
+        pkids(cx, kid1(cx, n), ind + 2)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_VARIANT
+        p_head_name(cx, "variant", n)
+        pkids(cx, kid1(cx, n), ind + 2)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_IMPORT
+        emit(cx, "(import ")
+        emit_toks(cx, nd.t0, nd.t1)
+        emit(cx, ")")
+        ret
+    end
+    pe(cx, n)
+end
+
+proc print_module(cx: ref Ctx, n: u64)
+    nd := node_at(cx, n)
+    emit(cx, "(module ")
+    emit_toks(cx, nd.t0, nd.t1)
+    pkids(cx, kid1(cx, n), 2)
+    emit(cx, ")\n")
+    flush(cx)
+end

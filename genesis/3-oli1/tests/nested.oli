@@ -1,0 +1,19 @@
+proc start
+    entry
+    -- 3 x 4 nested loops with an inner conditional: counts pairs where i != j
+    i := 0
+    total := 0
+    while i < 3
+        j := 0
+        while j < 4
+            if i == j
+                j <- j + 1
+                continue
+            end
+            total <- total + 1
+            j <- j + 1
+        end
+        i <- i + 1
+    end
+    ret total
+end

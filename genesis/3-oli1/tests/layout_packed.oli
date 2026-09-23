@@ -1,0 +1,22 @@
+layout P packed
+    a : u8
+    b : u32
+end
+layout A align 32
+    x : u8
+end
+layout F
+    a : u8
+    b : u8 align 4
+    c : u16
+end
+proc start
+    entry
+    zone z 4096
+        buf := z.bytes(64)
+        p := P.at(buf[1..])
+        p.b <- 258
+        -- P: 5 bytes, b at offset 1 -> buf[2] = 2; A: size 32, align 32; F: b at 4, c at 6, size 8
+        ret P.size + A.size + A.align + F.size + buf[2] + P.align
+    end
+end

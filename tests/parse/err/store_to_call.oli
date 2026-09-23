@@ -1,0 +1,6 @@
+proc f
+    g() <- 1
+    1 + 2 <- 3
+end
+-- expect: E0017 @ 2:5
+-- expect: E0017 @ 3:5
