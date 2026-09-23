@@ -621,6 +621,15 @@ end
 
 -- Constant evaluation -----------------------------------------------------------
 
+proc neg_image(v: u64) -> u64
+    -- The two's complement image of `-v` on the word constants are held in,
+    -- without the `0 - v` that traps: arithmetic traps in the compiler too.
+    if v == 0
+        ret 0
+    end
+    ret 18446744073709551615 - v + 1
+end
+
 proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
     -- Integer constant expressions: literals, arithmetic, `Name.size`,
     -- `Name.align` and other constants of the same program.
@@ -629,14 +638,14 @@ proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
     k := nd.kind
     if k == N_INT
         if nd.sub == 1
-            ret 0 - nd.val
+            ret neg_image(nd.val)
         end
         ret nd.val
     end
     if k == N_UNOP
         v := const_value(pg, mi, kid1(cx, n))
         if nd.sub == U_NEG
-            ret 0 - v
+            ret neg_image(v)
         end
         ret v
     end

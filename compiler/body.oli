@@ -826,13 +826,19 @@ proc field_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
         end
     end
     bt := ety(pg, mi, base, b[0..0])
+    -- A field of a layout first: a layout may have a field named `len` or
+    -- `addr`, and the type of the base says which is meant, not the name.
+    ft := field_type_text(pg, bt, m)
+    if ft.len > 0
+        ret native_int(ft)
+    end
     if view_eq(m, "len")
         ret "uword"
     end
     if view_eq(m, "addr")
         ret mk_type(pg, "addr ", elem_of(bt))
     end
-    ret native_int(field_type_text(pg, bt, m))
+    ret b[0..0]
 end
 
 proc name_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
@@ -1190,6 +1196,14 @@ proc is_place(pg: ref Prog, mi: u64, n: u64) -> word
         ret 0
     end
     m := tok_text(cx, nd.t0)
+    fb := kid1(cx, n)
+    sbz := pg.sbuf
+    fbty := ety(pg, mi, fb, sbz[0..0])
+    fbt := field_type_text(pg, fbty, m)
+    if fbt.len > 0
+        -- A field of a layout is a place whatever its name.
+        ret 1
+    end
     if view_eq(m, "len")
         ret 0
     end
@@ -1857,15 +1871,30 @@ proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
                 ret
             end
         end
+        basety := ety(pg, mi, base, b[0..0])
+        fldt := field_type_text(pg, basety, m)
+        isfld := fldt.len
         if view_eq(m, "len")
-            put(1, "(len ")
-            pexpr(pg, mi, base, b[0..0])
-            put(1, ")")
-            ret
+            if isfld == 0
+                put(1, "(len ")
+                pexpr(pg, mi, base, b[0..0])
+                put(1, ")")
+                ret
+            end
         end
         if view_eq(m, "addr")
-            put(1, "(addr ")
+            if isfld == 0
+                put(1, "(addr ")
+                pexpr(pg, mi, base, b[0..0])
+                put(1, ")")
+                ret
+            end
+        end
+        if isfld > 0
+            put(1, "(field ")
             pexpr(pg, mi, base, b[0..0])
+            put(1, " ")
+            put(1, m)
             put(1, ")")
             ret
         end

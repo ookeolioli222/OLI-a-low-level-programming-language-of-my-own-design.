@@ -430,7 +430,7 @@ These make the language exist without any other compiler (design 0017).
 | `hex2` | hex0 notation | hex with labels and relative/absolute fixups | done |
 | `asm` | hex2 notation | assembles Oli-- `machine x64` blocks into ELF64: r32/r64 encoder, ModRM/SIB/REX operands, two-pass symbols, read-only data | suite green; narrow operands, the remaining memory forms, writable data and multi-segment ELF pending |
 | `oli1` | `machine x64` blocks (assembled by `asm`) | compiles the oli-core subset of Oli--: locals, expressions, strings, control flow, syscalls, procedures, zones, views, raw memory, layouts, refs, fallible results, `case`, constants, typed places, `loop`, explicit conversions | done, steps 0–6f; its output region holds 2 MiB of code |
-| `olic` | oli-core Oli-- (`compiler/`), compiled by `oli1` | the full compiler: the V0 front end complete for every rule it checks; the back end lowers the **runs** rows above through OIR, SSA, the passes and the verifier | in progress: 17 modules, analyses itself clean; the fixpoint `stage2 == stage3` waits for the *analysed* rows |
+| `olic` | oli-core Oli-- (`compiler/`), compiled by `oli1` | the full compiler: the V0 front end complete for every rule it checks; the back end lowers the **runs** rows above through OIR, SSA, the passes and the verifier | **self-hosting: `stage2 == stage3`** — `olic` compiles its 17 modules into a compiler that compiles them to the same bytes (`genesis/test.sh` layer 6); the *analysed* rows are what it does not lower yet, for itself as for any program |
 
 ---
 

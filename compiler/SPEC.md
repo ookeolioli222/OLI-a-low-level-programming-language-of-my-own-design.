@@ -283,7 +283,8 @@ layout field, procedure signature and body:
 
 - **E0201 / E0202 / E0203, types** (`body.oli`, below).
 
-Acceptance (`genesis/test.sh`, layer 4): **all fourteen** `tests/sema/err`
+Acceptance (`genesis/test.sh`, layer 4; layer 6 is the fixpoint `stage2 ==
+stage3`, reached 2026-09-23): **all fourteen** `tests/sema/err`
 fixtures report exactly their expected codes and positions; every
 `tests/sema/ok` fixture, example and library module stays clean; and
 `tests/parse/ok/kernel_sketch.oli` — a file whose own header says it is

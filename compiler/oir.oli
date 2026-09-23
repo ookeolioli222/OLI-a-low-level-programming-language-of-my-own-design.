@@ -50,11 +50,14 @@ module olic.oir
 -- of them keeps the slot of a local a multiplication rather than a table.
 LOC_WORDS := 3
 
-INS_MAX := 65536
-OPROC_MAX := 512
-STAT_MAX := 1024
-DATA_MAX := 65536
-CODE_MAX := 262144
+-- The arenas are sized for the compiler's own source and several times over
+-- (design 0022: `olic` must compile `olic`). The zone they come from is
+-- mapped lazily, so a limit costs nothing until a program needs it.
+INS_MAX := 2097152
+OPROC_MAX := 8192
+STAT_MAX := 32768
+DATA_MAX := 4194304
+CODE_MAX := 16777216
 
 -- Opcodes. The names follow OIR_SPEC §4. `label` and `arg` are the two the
 -- stream adds: a label becomes a block, and the argument markers are what a
@@ -97,15 +100,15 @@ O_RDX := 28
 O_CHKA := 29
 
 -- Arena limits of the block form.
-BLK_MAX := 16384
-PRED_MAX := 32768
-PHIARG_MAX := 32768
-LBLMAP_MAX := 65536
-DF_MAX := 65536
+BLK_MAX := 524288
+PRED_MAX := 1048576
+PHIARG_MAX := 1048576
+LBLMAP_MAX := 2097152
+DF_MAX := 1048576
 -- One procedure's places (two words a local, then the compiler-made ones) and
 -- the value of each of them at the end of each of its blocks.
-SLOT_MAX := 1024
-ENDDEF_MAX := 262144
+SLOT_MAX := 4096
+ENDDEF_MAX := 4194304
 
 B_ADD := 1
 B_SUB := 2
@@ -134,14 +137,14 @@ TK_OVF := 2
 TK_DIV := 3
 TK_MISALIGN := 4
 TK_ZONE := 5
-TMSG_MAX := 1024
+TMSG_MAX := 32768
 
 -- Why a check could be removed (OIR_SPEC §6 and §8.7: never without one).
 PR_CONST := 1
 PR_DIVISOR := 2
 PR_UNREACH := 3
 PR_LOOP := 4
-PROOF_MAX := 16384
+PROOF_MAX := 1048576
 
 layout Ins
     op : u64
@@ -1284,6 +1287,12 @@ proc gen_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
             ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
         end
     end
+    -- A field of a layout first: a layout may well have a field named `len`
+    -- or `addr` (the compiler's own `Tok` does), and it is the type of the
+    -- base that says which is meant, not the name.
+    if layout_of(pg, ety(pg, mi, base, b[0..0])) >= 0
+        ret gen_field_load(pg, ob, mi, n)
+    end
     if view_eq(m, "addr")
         v := gen_expr(pg, ob, mi, base, b[0..0])
         ob.lastlen <- 0
@@ -1294,9 +1303,6 @@ proc gen_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         l := ob.lastlen
         ob.lastlen <- 0
         ret l
-    end
-    if layout_of(pg, ety(pg, mi, base, b[0..0])) >= 0
-        ret gen_field_load(pg, ob, mi, n)
     end
     oir_err(ob, pg, mi, 900, n)
     ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
@@ -1598,7 +1604,11 @@ proc gen_expr(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -
     if k == N_INT
         v : u64 <- nd.val
         if nd.sub == 1
-            v <- 0 - v
+            -- The two's complement image of a negative literal, without the
+            -- `0 - v` that would trap on the unsigned word it is computed in.
+            if v != 0
+                v <- 18446744073709551615 - v + 1
+            end
         end
         ret emit_ins(ob, O_CONST, 0, 0, 0, v)
     end

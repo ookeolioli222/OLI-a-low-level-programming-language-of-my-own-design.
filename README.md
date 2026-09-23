@@ -58,7 +58,7 @@ writes no file.**
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
 | G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6f done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`), module constants, typed places, `rw` field types, `loop` and explicit conversions (`T(x)`, `T.wrap(x)`, `T.bits(x)`) |
-| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all fifteen `tests/sema/err` fixtures exact**), plus back-end stages 1-3: the OIR instruction stream, **basic blocks, dominators and the `OIR_SPEC` §8 verifier**, **`mem2reg` with phi nodes placed by iterated dominance frontier**, **the passes of §6 — constant folding, check elision with a proof recorded for every removal, copy propagation and dead code** (`--show-oir`, `--show-ssa` and `--show-oir=opt`, nine snapshots), x86-64 lowering with trapping arithmetic, **zones, views, `each`, layouts, refs and fallible results** with `bounds`, `misaligned` and `zone_exhausted` traps, and the ELF64 writer; **`olic` analyses all seventeen of its own modules without a single diagnostic**; reproduces every AST **and every semantic** snapshot byte for byte; register allocation, common-subexpression elimination and the fixpoint `stage2 == stage3` remain | **in progress** |
+| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all fifteen `tests/sema/err` fixtures exact**), plus a back end that reaches the fixpoint — **`olic` compiles `olic` into 829,629 bytes and that compiler compiles it again to the same bytes** (`genesis/test.sh` layer 6) — built as stages 1-6: the OIR instruction stream, **basic blocks, dominators and the `OIR_SPEC` §8 verifier**, **`mem2reg` with phi nodes placed by iterated dominance frontier**, **the passes of §6 — constant folding, check elision with a proof recorded for every removal, copy propagation and dead code** (`--show-oir`, `--show-ssa` and `--show-oir=opt`, nine snapshots), x86-64 lowering with trapping arithmetic, **zones, views, `each`, layouts, refs and fallible results** with `bounds`, `misaligned` and `zone_exhausted` traps, and the ELF64 writer; **`olic` analyses all seventeen of its own modules without a single diagnostic**; reproduces every AST **and every semantic** snapshot byte for byte; register allocation, common-subexpression elimination, `choice`, `machine` blocks and statics remain | **self-hosting reached** |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | **done** (layer 5 of `genesis/test.sh`) |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | variables, trapping arithmetic, `wrap`, control flow, procedures, zones, views, `each`, layouts and refs run |
 | M3 | Freestanding binary with own entry point and own stack | not started |
@@ -92,8 +92,10 @@ genesis/build/hello2.elf                 # Hello Oli-- - high-level Oli--, compi
 ```
 
 The first example uses the genesis machine sub-language; the last compiles the
-high-level `examples/hello.oli` with `olic` itself. Self-hosting, the kernel
-and the ecosystem libraries are still future milestones. See [verified status and completion gates](docs/PROJECT_STATUS.md)
+high-level `examples/hello.oli` with `olic` itself — and `olic` compiles
+`olic`, to the same bytes twice over (`./genesis/test.sh` layer 6). The
+kernel, the standard library and the ecosystem libraries are still future
+milestones. See [verified status and completion gates](docs/PROJECT_STATUS.md)
 and [the exact assembler subset](genesis/2-asm/SPEC.md#9-implementation-status-genesis2-asmasmhex2).
 
 ## Document map

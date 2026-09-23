@@ -30,8 +30,8 @@ module olic.x64
 
 -- The label table is indexed by block, and the landing pads of branch edges
 -- follow the blocks.
-LBL_MAX := 32768
-FIX_MAX := 16384
+LBL_MAX := 1048576
+FIX_MAX := 2097152
 BASE_ADDR := 4194304
 
 R_AX := 0
@@ -154,8 +154,12 @@ proc patch32(ob: rw ref Oir, pos: u64, v: u64)
 end
 
 proc slot_disp(s: u64) -> u64
-    -- `[rbp - 8*(s+1)]`, as an unsigned 32-bit two's complement displacement.
-    ret 0 - (s + 1) * 8
+    -- `[rbp - 8*(s+1)]`, as an unsigned 32-bit two's complement displacement:
+    -- `2^32 - 8*(s+1)`, of which `c32` writes the low four bytes. Written
+    -- this way rather than `0 - …` because plain arithmetic traps on
+    -- overflow, in the compiler as in any program — which `olic` compiling
+    -- itself was the first to enforce.
+    ret 4294967296 - (s + 1) * 8
 end
 
 proc rex_w(ob: rw ref Oir, r: u64)
@@ -513,21 +517,21 @@ proc lower_znew(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     c32(ob, 4095)
     cb(ob, 72)
     cb(ob, 37)
-    c32(ob, 0 - 4096)
+    c32(ob, 4294967296 - 4096)
     cb(ob, 72)
     cb(ob, 137)
     cb(ob, 198)
     mov_imm(ob, R_DI, 0)
     mov_imm(ob, R_DX, 3)
     mov_imm(ob, R_10, 34)
-    mov_imm(ob, R_8, 0 - 1)
+    mov_imm(ob, R_8, 18446744073709551615)
     mov_imm(ob, R_9, 0)
     mov_imm(ob, R_AX, 9)
     cb(ob, 15)
     cb(ob, 5)
     cb(ob, 72)
     cb(ob, 61)
-    c32(ob, 0 - 4096)
+    c32(ob, 4294967296 - 4096)
     trap_if(ob, mc, 114, ins.site)
     ld_slot(ob, R_CX, val_slot(mc, ins.a))
     st_at(ob, R_AX, R_CX, 0)
@@ -570,7 +574,7 @@ proc lower_zalloc(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     c32(ob, al - 1)
     cb(ob, 72)
     cb(ob, 37)
-    c32(ob, 0 - al)
+    c32(ob, 4294967296 - al)
     ld_slot(ob, R_DX, val_slot(mc, ins.b))
     cb(ob, 72)
     cb(ob, 137)
@@ -1304,7 +1308,10 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
                 l := lbl_at(mc, f.target)
                 target <- l.pos
             end
-            patch32(ob, f.pos, target - (f.pos + 4))
+            -- A rel32 is signed and a jump goes backwards as often as not:
+            -- `2^32 + target - (pos + 4)` never leaves the word, and its low
+            -- four bytes are the displacement either way.
+            patch32(ob, f.pos, target + 4294967296 - (f.pos + 4))
         end
         i <- i + 1
     end

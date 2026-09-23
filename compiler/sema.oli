@@ -245,13 +245,17 @@ proc infer(pg: ref Prog, mi: u64, n: u64) -> view u8
     end
     if k == N_FIELD
         m := tok_text(cx, nd.t0)
+        ft := field_type_text(pg, infer(pg, mi, kid1(cx, n)), m)
+        if ft.len > 0
+            ret ft
+        end
         if view_eq(m, "addr")
             ret "addr u8"
         end
         if view_eq(m, "len")
             ret "uword"
         end
-        ret field_type_text(pg, infer(pg, mi, kid1(cx, n)), m)
+        ret ft
     end
     if k == N_CONVERT
         st := sbeg(pg)

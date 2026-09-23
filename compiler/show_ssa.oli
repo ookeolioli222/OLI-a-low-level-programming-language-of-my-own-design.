@@ -7,7 +7,7 @@ module olic.show_ssa
 proc start -> s32
     entry
     permit os.syscall
-    zone z 201326592
+    zone z 4294967296
         src := read_all(z, SRC_MAX)
         pg := prog_new(z)
         analyze(pg, z, src)
@@ -21,10 +21,11 @@ proc start -> s32
         end
         before := count_checks(ob)
         build_ssa(ob)
-        if verify_ssa(pg, ob, before) > 0
+        bad := verify_ssa(pg, ob, before)
+        print_oir(pg, ob)
+        if bad > 0
             ret 4
         end
-        print_oir(pg, ob)
         ret 0
     end
 end

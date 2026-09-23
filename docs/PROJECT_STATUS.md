@@ -5,7 +5,9 @@ completed, genesis step 6f (explicit conversions), stage 1 of the back end
 — OIR, x86-64 lowering and the ELF64 writer, with M1 reached — stage 2
 — basic blocks, SSA with phi, and the verifier — and stage 3 — the OIR
 passes of OIR_SPEC §6 — landed 2026-09-22; stage 4 — zones, views and `each`
-— and stage 5 — layouts and refs — landed 2026-09-23.
+— stage 5 — layouts and refs — and stage 6 — fallible results — landed
+2026-09-23, and the same day **`olic` reached its fixpoint: `stage2 ==
+stage3`** (`genesis/test.sh` layer 6).
 The requested scope is the entire roadmap, in order.
 This document records actual implementation, not an assertion that the project
 is complete.
@@ -520,6 +522,54 @@ and a twenty-second limit: `tests/run/io.oli`, added from outside this
 session, reads four bytes and would otherwise wait on a terminal forever.
 With `io.in`/`io.out` it is the first run fixture that imports a module
 (`std.os`).
+
+## Self-hosting reached (2026-09-23): `stage2 == stage3`
+
+The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
+compiles its own source (`compiler/`, seventeen modules, 17,589 lines) into
+stage 2; stage 2 compiles the same source into stage 3; the two files are the
+same 829,629 bytes. `genesis/test.sh` layer 6 does this on every run, and
+also compiles every run, trap and negative fixture with both stage 1 and
+stage 2 and requires the same bytes and the same diagnostics. The chain from
+322 hand-written bytes to a compiler that reproduces itself is now closed,
+with no compiler, assembler or linker from outside the repository at any
+point — which is what design 0017 asked for.
+
+Self-compilation was the strongest test the compiler has had, and it found
+five defects that no fixture had:
+
+- **The arenas were sized for fixtures.** The first attempt died on `static
+  table exhausted`; every limit in `compiler/oir.oli` and `x64.oli` is now
+  sized for the compiler's own source several times over, and the drivers
+  map a 4 GiB zone lazily, which costs nothing until a program needs it.
+- **A field named `len` was read as a view's length.** `tb.len` on a
+  `ref Tok` produced an operand of nothing — the verifier caught it as
+  "an operand names a value of another procedure" — because `gen_field`
+  tested the name before the type of the base. The front end had the same
+  order in four places (`ety`, the place test, the semantic printer,
+  `infer`), so `x.len` on a layout with a `len` field was typed `uword`
+  and printed `(len …)` since G4's front end; `tests/sema/ok/regions.oli`
+  has such a field and nothing had noticed. All five now ask the layout
+  first. The semantic snapshots did not change: no snapshot fixture has a
+  field by that name.
+- **The compiler's own source relied on unsigned wraparound three times:**
+  `0 - (s + 1) * 8` for a frame displacement, `0 - v` for the image of a
+  negative literal, `target - (pos + 4)` for a backward rel32. Under `oli1`
+  these were silent; under `olic` plain arithmetic traps on the word it is
+  computed in, as the language says it must, so the self-compiled compiler
+  trapped at each line in turn. Each is now written without the overflow —
+  `2^32 - 8(s+1)`, `2^64 - 1 - v + 1` guarded for zero, `2^32 + target -
+  (pos + 4)` — and the trap that found them was the language working, not
+  the compiler failing. `oli-core` has no `wrap(e)`, so the source cannot
+  say `wrap` there; `docs/COMMANDS.md` records that.
+
+What self-hosting does **not** say: stage 2 is the same compiler with the
+same limits, not a better one; every value still owns a frame word (the
+self-compiled binary is 829 KiB where `oli1`'s is 436 KiB, the price of no
+register allocator), and the constructs still refused — `choice`,
+`machine`, statics, `[N]T`, raw `[p]`, `be`/`le` — are refused by stage 2
+exactly as by stage 1. The fixpoint proves the compiler agrees with itself;
+the fixture corpus is what says it agrees with the language.
 
 ## Implemented during the G2 review
 

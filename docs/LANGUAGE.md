@@ -806,21 +806,25 @@ hex0  (hand-written bytes)
 ```
 
 `compiler/` holds `olic` itself, written in oli-core so the same source is
-accepted by `oli1` today and by `olic` tomorrow — no porting step at
-self-hosting. Its stages: `io.oli`, `lex.oli` (the V0 lexer), `diag.oli` (the
-§8 renderer), `ast.oli` (the node arena and the S-expression printer),
-`parse.oli` (the recursive-descent parser with recovery), `load.oli` (imports),
-`items.oli` (modules, layouts, choices, constants, signatures), `sema.oli`
-(local tables with inferred types), plus one driver per stage.
+accepted by `oli1` and by `olic` — no porting step at self-hosting, which is
+reached: `olic` compiles `olic`, and that compiler compiles it again to the
+same bytes (`./genesis/test.sh` layer 6). Its modules: `io.oli`, `lex.oli`
+(the V0 lexer), `diag.oli` (the §8 renderer), `ast.oli` (the node arena and
+the S-expression printer), `parse.oli` (the recursive-descent parser with
+recovery), `load.oli` (imports), `items.oli` (modules, layouts, choices,
+constants, signatures), `sema.oli` (local tables with inferred types),
+`body.oli` (expression typing, regions, conversions), `check.oli` (every
+semantic rule), `oir.oli`, `cfg.oli`, `ssa.oli`, `opt.oli` (the OIR, its
+blocks, SSA and passes), `x64.oli` and `elf.oli`, plus one driver per stage.
 
-What is verified today: the four AST snapshots are reproduced byte for byte;
-every negative parse fixture reports exactly its expected diagnostics; the
-layouts, choices, constants, statics, procedure signatures and complete local
-tables — every parameter, place, binding, zone handle and `case` pattern with
-its inferred type — of every semantic snapshot are reproduced exactly. What
-remains for G4: typed statements and expressions with their regions and
-capability checks, then OIR, x86-64 lowering, the ELF writer, and the fixpoint
-`stage2 == stage3` that makes the language self-hosted.
+What is verified today: every AST and semantic snapshot is reproduced byte
+for byte; every negative fixture reports exactly its expected diagnostics;
+every construct marked **runs** in `docs/COMMANDS.md` is pinned by a program
+that `olic` compiles and runs; and the self-compiled compiler compiles every
+one of those programs to the same bytes as the genesis-built one. What
+remains for V0 completeness: `choice`, `machine` blocks, statics, `[N]T`
+places, raw `[p]` access and `be`/`le` fields in the back end, then
+register allocation and common-subexpression elimination.
 
 ---
 

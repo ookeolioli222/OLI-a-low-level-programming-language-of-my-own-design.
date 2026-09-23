@@ -17,7 +17,7 @@ module olic.main
 proc start -> s32
     entry
     permit os.syscall
-    zone z 201326592
+    zone z 4294967296
         src := read_all(z, SRC_MAX)
         pg := prog_new(z)
         analyze(pg, z, src)

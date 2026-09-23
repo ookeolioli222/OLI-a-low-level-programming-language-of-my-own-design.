@@ -1294,3 +1294,43 @@ grep -q 'E0900' build/nolower.err || fail "back end: an unlowered construct must
 [ ! -s build/nolower.elf ] || fail "back end: a refused program still wrote a binary"
 echo "ok: a construct the back end cannot lower is E0900 and writes no file"
 echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"
+
+# --- layer 6: self-hosting (G4, design 0022) ---
+# The compiler built by oli1 (stage 1) compiles its own source into stage 2;
+# stage 2 compiles the same source into stage 3; the two must be the same
+# bytes. build/self.oli is the concatenation layer 4 analysed.
+[ -s build/self.oli ] || fail "self-hosting: build/self.oli is missing"
+( cd .. && genesis/build/olic < genesis/build/self.oli > genesis/build/stage2 2> genesis/build/stage2.err ) \
+    || fail "self-hosting: olic could not compile itself: $(head -1 build/stage2.err)"
+chmod +x build/stage2
+[ "$(wc -c < build/stage2)" -gt 100000 ] || fail "self-hosting: stage2 is implausibly small"
+( cd .. && timeout 600 genesis/build/stage2 < genesis/build/self.oli > genesis/build/stage3 2> genesis/build/stage3.err ) \
+    || fail "self-hosting: the self-compiled olic could not compile olic: $(head -1 build/stage3.err)"
+cmp build/stage2 build/stage3 || fail "self-hosting: stage2 and stage3 differ"
+echo "ok: G4 - olic compiles its own source, and the compiler that produces compiles it again to the same bytes (stage2 == stage3, $(wc -c < build/stage2) bytes)"
+
+# The self-compiled compiler agrees with the genesis-built one on every
+# program of the corpus, byte for byte, diagnostics included.
+for f in ../examples/hello.oli ../tests/run/*.oli ../tests/run/trap/*.oli; do
+    n=$(basename "$f" .oli)
+    ( cd .. && genesis/build/olic < "${f#../}" > genesis/build/s1_$n.elf 2> genesis/build/s1_$n.err )
+    st1=$?
+    set +e
+    ( cd .. && timeout 60 genesis/build/stage2 < "${f#../}" > genesis/build/s2_$n.elf 2> genesis/build/s2_$n.err )
+    st2=$?
+    set -e
+    [ "$st1" = "$st2" ] || fail "self-hosting: stage1 exited $st1 and stage2 $st2 on $f"
+    cmp build/s1_$n.elf build/s2_$n.elf || fail "self-hosting: stage1 and stage2 compile $f differently"
+    cmp build/s1_$n.err build/s2_$n.err || fail "self-hosting: stage1 and stage2 report $f differently"
+done
+for f in ../tests/sema/err/*.oli; do
+    n=$(basename "$f" .oli)
+    set +e
+    ( cd .. && genesis/build/olic < "${f#../}" > /dev/null 2> genesis/build/s1_$n.err ); st1=$?
+    ( cd .. && timeout 60 genesis/build/stage2 < "${f#../}" > /dev/null 2> genesis/build/s2_$n.err ); st2=$?
+    set -e
+    [ "$st1" = "$st2" ] || fail "self-hosting: stage1 exited $st1 and stage2 $st2 on $f"
+    cmp build/s1_$n.err build/s2_$n.err || fail "self-hosting: stage1 and stage2 report $f differently"
+done
+echo "ok: the self-compiled olic compiles every run and trap fixture to the same bytes as the genesis-built one, and reports every negative fixture the same way"
+echo "genesis: layer 6 (self-hosting: stage2 == stage3) passed"

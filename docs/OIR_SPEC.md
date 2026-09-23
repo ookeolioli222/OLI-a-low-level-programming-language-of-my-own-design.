@@ -1,6 +1,7 @@
 # OIR — Oli Intermediate Representation
 
-> **Status (2026-09-23).** Stage 4 of this document exists. `compiler/oir.oli`
+> **Status (2026-09-23).** Stage 6 of this document exists, and `olic` built
+> on it reaches its fixpoint (`stage2 == stage3`, `genesis/test.sh` layer 6). `compiler/oir.oli`
 > builds the instruction stream, `compiler/cfg.oli` cuts it into the basic
 > blocks of §3 with one terminator each and computes predecessors, reverse
 > postorder and immediate dominators, and `compiler/ssa.oli` is `mem2reg`: it

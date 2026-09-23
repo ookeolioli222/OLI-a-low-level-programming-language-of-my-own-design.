@@ -1,9 +1,14 @@
 # 0022 — Genesis layer 4: `olic` written in oli-core
 
-Status: in progress. The whole front end — lexer, parser, diagnostic renderer,
-module loader, item collection, signatures, local tables, expression typing and
-typed bodies — is implemented and tested (2026-09-22). The back end (OIR, x64,
-ELF) and the `stage2 == stage3` fixpoint remain.
+Status: **done — the fixpoint holds** (2026-09-23). The whole front end —
+lexer, parser, diagnostic renderer, module loader, item collection,
+signatures, local tables, expression typing and typed bodies — was
+implemented and tested on 2026-09-22; the back end (OIR in blocks, SSA with
+phi, the verifier, the passes of `OIR_SPEC.md` §6, x86-64 lowering, ELF)
+followed in six stages, and `genesis/test.sh` layer 6 now compiles `olic`
+with `olic` and the result with itself: 829,629 bytes both times, and every
+fixture compiled identically by stage 1 and stage 2. `docs/PROJECT_STATUS.md`
+("Self-hosting reached") lists the five defects self-compilation found.
 
 ## Problem
 Layer 3 (`oli1`) compiles oli-core. The self-hosted compiler `olic` must be
