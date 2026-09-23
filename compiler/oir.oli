@@ -1,0 +1,2905 @@
+module olic.oir
+-- OIR (docs/OIR_SPEC.md): the instruction stream `olic` builds from the typed
+-- body, the arenas the whole back end works in, and the printer of both block
+-- forms — `--show-oir` and `--show-ssa`.
+--
+-- What this file is, precisely. It emits one instruction per value, in
+-- evaluation order, with labels and jumps: the stream `compiler/cfg.oli` cuts
+-- into the basic blocks of §3 and `compiler/ssa.oli` rewrites into the SSA
+-- form with phi nodes. Every instruction of §4 that the subset below needs is
+-- here and carries the same operands. `label` is the one addition, and it
+-- survives only as long as the stream does: a block is the label.
+--
+-- A value is its instruction's index. A two-word value (a view) is two
+-- instructions: `gen_expr` returns the address and leaves the length in
+-- `ob.lastlen`, the same pairing `oli1` uses in rax/rdx.
+--
+-- The subset: procedures with SysV parameters and a result (a view result is
+-- a pair), integer literals, characters, `true`/`false`, module constants,
+-- string literals (statics), locals (bind, place, store), the arithmetic,
+-- bit, shift and comparison operators, `-`/`~`/`not`, the short-circuiting
+-- `and`/`or`, the explicit conversions, `if`/`elif`/`else`, `while`, `loop`,
+-- `break`, `continue`, calls, `os.syscall`, zones from the operating system
+-- (`zone z SIZE`, `z.bytes(n)`, `z.make(Name)`), views (`v[i]`, `v[i] <- x`,
+-- `v[a..b]`, `v[..b]`, `v[a..]`, `.addr`/`.len`) with an integer element,
+-- `each` over a view, layouts (`Name.at(v)`, `Name.size`/`.align`, `r.f`
+-- loads and stores of integer, view, ref, address and by-value layout
+-- fields, `packed` and `align`), refs (`ref x` of a local or a field, as
+-- parameters and results) and fallible results with an integer or `none`
+-- error (`ret`/`fail` as the pair (tag, payload), `else fail`/`ret`/default,
+-- `case … when ok [x] … when fail … / else …`).
+-- Anything else is refused with E0900 rather than approximated: `at`/`from`
+-- zones and a zone inside a zone, a `ret`/`break`/`continue` that would
+-- leave a zone without releasing it, `each` over a range or an array place,
+-- a view whose element is a layout, `choice` (and so a `T or E` whose `E` is
+-- one, and `when fail VARIANT`), a view inside a `T or E`, raw word access,
+-- `machine` blocks and statics.
+--
+-- Plain arithmetic traps on overflow (design 0006), so every `+ - * / %` and
+-- every `-x` carries the width of its type and the static that names its trap
+-- site. `wrap(e)` clears the overflow site of every operator inside `e` and
+-- keeps the width, which is what makes the result wrap; the two division
+-- traps stay, because neither a zero divisor nor the most negative value over
+-- -1 has a wrapped answer to name.
+-- `sat(e)` and `checked(e)` are refused: neither is implemented. `docs/MACHINE_MODEL.md` §4 fixes the message: one per kind and line,
+-- built here where the module and the line are in hand, written by the
+-- routine `compiler/x64.oli` emits when a site exists.
+
+-- The frame words one local owns: an integer uses one, a view two (address
+-- and length) and a zone three (base, cursor and limit). One stride for all
+-- of them keeps the slot of a local a multiplication rather than a table.
+LOC_WORDS := 3
+
+INS_MAX := 65536
+OPROC_MAX := 512
+STAT_MAX := 1024
+DATA_MAX := 65536
+CODE_MAX := 262144
+
+-- Opcodes. The names follow OIR_SPEC §4. `label` and `arg` are the two the
+-- stream adds: a label becomes a block, and the argument markers are what a
+-- call reads its operands from while the lowering has no register allocator.
+O_CONST := 1
+O_SADDR := 2
+O_SLEN := 3
+O_LOAD := 4
+O_STORE := 5
+O_BIN := 6
+O_UN := 7
+O_TRUNC := 8
+O_ARG := 9
+O_CALL := 10
+O_SYSCALL := 11
+O_RET := 12
+O_LABEL := 13
+O_JMP := 14
+O_BRANCH := 15
+O_PARAM := 16
+O_PHI := 17
+O_TRAP := 18
+-- An instruction a pass removed. It keeps its index, because a value is its
+-- index and renumbering the stream would mean rewriting every operand in it.
+O_DEAD := 19
+-- Memory: the address of a place, raw access at an address, the checks that
+-- make a view access safe, and the three zone operations (OIR_SPEC §4).
+O_FADDR := 20
+O_RLOAD := 21
+O_RSTORE := 22
+O_CHKB := 23
+O_CHKR := 24
+O_ZNEW := 25
+O_ZEND := 26
+O_ZALLOC := 27
+-- The second register of the pair a view-returning call answers with.
+O_RDX := 28
+-- `check.align %addr, N`: a `Name.at` over a view whose address is not a
+-- multiple of the layout's alignment traps `misaligned`.
+O_CHKA := 29
+
+-- Arena limits of the block form.
+BLK_MAX := 16384
+PRED_MAX := 32768
+PHIARG_MAX := 32768
+LBLMAP_MAX := 65536
+DF_MAX := 65536
+-- One procedure's places (two words a local, then the compiler-made ones) and
+-- the value of each of them at the end of each of its blocks.
+SLOT_MAX := 1024
+ENDDEF_MAX := 262144
+
+B_ADD := 1
+B_SUB := 2
+B_MUL := 3
+B_DIV := 4
+B_REM := 5
+B_AND := 6
+B_OR := 7
+B_XOR := 8
+B_SHL := 9
+B_SHR := 10
+B_EQ := 11
+B_NE := 12
+B_LT := 13
+B_LE := 14
+B_GT := 15
+B_GE := 16
+
+U1_NEG := 1
+U1_BNOT := 2
+U1_LNOT := 3
+
+-- Trap kinds, numbered as `core.TrapKind` declares them.
+TK_BOUNDS := 1
+TK_OVF := 2
+TK_DIV := 3
+TK_MISALIGN := 4
+TK_ZONE := 5
+TMSG_MAX := 1024
+
+-- Why a check could be removed (OIR_SPEC §6 and §8.7: never without one).
+PR_CONST := 1
+PR_DIVISOR := 2
+PR_UNREACH := 3
+PR_LOOP := 4
+PROOF_MAX := 16384
+
+layout Ins
+    op : u64
+    bop : u64
+    a : u64
+    b : u64
+    c : u64
+    val : u64
+    node : u64
+    w : u64
+    site : u64
+    site2 : u64
+end
+
+layout TMsg
+    kind : u64
+    line : u64
+    stat : u64
+end
+
+layout OProc
+    pi : u64
+    first : u64
+    n : u64
+    nloc : u64
+    nval : u64
+    isentry : u64
+    codepos : u64
+    mi : u64
+    bfirst : u64
+    nblk : u64
+    ntmp : u64
+    nphi : u64
+end
+
+layout Stat
+    off : u64
+    len : u64
+    dead : u64
+end
+
+layout Blk
+    -- A basic block (OIR_SPEC §3): the instructions `first .. first + n`, then
+    -- exactly one terminator, which is held here rather than in the stream so
+    -- that a block that falls through to a label can be given the `jump` the
+    -- form requires without inserting an instruction and renumbering every
+    -- value after it.
+    first : u64
+    n : u64
+    top : u64
+    ta : u64
+    tb : u64
+    tc : u64
+    pfirst : u64
+    npred : u64
+    idom : u64
+    rpo : u64
+    dffirst : u64
+    ndf : u64
+    dead : u64
+end
+
+layout PhiArg
+    blk : u64
+    val : u64
+end
+
+layout Proof
+    -- The removal of one check: where it stood, which of the two sites of
+    -- that instruction it was, the value it named, and why it went.
+    ins : u64
+    kind : u64
+    val : u64
+    why : u64
+end
+
+layout Cell
+    v : u64
+end
+
+layout Oir
+    ins : rw view u8
+    procs : rw view u8
+    stats : rw view u8
+    tmsgs : rw view u8
+    data : rw view u8
+    code : rw view u8
+    blks : rw view u8
+    preds : rw view u8
+    phiargs : rw view u8
+    lblmap : rw view u8
+    iblk : rw view u8
+    order : rw view u8
+    work : rw view u8
+    df : rw view u8
+    dfmark : rw view u8
+    vmap : rw view u8
+    cur : rw view u8
+    noprom : rw view u8
+    live : rw view u8
+    livein : rw view u8
+    enddef : rw view u8
+    phin : rw view u8
+    wl : rw view u8
+    proofs : rw view u8
+    nins : u64
+    nproc : u64
+    nstat : u64
+    ntmsg : u64
+    ndata : u64
+    ncode : u64
+    nlabel : u64
+    nblk : u64
+    npred : u64
+    nphiarg : u64
+    nord : u64
+    ndf : u64
+    nslot : u64
+    nproof : u64
+    cfgdirty : u64
+    lastlen : u64
+    lastpay : u64
+    curp : u64
+    curloc : u64
+    curtmp : u64
+    zdepth : u64
+    zloop : u64
+    brk : u64
+    cont : u64
+    nerr : u64
+    callstk : u64
+    entryp : u64
+    amode : u64
+    vfail : u64
+end
+
+proc oir_new(z: zone) -> rw ref Oir
+    ob := z.make(Oir)
+    ob.ins <- z.bytes(INS_MAX * Ins.size)
+    ob.procs <- z.bytes(OPROC_MAX * OProc.size)
+    ob.stats <- z.bytes(STAT_MAX * Stat.size)
+    ob.tmsgs <- z.bytes(TMSG_MAX * TMsg.size)
+    ob.data <- z.bytes(DATA_MAX)
+    ob.code <- z.bytes(CODE_MAX)
+    ob.blks <- z.bytes(BLK_MAX * Blk.size)
+    ob.preds <- z.bytes(PRED_MAX * Cell.size)
+    ob.phiargs <- z.bytes(PHIARG_MAX * PhiArg.size)
+    ob.lblmap <- z.bytes(LBLMAP_MAX * Cell.size)
+    ob.iblk <- z.bytes(INS_MAX * Cell.size)
+    ob.order <- z.bytes(BLK_MAX * Cell.size)
+    ob.work <- z.bytes(BLK_MAX * Cell.size)
+    ob.df <- z.bytes(DF_MAX * Cell.size)
+    ob.dfmark <- z.bytes(BLK_MAX * Cell.size)
+    ob.vmap <- z.bytes(INS_MAX * Cell.size)
+    ob.cur <- z.bytes(SLOT_MAX * Cell.size)
+    ob.noprom <- z.bytes(SLOT_MAX * Cell.size)
+    ob.live <- z.bytes(SLOT_MAX * Cell.size)
+    ob.livein <- z.bytes(ENDDEF_MAX * Cell.size)
+    ob.enddef <- z.bytes(ENDDEF_MAX * Cell.size)
+    ob.phin <- z.bytes(ENDDEF_MAX * Cell.size)
+    ob.wl <- z.bytes(BLK_MAX * Cell.size)
+    ob.proofs <- z.bytes(PROOF_MAX * Proof.size)
+    oir_reset(ob)
+    ret ob
+end
+
+proc oir_reset(ob: rw ref Oir)
+    -- Everything the arenas hold, emptied. `oir_new` starts here, and a
+    -- driver that builds the same program more than once starts here again.
+    ob.nins <- 0
+    ob.nproc <- 0
+    ob.nstat <- 0
+    ob.ntmsg <- 0
+    ob.ndata <- 0
+    ob.ncode <- 0
+    ob.nlabel <- 0
+    ob.nblk <- 0
+    ob.npred <- 0
+    ob.nphiarg <- 0
+    ob.nord <- 0
+    ob.ndf <- 0
+    ob.nslot <- 0
+    ob.nproof <- 0
+    ob.cfgdirty <- 0
+    ob.lastlen <- 0
+    ob.lastpay <- 0
+    ob.curp <- 0
+    ob.curloc <- 0
+    ob.curtmp <- 0
+    ob.zdepth <- 0
+    ob.zloop <- 0
+    ob.brk <- 0
+    ob.cont <- 0
+    ob.nerr <- 0
+    ob.callstk <- 0
+    ob.entryp <- 0
+    ob.amode <- 0
+    ob.vfail <- 0
+end
+
+proc ins_at(ob: ref Oir, i: u64) -> rw ref Ins
+    t := ob.ins
+    off := i * Ins.size
+    ret Ins.at(t[off..off + Ins.size])
+end
+
+proc oproc_at(ob: ref Oir, i: u64) -> rw ref OProc
+    t := ob.procs
+    off := i * OProc.size
+    ret OProc.at(t[off..off + OProc.size])
+end
+
+proc tmsg_at(ob: ref Oir, i: u64) -> rw ref TMsg
+    t := ob.tmsgs
+    off := i * TMsg.size
+    ret TMsg.at(t[off..off + TMsg.size])
+end
+
+proc stat_at(ob: ref Oir, i: u64) -> rw ref Stat
+    t := ob.stats
+    off := i * Stat.size
+    ret Stat.at(t[off..off + Stat.size])
+end
+
+proc blk_at(ob: ref Oir, i: u64) -> rw ref Blk
+    t := ob.blks
+    off := i * Blk.size
+    ret Blk.at(t[off..off + Blk.size])
+end
+
+proc phiarg_at(ob: ref Oir, i: u64) -> rw ref PhiArg
+    t := ob.phiargs
+    off := i * PhiArg.size
+    ret PhiArg.at(t[off..off + PhiArg.size])
+end
+
+proc proof_at(ob: ref Oir, i: u64) -> rw ref Proof
+    t := ob.proofs
+    off := i * Proof.size
+    ret Proof.at(t[off..off + Proof.size])
+end
+
+proc add_proof(ob: rw ref Oir, i: u64, kind: u64, val: u64, why: u64)
+    -- A check may leave only with one of these attached (§8.7). The printer
+    -- shows it where the check stood.
+    permit os.syscall
+    if ob.nproof >= PROOF_MAX
+        put(2, "olic: proof table exhausted\n")
+        os.syscall(60, 4)
+    end
+    pr := proof_at(ob, ob.nproof)
+    pr.ins <- i
+    pr.kind <- kind
+    pr.val <- val
+    pr.why <- why
+    ob.nproof <- ob.nproof + 1
+end
+
+proc kill_ins(ob: rw ref Oir, i: u64)
+    -- An instruction a pass removed. Its checks must already have gone with a
+    -- proof, so there is nothing left here to lose.
+    ins := ins_at(ob, i)
+    ins.op <- O_DEAD
+    ins.site <- 0
+    ins.site2 <- 0
+end
+
+proc live_blk(ob: ref Oir, b: u64) -> word
+    -- A block a pass removed is not part of the program any more: it is not
+    -- printed, not lowered, not verified, and the edges out of it are not
+    -- edges. Being unreachable is not the same thing — the stream the front
+    -- end emits contains unreachable blocks, and `--show-oir` shows them.
+    bk := blk_at(ob, b)
+    if bk.dead == 1
+        ret 0
+    end
+    ret 1
+end
+
+proc cell_at(t: rw view u8, i: u64) -> rw ref Cell
+    off := i * Cell.size
+    ret Cell.at(t[off..off + Cell.size])
+end
+
+proc cell_get(t: rw view u8, i: u64) -> u64
+    c := cell_at(t, i)
+    ret c.v
+end
+
+proc cell_set(t: rw view u8, i: u64, v: u64)
+    c := cell_at(t, i)
+    c.v <- v
+end
+
+proc op_uses_a(op: u64) -> word
+    -- Which field of an instruction names a value, in one place: the walks
+    -- that verify, count, rewrite and rebuild operands all ask here.
+    if op == O_BIN
+        ret 1
+    end
+    if op == O_UN
+        ret 1
+    end
+    if op == O_TRUNC
+        ret 1
+    end
+    if op == O_ARG
+        ret 1
+    end
+    if op == O_RLOAD
+        ret 1
+    end
+    if op == O_RSTORE
+        ret 1
+    end
+    if op == O_CHKB
+        ret 1
+    end
+    if op == O_CHKR
+        ret 1
+    end
+    if op == O_ZNEW
+        ret 1
+    end
+    if op == O_ZEND
+        ret 1
+    end
+    if op == O_ZALLOC
+        ret 1
+    end
+    if op == O_CHKA
+        ret 1
+    end
+    ret 0
+end
+
+proc op_uses_b(op: u64) -> word
+    if op == O_BIN
+        ret 1
+    end
+    if op == O_STORE
+        ret 1
+    end
+    if op == O_RSTORE
+        ret 1
+    end
+    if op == O_CHKB
+        ret 1
+    end
+    if op == O_CHKR
+        ret 1
+    end
+    if op == O_ZNEW
+        ret 1
+    end
+    if op == O_ZALLOC
+        ret 1
+    end
+    ret 0
+end
+
+proc op_uses_val(op: u64) -> word
+    if op == O_CHKR
+        ret 1
+    end
+    ret 0
+end
+
+proc is_term(op: u64) -> word
+    -- The three terminators this subset reaches (OIR_SPEC §3); `fail`, `trap`
+    -- and `unreachable` arrive with the constructs that need them.
+    if op == O_JMP
+        ret 1
+    end
+    if op == O_BRANCH
+        ret 1
+    end
+    if op == O_RET
+        ret 1
+    end
+    ret 0
+end
+
+proc new_tmp(ob: rw ref Oir) -> u64
+    -- A compiler-made place, past the locals: the one place `and`/`or` needs
+    -- for the result two arms write. `mem2reg` promotes it to the phi that
+    -- OIR_SPEC §3 wants there.
+    t := ob.curtmp
+    ob.curtmp <- t + 1
+    ret ob.curloc * LOC_WORDS + t
+end
+
+proc oir_err(ob: rw ref Oir, pg: rw ref Prog, mi: u64, code: u64, node: u64)
+    ob.nerr <- ob.nerr + 1
+    terr(pg, mi, code, node)
+end
+
+proc emit_ins(ob: rw ref Oir, op: u64, a: u64, b: u64, c: u64, val: u64) -> u64
+    permit os.syscall
+    n := ob.nins
+    if n >= INS_MAX
+        put(2, "olic: OIR arena exhausted\n")
+        os.syscall(60, 4)
+    end
+    ins := ins_at(ob, n)
+    ins.op <- op
+    ins.bop <- 0
+    ins.a <- a
+    ins.b <- b
+    ins.c <- c
+    ins.val <- val
+    ins.node <- 0
+    ins.w <- 0
+    ins.site <- 0
+    ins.site2 <- 0
+    ob.nins <- n + 1
+    ret n
+end
+
+proc emit_bin(ob: rw ref Oir, bop: u64, a: u64, b: u64, signd: u64) -> u64
+    n := emit_ins(ob, O_BIN, a, b, signd, 0)
+    ins := ins_at(ob, n)
+    ins.bop <- bop
+    ret n
+end
+
+proc emit_un(ob: rw ref Oir, uop: u64, a: u64) -> u64
+    n := emit_ins(ob, O_UN, a, 0, 0, 0)
+    ins := ins_at(ob, n)
+    ins.bop <- uop
+    ret n
+end
+
+proc new_label(ob: rw ref Oir) -> u64
+    l := ob.nlabel
+    ob.nlabel <- l + 1
+    ret l
+end
+
+-- Statics ---------------------------------------------------------------------
+
+proc hexval(c: u64) -> u64
+    if c >= 48
+        if c <= 57
+            ret c - 48
+        end
+    end
+    if c >= 97
+        if c <= 102
+            ret c - 87
+        end
+    end
+    ret c - 55
+end
+
+proc data_byte(ob: rw ref Oir, v: u64)
+    permit os.syscall
+    d := ob.data
+    n := ob.ndata
+    if n >= DATA_MAX
+        put(2, "olic: static data arena exhausted\n")
+        os.syscall(60, 4)
+    end
+    d[n] <- u8.wrap(v)
+    ob.ndata <- n + 1
+end
+
+proc open_static(ob: rw ref Oir) -> u64
+    -- A static built byte by byte rather than decoded from a token.
+    permit os.syscall
+    idx := ob.nstat
+    if idx >= STAT_MAX
+        put(2, "olic: static table exhausted\n")
+        os.syscall(60, 4)
+    end
+    st := stat_at(ob, idx)
+    st.off <- ob.ndata
+    st.dead <- 0
+    ob.nstat <- idx + 1
+    ret idx
+end
+
+proc close_static(ob: rw ref Oir, idx: u64)
+    st := stat_at(ob, idx)
+    st.len <- ob.ndata - st.off
+end
+
+proc data_view(ob: rw ref Oir, s: view u8)
+    i : u64 <- 0
+    while i < s.len
+        data_byte(ob, s[i])
+        i <- i + 1
+    end
+end
+
+proc data_uint(ob: rw ref Oir, v: u64)
+    if v >= 10
+        data_uint(ob, v / 10)
+    end
+    data_byte(ob, 48 + v % 10)
+end
+
+proc trap_kind_name(k: u64) -> view u8
+    if k == TK_BOUNDS
+        ret "bounds"
+    end
+    if k == TK_DIV
+        ret "div_zero"
+    end
+    if k == TK_MISALIGN
+        ret "misaligned"
+    end
+    if k == TK_ZONE
+        ret "zone_exhausted"
+    end
+    ret "overflow"
+end
+
+proc trap_static(pg: ref Prog, ob: rw ref Oir, mi: u64, kind: u64, n: u64) -> u64
+    -- `trap: <kind> at <module>:<line>` (MACHINE_MODEL.md §4). One static per
+    -- kind and line: the sites on a line share it, and the routine that prints
+    -- it needs no formatting code at all.
+    permit os.syscall
+    cx := mod_ctx(pg, mi)
+    t := ctok(cx, first_tok(pg, mi, n))
+    line := t.line
+    i : u64 <- 0
+    while i < ob.ntmsg
+        m := tmsg_at(ob, i)
+        if m.kind == kind
+            if m.line == line
+                ret m.stat
+            end
+        end
+        i <- i + 1
+    end
+    if ob.ntmsg >= TMSG_MAX
+        put(2, "olic: trap message table exhausted\n")
+        os.syscall(60, 4)
+    end
+    idx := open_static(ob)
+    data_view(ob, "trap: ")
+    data_view(ob, trap_kind_name(kind))
+    data_view(ob, " at ")
+    data_view(ob, cx.file)
+    data_view(ob, ":")
+    data_uint(ob, line)
+    data_byte(ob, 10)
+    close_static(ob, idx)
+    m2 := tmsg_at(ob, ob.ntmsg)
+    m2.kind <- kind
+    m2.line <- line
+    m2.stat <- idx
+    ob.ntmsg <- ob.ntmsg + 1
+    ret idx
+end
+
+proc add_static(ob: rw ref Oir, raw: view u8) -> u64
+    -- `raw` is the string token including its quotes; the escapes of syntax
+    -- §2.4 are decoded here, where the bytes are finally needed.
+    permit os.syscall
+    idx := ob.nstat
+    if idx >= STAT_MAX
+        put(2, "olic: static table exhausted\n")
+        os.syscall(60, 4)
+    end
+    st := stat_at(ob, idx)
+    st.off <- ob.ndata
+    st.dead <- 0
+    i : u64 <- 1
+    last : u64 <- raw.len
+    if last > 0
+        last <- last - 1
+    end
+    while i < last
+        c : u64 <- raw[i]
+        if c == 92
+            i <- i + 1
+            e : u64 <- raw[i]
+            if e == 110
+                data_byte(ob, 10)
+            elif e == 116
+                data_byte(ob, 9)
+            elif e == 114
+                data_byte(ob, 13)
+            elif e == 48
+                data_byte(ob, 0)
+            elif e == 120
+                hi := hexval(raw[i + 1])
+                lo := hexval(raw[i + 2])
+                data_byte(ob, hi * 16 + lo)
+                i <- i + 2
+            else
+                data_byte(ob, e)
+            end
+        else
+            data_byte(ob, c)
+        end
+        i <- i + 1
+    end
+    st.len <- ob.ndata - st.off
+    ob.nstat <- idx + 1
+    ret idx
+end
+
+-- Frame slots -----------------------------------------------------------------
+-- Every local owns two words (a view needs both); a value owns one. The
+-- linear-scan allocator of OIR_SPEC §7 replaces this with registers later.
+
+proc slot_of_local(pg: ref Prog, name: view u8) -> word
+    i := loc_find(pg, name)
+    if i < 0
+        ret -1
+    end
+    ret i - word.bits(pg.locbase)
+end
+
+-- Expressions -----------------------------------------------------------------
+
+proc elem_bytes(pg: ref Prog, ob: rw ref Oir, mi: u64, t: view u8, n: u64) -> u64
+    -- The size of one element of a view. Only an integer element is lowered;
+    -- a view of a layout needs the field offsets `layout` still waits for.
+    b := int_bits(elem_of(t))
+    if b == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret 1
+    end
+    ret u64.bits(b) / 8
+end
+
+proc scale_by(ob: rw ref Oir, v: u64, sz: u64) -> u64
+    -- `v * sz` as address arithmetic: no width, no trap. An index that got
+    -- this far is already below a length that fits in a word, so the product
+    -- cannot leave one.
+    if sz == 1
+        ret v
+    end
+    c := emit_ins(ob, O_CONST, 0, 0, 0, sz)
+    ret emit_bin(ob, B_MUL, v, c, 0)
+end
+
+proc addr_add(ob: rw ref Oir, a: u64, off: u64) -> u64
+    ret emit_bin(ob, B_ADD, a, off, 0)
+end
+
+proc is_view_type(t: view u8) -> word
+    if starts_with(unqual(t), "view ")
+        ret 1
+    end
+    ret 0
+end
+
+proc binop_code(op: view u8) -> u64
+    if view_eq(op, "+")
+        ret B_ADD
+    end
+    if view_eq(op, "-")
+        ret B_SUB
+    end
+    if view_eq(op, "*")
+        ret B_MUL
+    end
+    if view_eq(op, "/")
+        ret B_DIV
+    end
+    if view_eq(op, "%")
+        ret B_REM
+    end
+    if view_eq(op, "&")
+        ret B_AND
+    end
+    if view_eq(op, "|")
+        ret B_OR
+    end
+    if view_eq(op, "^")
+        ret B_XOR
+    end
+    if view_eq(op, "<<")
+        ret B_SHL
+    end
+    if view_eq(op, ">>")
+        ret B_SHR
+    end
+    if view_eq(op, "==")
+        ret B_EQ
+    end
+    if view_eq(op, "!=")
+        ret B_NE
+    end
+    if view_eq(op, "<")
+        ret B_LT
+    end
+    if view_eq(op, "<=")
+        ret B_LE
+    end
+    if view_eq(op, ">")
+        ret B_GT
+    end
+    if view_eq(op, ">=")
+        ret B_GE
+    end
+    ret 0
+end
+
+proc gen_conv(ob: rw ref Oir, v: u64, src: view u8, dst: view u8) -> u64
+    -- The representation change a conversion actually performs, in the terms
+    -- of OIR_SPEC §4: nothing when the 64-bit image is already right, and
+    -- `trunc` (re-extension to the width and signedness of the destination)
+    -- when it is not.
+    if int_bits(dst) == 0
+        ret v
+    end
+    if int_bits(src) == 0
+        ret v
+    end
+    if int_bits(dst) >= 64
+        if int_signed(dst) == int_signed(src)
+            ret v
+        end
+        ret v
+    end
+    if int_bits(src) <= int_bits(dst)
+        if int_signed(src) == int_signed(dst)
+            ret v
+        end
+        if int_signed(src) == 0
+            ret v
+        end
+    end
+    sg : u64 <- 0
+    if int_signed(dst) == 1
+        sg <- 1
+    end
+    ret emit_ins(ob, O_TRUNC, v, u64.bits(int_bits(dst)), sg, 0)
+end
+
+-- Where an argument travels (ABI.md §1-2, the SysV rule): the six integer
+-- registers in order, and once an argument does not fit in the registers
+-- left — a view needs two — that whole argument goes to the stack while a
+-- later, smaller one may still take a register. A location is 0-5 for a
+-- register and 6 and up for a word of the stack, the first stack word at
+-- the lowest address. The two counters are locals of the walk, because an
+-- argument can be a call with arguments of its own.
+
+proc gen_call_args(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, pi: word) -> u64
+    -- Arguments in source order; each becomes an `arg` marker carrying the
+    -- location it travels in, and a view argument becomes two. The count is
+    -- what `call` consumes; the stack words are left in `ob.callstk`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    regs : u64 <- 0
+    stk : u64 <- 0
+    a : u64 <- sibling(cx, kid1(cx, n))
+    k : u64 <- 0
+    nargs : u64 <- 0
+    while a != 0
+        want : view u8 <- b[0..0]
+        words : u64 <- 1
+        if pi >= 0
+            want <- param_type(pg, u64.bits(pi), k)
+            if is_view_type(want) == 1
+                words <- 2
+            end
+        end
+        v := gen_expr(pg, ob, mi, a, want)
+        loc : u64 <- 0
+        if regs + words <= 6
+            loc <- regs
+            regs <- regs + words
+        else
+            loc <- 6 + stk
+            stk <- stk + words
+        end
+        emit_ins(ob, O_ARG, v, loc, 0, 0)
+        nargs <- nargs + 1
+        if words == 2
+            emit_ins(ob, O_ARG, ob.lastlen, loc + 1, 0, 0)
+            nargs <- nargs + 1
+        end
+        k <- k + 1
+        a <- sibling(cx, a)
+    end
+    ob.callstk <- stk
+    ret nargs
+end
+
+proc gen_syscall(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    cx := mod_ctx(pg, mi)
+    a : u64 <- sibling(cx, kid1(cx, n))
+    nargs : u64 <- 0
+    while a != 0
+        v := gen_expr(pg, ob, mi, a, "word")
+        emit_ins(ob, O_ARG, v, 0, 0, 0)
+        nargs <- nargs + 1
+        a <- sibling(cx, a)
+    end
+    if nargs > 7
+        -- The number and six arguments are all the registers a system call
+        -- has (ABI.md §5).
+        oir_err(ob, pg, mi, 900, n)
+    end
+    ret emit_ins(ob, O_SYSCALL, 0, nargs, 0, 0)
+end
+
+proc gen_bytes(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `z.bytes(k)`: k bytes from the zone, or the trap that says there are
+    -- not that many left. The view it answers with is the pair (address, k).
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ce := kid1(cx, n)
+    zv := gen_expr(pg, ob, mi, kid1(cx, ce), b[0..0])
+    a := sibling(cx, ce)
+    if a == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    sz := gen_expr(pg, ob, mi, a, "uword")
+    r := emit_ins(ob, O_ZALLOC, zv, sz, 0, 0)
+    ri := ins_at(ob, r)
+    ri.site <- trap_static(pg, ob, mi, TK_ZONE, n) + 1
+    ob.lastlen <- sz
+    ret r
+end
+
+proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    cx := mod_ctx(pg, mi)
+    ck := call_kind(pg, mi, n)
+    if ck == CK_SYSCALL
+        ret gen_syscall(pg, ob, mi, n)
+    end
+    if ck == CK_BYTES
+        ret gen_bytes(pg, ob, mi, n)
+    end
+    if ck == CK_MAKE
+        ret gen_make(pg, ob, mi, n)
+    end
+    if ck == CK_AT
+        ret gen_at(pg, ob, mi, n)
+    end
+    if ck != CK_PROC
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    if cn.kind != N_NAME
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    pi := proc_find(pg, tok_text(cx, cn.t0))
+    if pi < 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    nargs := gen_call_args(pg, ob, mi, n, pi)
+    r := emit_ins(ob, O_CALL, u64.bits(pi), nargs, ob.callstk, 0)
+    ob.lastlen <- 0
+    ob.lastpay <- 0
+    rt := proc_result(pg, tok_text(cx, cn.t0))
+    if is_view_type(rt) == 1
+        -- A view comes back as the pair (address, length); the second half is
+        -- read out before anything else can touch the register.
+        ob.lastlen <- emit_ins(ob, O_RDX, 0, 0, 0, 0)
+    elif is_fallible(rt) == 1
+        -- A `T or E` comes back as the pair (tag, payload) — ABI.md §2, design
+        -- 0007: the call's value is the tag, and the payload is read out here
+        -- for the `else` or the `case` that must follow.
+        ob.lastpay <- emit_ins(ob, O_RDX, 0, 0, 1, 0)
+    end
+    ret r
+end
+
+proc gen_name(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    name := tok_text(cx, nd.t0)
+    nk := name_kind(pg, mi, n)
+    if nk == 1
+        s := slot_of_local(pg, name)
+        ob.lastlen <- 0
+        if is_zone_handle(pg, name) == 1
+            -- The value of a zone opened here is the address of the triple
+            -- it lives in, which is what a `zone` parameter is given and what
+            -- every zone operation works through (ABI.md §2).
+            ret emit_ins(ob, O_FADDR, u64.bits(s) * LOC_WORDS, 0, 0, 0)
+        end
+        v := emit_ins(ob, O_LOAD, u64.bits(s) * LOC_WORDS, 0, 0, 0)
+        if is_view_type(loc_type(pg, name)) == 1
+            ob.lastlen <- emit_ins(ob, O_LOAD, u64.bits(s) * LOC_WORDS + 1, 0, 0, 0)
+        end
+        ret v
+    end
+    if nk == 2
+        ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
+    end
+    oir_err(ob, pg, mi, 900, n)
+    ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+end
+
+-- Layouts ----------------------------------------------------------------------
+-- The item stage laid every layout out (ABI.md §3): `Item` has the size and
+-- the alignment, each `Fld` its offset, and the field's type is the tokens of
+-- its declaration. `layout_of` takes a type text — `Name`, `ref Name` or
+-- `rw ref Name` — to the item, and `field_of` a field name to its index.
+
+proc layout_of(pg: ref Prog, t: view u8) -> word
+    nm : view u8 <- t
+    if starts_with(nm, "rw ")
+        nm <- nm[3..]
+    end
+    if starts_with(nm, "ref ")
+        nm <- nm[4..]
+    end
+    ret item_find(pg, nm)
+end
+
+proc field_of(pg: ref Prog, it: u64, fname: view u8) -> word
+    -- The index into `pg.flds` of the field, or -1.
+    item := item_at(pg, it)
+    cx := mod_ctx(pg, item.mod)
+    f : u64 <- 0
+    while f < item.nfld
+        fr := fld_at(pg, item.first + f)
+        fn := node_at(cx, fr.node)
+        if view_eq(tok_text(cx, fn.t0), fname)
+            ret word.bits(item.first + f)
+        end
+        f <- f + 1
+    end
+    ret -1
+end
+
+proc field_text(pg: rw ref Prog, fi: u64) -> view u8
+    -- The type of a field, as the text the rest of the compiler compares.
+    fr := fld_at(pg, fi)
+    cx := mod_ctx(pg, fr.mod)
+    st := sbeg(pg)
+    sput_type_node(pg, fr.mod, kid1(cx, fr.node))
+    ret sdone(pg, st)
+end
+
+proc is_packed(pg: ref Prog, it: u64) -> word
+    item := item_at(pg, it)
+    cx := mod_ctx(pg, item.mod)
+    nd := node_at(cx, item.node)
+    if nd.sub == 1
+        ret 1
+    end
+    ret 0
+end
+
+proc is_ref_type(t: view u8) -> word
+    if starts_with(unqual(t), "ref ")
+        ret 1
+    end
+    ret 0
+end
+
+proc gen_field_addr(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- The address of `r.f`: the ref plus the field's offset. The index of
+    -- the field is left in `pg.lastft` for the caller, which needs its type.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    base := kid1(cx, n)
+    bt := ety(pg, mi, base, b[0..0])
+    it := layout_of(pg, bt)
+    if it < 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    fi := field_of(pg, u64.bits(it), tok_text(cx, nd.t0))
+    if fi < 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    r := gen_expr(pg, ob, mi, base, b[0..0])
+    ob.lastlen <- 0
+    fr := fld_at(pg, u64.bits(fi))
+    pg.lastft <- u64.bits(fi)
+    if fr.off == 0
+        ret r
+    end
+    off := emit_ins(ob, O_CONST, 0, 0, 0, fr.off)
+    ret addr_add(ob, r, off)
+end
+
+proc gen_field_load(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `r.f`, by the field's type: an integer at its width and signedness, a
+    -- view as its two words, a ref or an address as one word, and a layout
+    -- held by value as the address of that part of the record.
+    p := gen_field_addr(pg, ob, mi, n)
+    ft := field_text(pg, pg.lastft)
+    if is_view_type(ft) == 1
+        a := emit_ins(ob, O_RLOAD, p, 8, 0, 0)
+        eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+        ob.lastlen <- emit_ins(ob, O_RLOAD, addr_add(ob, p, eight), 8, 0, 0)
+        ret a
+    end
+    nb := int_bits(ft)
+    if nb > 0
+        sg : u64 <- 0
+        if int_signed(ft) == 1
+            sg <- 1
+        end
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_RLOAD, p, u64.bits(nb) / 8, sg, 0)
+    end
+    if is_ref_type(ft) == 1
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_RLOAD, p, 8, 0, 0)
+    end
+    if starts_with(unqual(ft), "addr ")
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_RLOAD, p, 8, 0, 0)
+    end
+    if layout_of(pg, ft) >= 0
+        ob.lastlen <- 0
+        ret p
+    end
+    oir_err(ob, pg, mi, 900, n)
+    ret p
+end
+
+proc gen_store_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `r.f <- x`, by the field's type: the same widths as the load.
+    cx := mod_ctx(pg, mi)
+    tgt := kid1(cx, n)
+    p := gen_field_addr(pg, ob, mi, tgt)
+    fi := pg.lastft
+    ft := field_text(pg, fi)
+    v := gen_expr(pg, ob, mi, kid2(cx, n), ft)
+    if is_view_type(ft) == 1
+        ln := ob.lastlen
+        emit_ins(ob, O_RSTORE, p, v, 8, 0)
+        eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+        emit_ins(ob, O_RSTORE, addr_add(ob, p, eight), ln, 8, 0)
+        ret
+    end
+    nb := int_bits(ft)
+    if nb > 0
+        emit_ins(ob, O_RSTORE, p, v, u64.bits(nb) / 8, 0)
+        ret
+    end
+    if is_ref_type(ft) == 1
+        emit_ins(ob, O_RSTORE, p, v, 8, 0)
+        ret
+    end
+    if starts_with(unqual(ft), "addr ")
+        emit_ins(ob, O_RSTORE, p, v, 8, 0)
+        ret
+    end
+    oir_err(ob, pg, mi, 900, n)
+end
+
+proc gen_make(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `z.make(Name)`: `Name.size` zeroed bytes from the zone, at the layout's
+    -- alignment (the zone's own sixteen when that is more). A fresh mapping
+    -- is zero and a zone never hands out a byte twice, so nothing is cleared.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ce := kid1(cx, n)
+    arg := sibling(cx, ce)
+    an := node_at(cx, arg)
+    it := item_find(pg, tok_text(cx, an.t0))
+    if it < 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    item := item_at(pg, u64.bits(it))
+    zv := gen_expr(pg, ob, mi, kid1(cx, ce), b[0..0])
+    sz := emit_ins(ob, O_CONST, 0, 0, 0, item.size)
+    r := emit_ins(ob, O_ZALLOC, zv, sz, item.alignv, 0)
+    ri := ins_at(ob, r)
+    ri.site <- trap_static(pg, ob, mi, TK_ZONE, n) + 1
+    ob.lastlen <- 0
+    ret r
+end
+
+proc gen_at(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `Name.at(v)`: a ref over the bytes of a view, which is the view's
+    -- address once two checks hold — the view is at least `Name.size` long
+    -- (`check.range 0, size, len`, the same condition as a subview) and,
+    -- unless the layout is packed, aligned to `Name.align`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ce := kid1(cx, n)
+    an := node_at(cx, kid1(cx, ce))
+    it := item_find(pg, tok_text(cx, an.t0))
+    if it < 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    item := item_at(pg, u64.bits(it))
+    a := gen_expr(pg, ob, mi, sibling(cx, ce), b[0..0])
+    ln := ob.lastlen
+    zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    sz := emit_ins(ob, O_CONST, 0, 0, 0, item.size)
+    ck := emit_ins(ob, O_CHKR, zero, sz, 0, ln)
+    ci := ins_at(ob, ck)
+    ci.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+    if item.alignv > 1
+        if is_packed(pg, u64.bits(it)) == 0
+            ca := emit_ins(ob, O_CHKA, a, item.alignv, 0, 0)
+            cai := ins_at(ob, ca)
+            cai.site <- trap_static(pg, ob, mi, TK_MISALIGN, n) + 1
+        end
+    end
+    ob.lastlen <- 0
+    ret a
+end
+
+proc is_zone_handle(pg: ref Prog, name: view u8) -> word
+    -- A zone opened by `zone` owns its triple; a `zone` parameter was handed
+    -- the address of someone else's, and reads like any other word.
+    i := loc_find(pg, name)
+    if i < 0
+        ret 0
+    end
+    l := loc_at(pg, u64.bits(i))
+    if l.kind == L_ZONE
+        ret 1
+    end
+    ret 0
+end
+
+proc gen_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    m := tok_text(cx, nd.t0)
+    base := kid1(cx, n)
+    bn := node_at(cx, base)
+    if bn.kind == N_NAME
+        if name_kind(pg, mi, base) == 0
+            ci := val_find(pg, m)
+            if ci >= 0
+                ret emit_ins(ob, O_CONST, 0, 0, 0, const_of(pg, u64.bits(ci)))
+            end
+            ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
+        end
+    end
+    if view_eq(m, "addr")
+        v := gen_expr(pg, ob, mi, base, b[0..0])
+        ob.lastlen <- 0
+        ret v
+    end
+    if view_eq(m, "len")
+        gen_expr(pg, ob, mi, base, b[0..0])
+        l := ob.lastlen
+        ob.lastlen <- 0
+        ret l
+    end
+    if layout_of(pg, ety(pg, mi, base, b[0..0])) >= 0
+        ret gen_field_load(pg, ob, mi, n)
+    end
+    oir_err(ob, pg, mi, 900, n)
+    ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+end
+
+proc gen_index_addr(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- The address of `v[i]`, with the bounds check that makes it an address
+    -- inside the view. The element size is left in `ob.lastlen` for the
+    -- caller, which loads or stores exactly that many bytes.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    base := kid1(cx, n)
+    bt := ety(pg, mi, base, b[0..0])
+    if is_view_type(bt) == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    sz := elem_bytes(pg, ob, mi, bt, n)
+    a := gen_expr(pg, ob, mi, base, b[0..0])
+    ln := ob.lastlen
+    idx := gen_expr(pg, ob, mi, kid2(cx, n), "uword")
+    ck := emit_ins(ob, O_CHKB, idx, ln, 0, 0)
+    ci := ins_at(ob, ck)
+    ci.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+    p := addr_add(ob, a, scale_by(ob, idx, sz))
+    ob.lastlen <- sz
+    ret p
+end
+
+proc gen_index(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ix := node_at(cx, kid2(cx, n))
+    if ix.kind == N_RANGE
+        ret gen_subview(pg, ob, mi, n)
+    end
+    p := gen_index_addr(pg, ob, mi, n)
+    sz := ob.lastlen
+    et := elem_of(ety(pg, mi, kid1(cx, n), b[0..0]))
+    sg : u64 <- 0
+    if int_signed(et) == 1
+        sg <- 1
+    end
+    ob.lastlen <- 0
+    ret emit_ins(ob, O_RLOAD, p, sz, sg, 0)
+end
+
+proc gen_subview(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `v[a..b]`, `v[..b]`, `v[a..]`: one check that `a <= b <= v.len`, then
+    -- the pair the new view is.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    base := kid1(cx, n)
+    bt := ety(pg, mi, base, b[0..0])
+    if is_view_type(bt) == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    sz := elem_bytes(pg, ob, mi, bt, n)
+    a := gen_expr(pg, ob, mi, base, b[0..0])
+    ln := ob.lastlen
+    rg := kid2(cx, n)
+    lon := range_lo(cx, rg)
+    hin := range_hi(cx, rg)
+    lo : u64 <- 0
+    if lon == 0
+        lo <- emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    else
+        lo <- gen_expr(pg, ob, mi, lon, "uword")
+    end
+    hi : u64 <- 0
+    if hin == 0
+        hi <- ln
+    else
+        hi <- gen_expr(pg, ob, mi, hin, "uword")
+    end
+    ck := emit_ins(ob, O_CHKR, lo, hi, 0, ln)
+    ci := ins_at(ob, ck)
+    ci.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+    p := addr_add(ob, a, scale_by(ob, lo, sz))
+    ob.lastlen <- emit_bin(ob, B_SUB, hi, lo, 0)
+    ret p
+end
+
+proc gen_binop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -> u64
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    op := tok_text(cx, nd.t0)
+    if view_eq(op, "and")
+        ret gen_andor(pg, ob, mi, n, 1)
+    end
+    if view_eq(op, "or")
+        ret gen_andor(pg, ob, mi, n, 0)
+    end
+    code := binop_code(op)
+    if code == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    ot := binop_operand_type(pg, mi, n)
+    lw : view u8 <- ot
+    if binop_is_compare(op) == 0
+        lw <- want
+        if int_bits(lw) == 0
+            lw <- ot
+        end
+    end
+    lv := gen_expr(pg, ob, mi, kid1(cx, n), lw)
+    rw2 : view u8 <- lw
+    if is_shift(op)
+        rw2 <- shift_count_type(pg, mi, kid2(cx, n))
+    end
+    rv := gen_expr(pg, ob, mi, kid2(cx, n), rw2)
+    sg : u64 <- 0
+    if int_signed(lw) == 1
+        sg <- 1
+    end
+    ob.lastlen <- 0
+    v := emit_bin(ob, code, lv, rv, sg)
+    ins := ins_at(ob, v)
+    ins.w <- u64.bits(int_bits(lw))
+    if binop_traps(code) == 1
+        if ins.w > 0
+            if is_divide(code) == 1
+                -- A zero divisor has no answer any mode could name, so `/`
+                -- and `%` keep that trap inside `wrap`. The overflow site is
+                -- for `/` alone: `%` answers 0 where the quotient would not
+                -- fit (design 0006; MACHINE_MODEL.md §7).
+                ins.site <- trap_static(pg, ob, mi, TK_DIV, n) + 1
+                if code == B_DIV
+                    ins.site2 <- trap_static(pg, ob, mi, TK_OVF, n) + 1
+                end
+            elif ob.amode == 0
+                ins.site <- trap_static(pg, ob, mi, TK_OVF, n) + 1
+            end
+        end
+    end
+    ret v
+end
+
+proc is_divide(code: u64) -> word
+    if code == B_DIV
+        ret 1
+    end
+    if code == B_REM
+        ret 1
+    end
+    ret 0
+end
+
+proc binop_traps(code: u64) -> word
+    -- `+ - * / %` trap on overflow; the bit operators, the shifts and the
+    -- comparisons cannot (design 0006, MACHINE_MODEL.md §3).
+    if code == B_ADD
+        ret 1
+    end
+    if code == B_SUB
+        ret 1
+    end
+    if code == B_MUL
+        ret 1
+    end
+    if code == B_DIV
+        ret 1
+    end
+    if code == B_REM
+        ret 1
+    end
+    ret 0
+end
+
+proc gen_andor(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, isand: u64) -> u64
+    -- `and` and `or` short-circuit, so the right operand sits under a branch
+    -- and the result is one value written from two arms. That is a place with
+    -- two definitions, so it is written as one: a compiler-made place that
+    -- `mem2reg` promotes to the phi OIR_SPEC §5 shows at such a join.
+    cx := mod_ctx(pg, mi)
+    t := new_tmp(ob)
+    lv := gen_expr(pg, ob, mi, kid1(cx, n), "bool")
+    emit_ins(ob, O_STORE, t, lv, 0, 0)
+    done := new_label(ob)
+    if isand == 1
+        emit_ins(ob, O_BRANCH, lv, 0, 0, done)
+    else
+        nv := emit_un(ob, U1_LNOT, lv)
+        emit_ins(ob, O_BRANCH, nv, 0, 0, done)
+    end
+    rv := gen_expr(pg, ob, mi, kid2(cx, n), "bool")
+    emit_ins(ob, O_STORE, t, rv, 0, 0)
+    emit_ins(ob, O_LABEL, done, 0, 0, 0)
+    ob.lastlen <- 0
+    ret emit_ins(ob, O_LOAD, t, 0, 0, 0)
+end
+
+proc gen_unop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -> u64
+    cx := mod_ctx(pg, mi)
+    s := nd_sub(pg, mi, n)
+    arg := kid1(cx, n)
+    if s == U_NEG
+        -- The width and the signedness decide both the flag the overflow
+        -- check reads (`jo` signed, `jc` unsigned) and how the result is
+        -- re-extended, so an operation without them is neither checked nor
+        -- canonical.
+        ut := ety(pg, mi, n, want)
+        v := gen_expr(pg, ob, mi, arg, want)
+        u := emit_un(ob, U1_NEG, v)
+        iu := ins_at(ob, u)
+        iu.w <- u64.bits(int_bits(ut))
+        iu.c <- u64.bits(int_signed(ut))
+        if iu.w > 0
+            if ob.amode == 0
+                iu.site <- trap_static(pg, ob, mi, TK_OVF, n) + 1
+            end
+        end
+        ret u
+    end
+    if s == U_BITNOT
+        ut2 := ety(pg, mi, n, want)
+        v2 := gen_expr(pg, ob, mi, arg, want)
+        u2 := emit_un(ob, U1_BNOT, v2)
+        iu2 := ins_at(ob, u2)
+        iu2.w <- u64.bits(int_bits(ut2))
+        iu2.c <- u64.bits(int_signed(ut2))
+        ret u2
+    end
+    if s == U_NOT
+        v3 := gen_expr(pg, ob, mi, arg, "bool")
+        ret emit_un(ob, U1_LNOT, v3)
+    end
+    if s == U_REFOF
+        -- `ref x`: the address of a place. A local keeps its frame words
+        -- once its address is taken (`mem2reg`, OIR_SPEC §2.1); a field is
+        -- the address of that part of the record.
+        pn := node_at(cx, arg)
+        if pn.kind == N_NAME
+            sl := slot_of_local(pg, tok_text(cx, pn.t0))
+            if sl >= 0
+                ob.lastlen <- 0
+                ret emit_ins(ob, O_FADDR, u64.bits(sl) * LOC_WORDS, 0, 0, 0)
+            end
+        end
+        if pn.kind == N_FIELD
+            pa := gen_field_addr(pg, ob, mi, arg)
+            ob.lastlen <- 0
+            ret pa
+        end
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    if s == U_WRAP
+        save := ob.amode
+        ob.amode <- 1
+        vw := gen_expr(pg, ob, mi, arg, want)
+        ob.amode <- save
+        ret vw
+    end
+    oir_err(ob, pg, mi, 900, n)
+    ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+end
+
+proc nd_sub(pg: ref Prog, mi: u64, n: u64) -> u64
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    ret nd.sub
+end
+
+proc gen_convert(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    mnode := kid1(cx, n)
+    mn := node_at(cx, mnode)
+    arg : u64 <- mnode
+    if mn.kind == N_MODE
+        arg <- sibling(cx, mnode)
+    end
+    dst := ety(pg, mi, n, b[0..0])
+    src := ety(pg, mi, arg, b[0..0])
+    v := gen_expr(pg, ob, mi, arg, conv_operand_want(pg, mi, arg, dst))
+    if mn.kind == N_MODE
+        if view_eq(tok_text(cx, mn.t0), "wrap")
+            ret gen_conv(ob, v, src, dst)
+        end
+        if view_eq(tok_text(cx, mn.t0), "bits")
+            ret gen_conv(ob, v, src, dst)
+        end
+        oir_err(ob, pg, mi, 900, n)
+        ret v
+    end
+    ret gen_conv(ob, v, src, dst)
+end
+
+proc gen_expr(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -> u64
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    k := nd.kind
+    ob.lastlen <- 0
+    if k == N_INT
+        v : u64 <- nd.val
+        if nd.sub == 1
+            v <- 0 - v
+        end
+        ret emit_ins(ob, O_CONST, 0, 0, 0, v)
+    end
+    if k == N_CHAR
+        t := ctok(cx, nd.t0)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, t.val)
+    end
+    if k == N_TRUE
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 1)
+    end
+    if k == N_FALSE
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    if k == N_STR
+        si := add_static(ob, tok_text(cx, nd.t0))
+        st := stat_at(ob, si)
+        a := emit_ins(ob, O_SADDR, si, 0, 0, 0)
+        ob.lastlen <- emit_ins(ob, O_SLEN, si, 0, 0, 0)
+        ret a
+    end
+    if k == N_NAME
+        ret gen_name(pg, ob, mi, n)
+    end
+    if k == N_FIELD
+        ret gen_field(pg, ob, mi, n)
+    end
+    if k == N_INDEX
+        ret gen_index(pg, ob, mi, n)
+    end
+    if k == N_BINOP
+        ret gen_binop(pg, ob, mi, n, want)
+    end
+    if k == N_UNOP
+        ret gen_unop(pg, ob, mi, n, want)
+    end
+    if k == N_CONVERT
+        ret gen_convert(pg, ob, mi, n)
+    end
+    if k == N_CALL
+        ret gen_call(pg, ob, mi, n)
+    end
+    if k == N_FALLBACK
+        ret gen_fallback(pg, ob, mi, n)
+    end
+    oir_err(ob, pg, mi, 900, n)
+    ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+end
+
+-- Statements ------------------------------------------------------------------
+
+proc gen_store_local(pg: rw ref Prog, ob: rw ref Oir, mi: u64, name: view u8, val: u64)
+    -- oli-core passes six argument words, and a view costs two, so the node
+    -- for a diagnostic is taken from `pg.curstmt` instead of a parameter.
+    s := slot_of_local(pg, name)
+    if s < 0
+        oir_err(ob, pg, mi, 900, pg.curstmt)
+        ret
+    end
+    emit_ins(ob, O_STORE, u64.bits(s) * LOC_WORDS, val, 0, 0)
+    if is_view_type(loc_type(pg, name)) == 1
+        emit_ins(ob, O_STORE, u64.bits(s) * LOC_WORDS + 1, ob.lastlen, 0, 0)
+    end
+end
+
+proc gen_bind(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    name := tok_text(cx, nd.t0)
+    v : u64 <- kid1(cx, n)
+    if nd.val >= 2
+        v <- sibling(cx, v)
+    end
+    val := gen_expr(pg, ob, mi, v, loc_type(pg, name))
+    gen_store_local(pg, ob, mi, name, val)
+end
+
+proc gen_place(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    name := tok_text(cx, nd.t0)
+    init := kid2(cx, n)
+    if init == 0
+        ret
+    end
+    val := gen_expr(pg, ob, mi, init, loc_type(pg, name))
+    gen_store_local(pg, ob, mi, name, val)
+end
+
+proc gen_store(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    tgt := kid1(cx, n)
+    tn := node_at(cx, tgt)
+    if tn.kind == N_INDEX
+        gen_store_index(pg, ob, mi, n)
+        ret
+    end
+    if tn.kind == N_FIELD
+        gen_store_field(pg, ob, mi, n)
+        ret
+    end
+    if tn.kind != N_NAME
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    name := tok_text(cx, tn.t0)
+    val := gen_expr(pg, ob, mi, kid2(cx, n), ety(pg, mi, tgt, b[0..0]))
+    gen_store_local(pg, ob, mi, name, val)
+end
+
+proc gen_store_index(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `v[i] <- x`: the address the index names, then the element written
+    -- there. The bounds check is the same one a read of it carries.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    tgt := kid1(cx, n)
+    ix := node_at(cx, kid2(cx, tgt))
+    if ix.kind == N_RANGE
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    p := gen_index_addr(pg, ob, mi, tgt)
+    sz := ob.lastlen
+    et := elem_of(ety(pg, mi, kid1(cx, tgt), b[0..0]))
+    v := gen_expr(pg, ob, mi, kid2(cx, n), et)
+    emit_ins(ob, O_RSTORE, p, v, sz, 0)
+end
+
+proc gen_ret(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    if ob.zdepth > 0
+        -- The entry procedure may: its `ret` is `exit_group`, which gives the
+        -- whole address space back. Anywhere else it would leak the zone.
+        op := oproc_at(ob, ob.curp)
+        if op.isentry != 1
+            oir_err(ob, pg, mi, 900, n)
+            ret
+        end
+    end
+    rv := kid1(cx, n)
+    if rv == 0
+        emit_ins(ob, O_RET, 0, 0, 0, 0)
+        ret
+    end
+    gen_ret_value(pg, ob, mi, rv)
+end
+
+proc gen_ret_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, rv: u64)
+    -- The `ret v` of the current procedure: a view is its pair, a `T or E` is
+    -- the pair (tag 0, v) — design 0007, ABI.md §2 — and anything else is one
+    -- word. A view inside a `T or E` would need `sret`, and is not lowered.
+    full := cur_result(pg)
+    rt := ok_of(full)
+    if is_fallible(full) == 1
+        if is_view_type(rt) == 1
+            oir_err(ob, pg, mi, 900, pg.curstmt)
+            ret
+        end
+        v := gen_expr(pg, ob, mi, rv, rt)
+        zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        emit_ins(ob, O_RET, zero, v, 2, 0)
+        ret
+    end
+    v2 := gen_expr(pg, ob, mi, rv, rt)
+    if is_view_type(rt) == 1
+        emit_ins(ob, O_RET, v2, ob.lastlen, 2, 0)
+        ret
+    end
+    emit_ins(ob, O_RET, v2, 0, 1, 0)
+end
+
+proc gen_fail(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `fail [e]`: the pair (tag 1, e), or (1, 0) when `E` is `none`.
+    cx := mod_ctx(pg, mi)
+    full := cur_result(pg)
+    if is_fallible(full) == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    ev := kid1(cx, n)
+    one := emit_ins(ob, O_CONST, 0, 0, 0, 1)
+    if ev == 0
+        zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        emit_ins(ob, O_RET, one, zero, 2, 0)
+        ret
+    end
+    et := err_of(full)
+    if is_view_type(et) == 1
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    if item_find(pg, et) >= 0
+        -- A `choice` error is built from a variant; choices are not lowered.
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    e := gen_expr(pg, ob, mi, ev, et)
+    emit_ins(ob, O_RET, one, e, 2, 0)
+end
+
+proc gen_fallback(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `e else handler`: the call, a branch on its tag, and in the fail block
+    -- the handler — `fail` passes the payload on as this procedure's own
+    -- failure, `ret [v]` leaves, a default value joins the ok path through a
+    -- place `mem2reg` turns into the phi. The value is the payload.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    call := kid1(cx, n)
+    ct := ety(pg, mi, call, b[0..0])
+    if is_fallible(ct) == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    if is_view_type(ok_of(ct)) == 1
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    tag := gen_expr(pg, ob, mi, call, b[0..0])
+    pay := ob.lastpay
+    if pay == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    h := kid2(cx, n)
+    hn := node_at(cx, h)
+    zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    isok := emit_bin(ob, B_EQ, tag, zero, 0)
+    if hn.kind == N_DEFAULT
+        t := new_tmp(ob)
+        emit_ins(ob, O_STORE, t, pay, 0, 0)
+        lfail := new_label(ob)
+        ldone := new_label(ob)
+        emit_ins(ob, O_BRANCH, isok, 0, 0, lfail)
+        emit_ins(ob, O_JMP, ldone, 0, 0, 0)
+        emit_ins(ob, O_LABEL, lfail, 0, 0, 0)
+        d := gen_expr(pg, ob, mi, kid1(cx, h), ok_of(ct))
+        emit_ins(ob, O_STORE, t, d, 0, 0)
+        emit_ins(ob, O_LABEL, ldone, 0, 0, 0)
+        ob.lastlen <- 0
+        ob.lastpay <- 0
+        ret emit_ins(ob, O_LOAD, t, 0, 0, 0)
+    end
+    lfail2 := new_label(ob)
+    lok := new_label(ob)
+    emit_ins(ob, O_BRANCH, isok, 0, 0, lfail2)
+    emit_ins(ob, O_JMP, lok, 0, 0, 0)
+    emit_ins(ob, O_LABEL, lfail2, 0, 0, 0)
+    if hn.kind == N_FAIL
+        -- The callee's payload is this procedure's payload: the front end
+        -- requires the same `E`.
+        if is_fallible(cur_result(pg)) == 0
+            oir_err(ob, pg, mi, 900, n)
+        end
+        one := emit_ins(ob, O_CONST, 0, 0, 0, 1)
+        emit_ins(ob, O_RET, one, pay, 2, 0)
+    elif hn.kind == N_RET
+        if leaves_zone_ret(ob) == 1
+            oir_err(ob, pg, mi, 900, n)
+        end
+        rv := kid1(cx, h)
+        if rv == 0
+            emit_ins(ob, O_RET, 0, 0, 0, 0)
+        else
+            gen_ret_value(pg, ob, mi, rv)
+        end
+    else
+        oir_err(ob, pg, mi, 900, n)
+    end
+    emit_ins(ob, O_LABEL, lok, 0, 0, 0)
+    ob.lastlen <- 0
+    ob.lastpay <- 0
+    ret pay
+end
+
+proc leaves_zone_ret(ob: ref Oir) -> word
+    -- A `ret` inside a zone is lowered only in the entry procedure, whose
+    -- `ret` is `exit_group`; anywhere else it would leak the mapping.
+    if ob.zdepth == 0
+        ret 0
+    end
+    op := oproc_at(ob, ob.curp)
+    if op.isentry == 1
+        ret 0
+    end
+    ret 1
+end
+
+proc gen_case(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `case e when ok [x] … when fail … end` over a `T or E`: the tag decides
+    -- the arm, the ok arm's name is bound to the payload. A `when fail` with
+    -- a pattern names a variant of a `choice`, which is not lowered.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    subj := kid1(cx, n)
+    ct := ety(pg, mi, subj, b[0..0])
+    if is_fallible(ct) == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    tag := gen_expr(pg, ob, mi, subj, b[0..0])
+    pay := ob.lastpay
+    if pay == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    okarm : u64 <- 0
+    failarm : u64 <- 0
+    elsearm : u64 <- 0
+    arm : u64 <- kid2(cx, n)
+    while arm != 0
+        an := node_at(cx, arm)
+        if an.kind == N_ELSE
+            elsearm <- arm
+        else
+            pn := node_at(cx, kid1(cx, arm))
+            if pn.kind == N_PATOK
+                okarm <- arm
+            elif pn.kind == N_PATFAIL
+                if kid1(cx, kid1(cx, arm)) != 0
+                    oir_err(ob, pg, mi, 900, arm)
+                    ret
+                end
+                failarm <- arm
+            else
+                oir_err(ob, pg, mi, 900, arm)
+                ret
+            end
+        end
+        arm <- sibling(cx, arm)
+    end
+    zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    isok := emit_bin(ob, B_EQ, tag, zero, 0)
+    lfail := new_label(ob)
+    ldone := new_label(ob)
+    emit_ins(ob, O_BRANCH, isok, 0, 0, lfail)
+    if okarm != 0
+        pn2 := node_at(cx, kid1(cx, okarm))
+        if pn2.t1 > pn2.t0
+            gen_store_local(pg, ob, mi, tok_text(cx, pn2.t0), pay)
+        end
+        gen_block(pg, ob, mi, kid2(cx, okarm))
+    elif elsearm != 0
+        gen_block(pg, ob, mi, kid1(cx, elsearm))
+    end
+    emit_ins(ob, O_JMP, ldone, 0, 0, 0)
+    emit_ins(ob, O_LABEL, lfail, 0, 0, 0)
+    if failarm != 0
+        gen_block(pg, ob, mi, kid2(cx, failarm))
+    elif elsearm != 0
+        gen_block(pg, ob, mi, kid1(cx, elsearm))
+    end
+    emit_ins(ob, O_LABEL, ldone, 0, 0, 0)
+end
+
+proc gen_if(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `kid1` is the condition and `kid2` starts the chain of `then`, `elif`
+    -- and `else` branches, the shape `pif_stmt` prints.
+    cx := mod_ctx(pg, mi)
+    done := new_label(ob)
+    nxt : u64 <- new_label(ob)
+    c := gen_expr(pg, ob, mi, kid1(cx, n), "bool")
+    emit_ins(ob, O_BRANCH, c, 0, 0, nxt)
+    br : u64 <- kid2(cx, n)
+    while br != 0
+        bn := node_at(cx, br)
+        if bn.kind == N_THEN
+            gen_block(pg, ob, mi, kid1(cx, br))
+            emit_ins(ob, O_JMP, done, 0, 0, 0)
+            emit_ins(ob, O_LABEL, nxt, 0, 0, 0)
+        end
+        if bn.kind == N_ELIF
+            nxt <- new_label(ob)
+            c2 := gen_expr(pg, ob, mi, kid1(cx, br), "bool")
+            emit_ins(ob, O_BRANCH, c2, 0, 0, nxt)
+            gen_block(pg, ob, mi, kid2(cx, br))
+            emit_ins(ob, O_JMP, done, 0, 0, 0)
+            emit_ins(ob, O_LABEL, nxt, 0, 0, 0)
+        end
+        if bn.kind == N_ELSE
+            gen_block(pg, ob, mi, kid1(cx, br))
+        end
+        br <- sibling(cx, br)
+    end
+    emit_ins(ob, O_LABEL, done, 0, 0, 0)
+end
+
+proc gen_ifthen(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    done := new_label(ob)
+    c := gen_expr(pg, ob, mi, kid1(cx, n), "bool")
+    emit_ins(ob, O_BRANCH, c, 0, 0, done)
+    gen_block(pg, ob, mi, kid2(cx, n))
+    emit_ins(ob, O_LABEL, done, 0, 0, 0)
+end
+
+proc gen_while(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    top := new_label(ob)
+    out := new_label(ob)
+    savb := ob.brk
+    savc := ob.cont
+    savz := ob.zloop
+    ob.brk <- out + 1
+    ob.cont <- top + 1
+    ob.zloop <- ob.zdepth
+    emit_ins(ob, O_LABEL, top, 0, 0, 0)
+    c := gen_expr(pg, ob, mi, kid1(cx, n), "bool")
+    emit_ins(ob, O_BRANCH, c, 0, 0, out)
+    gen_block(pg, ob, mi, kid1(cx, kid2(cx, n)))
+    emit_ins(ob, O_JMP, top, 0, 0, 0)
+    emit_ins(ob, O_LABEL, out, 0, 0, 0)
+    ob.brk <- savb
+    ob.cont <- savc
+    ob.zloop <- savz
+end
+
+proc gen_loop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    top := new_label(ob)
+    out := new_label(ob)
+    savb := ob.brk
+    savc := ob.cont
+    savz := ob.zloop
+    ob.brk <- out + 1
+    ob.cont <- top + 1
+    ob.zloop <- ob.zdepth
+    emit_ins(ob, O_LABEL, top, 0, 0, 0)
+    gen_block(pg, ob, mi, kid1(cx, kid1(cx, n)))
+    emit_ins(ob, O_JMP, top, 0, 0, 0)
+    emit_ins(ob, O_LABEL, out, 0, 0, 0)
+    ob.brk <- savb
+    ob.cont <- savc
+    ob.zloop <- savz
+end
+
+proc gen_zone(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `zone z SIZE ... end`: the triple lives in the frame, `zone.new` fills
+    -- it from the operating system and `zone.end` gives it back. What is not
+    -- lowered yet is every other source of §4 — `at ADDR`, `from` a parent
+    -- zone or a buffer, and a zone opened inside another one.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    if nd.sub != 0
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    if ob.zdepth > 0
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    s := slot_of_local(pg, tok_text(cx, nd.t0))
+    if s < 0
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    a := emit_ins(ob, O_FADDR, u64.bits(s) * LOC_WORDS, 0, 0, 0)
+    sz := gen_expr(pg, ob, mi, kid1(cx, n), "uword")
+    zn := emit_ins(ob, O_ZNEW, a, sz, 0, 0)
+    zi := ins_at(ob, zn)
+    zi.site <- trap_static(pg, ob, mi, TK_ZONE, n) + 1
+    ob.zdepth <- ob.zdepth + 1
+    k : u64 <- kid1(cx, n)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_BODY
+            gen_block(pg, ob, mi, kid1(cx, k))
+            k <- 0
+        else
+            k <- sibling(cx, k)
+        end
+    end
+    ob.zdepth <- ob.zdepth - 1
+    emit_ins(ob, O_ZEND, a, 0, 0, 0)
+end
+
+proc gen_each(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `each x in v`: a loop over a counter the loop owns, with the element
+    -- access checked like any other. The check is emitted rather than left
+    -- out, because a check is an instruction (OIR_SPEC §2.2) and leaves only
+    -- with a proof: the loop-bound proof of §5 is what removes it, in
+    -- `compiler/opt.oli`. The counter is a place, which `mem2reg` turns into
+    -- the phi §5 shows at the head of the loop.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    it := kid1(cx, n)
+    itn := node_at(cx, it)
+    if itn.kind == N_RANGE
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    bt := ety(pg, mi, it, b[0..0])
+    if is_view_type(bt) == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    sz := elem_bytes(pg, ob, mi, bt, n)
+    et := elem_of(bt)
+    sg : u64 <- 0
+    if int_signed(et) == 1
+        sg <- 1
+    end
+    a := gen_expr(pg, ob, mi, it, b[0..0])
+    ln := ob.lastlen
+    t := new_tmp(ob)
+    z := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    emit_ins(ob, O_STORE, t, z, 0, 0)
+    top := new_label(ob)
+    out := new_label(ob)
+    savb := ob.brk
+    savc := ob.cont
+    savz := ob.zloop
+    cont := new_label(ob)
+    ob.brk <- out + 1
+    ob.cont <- cont + 1
+    ob.zloop <- ob.zdepth
+    emit_ins(ob, O_LABEL, top, 0, 0, 0)
+    i := emit_ins(ob, O_LOAD, t, 0, 0, 0)
+    c := emit_bin(ob, B_LT, i, ln, 0)
+    emit_ins(ob, O_BRANCH, c, 0, 0, out)
+    ck := emit_ins(ob, O_CHKB, i, ln, 0, 0)
+    ci := ins_at(ob, ck)
+    ci.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+    p := addr_add(ob, a, scale_by(ob, i, sz))
+    e := emit_ins(ob, O_RLOAD, p, sz, sg, 0)
+    ob.lastlen <- 0
+    gen_store_local(pg, ob, mi, tok_text(cx, nd.t0), e)
+    gen_block(pg, ob, mi, kid1(cx, kid2(cx, n)))
+    emit_ins(ob, O_LABEL, cont, 0, 0, 0)
+    i2 := emit_ins(ob, O_LOAD, t, 0, 0, 0)
+    one := emit_ins(ob, O_CONST, 0, 0, 0, 1)
+    nx := emit_bin(ob, B_ADD, i2, one, 0)
+    emit_ins(ob, O_STORE, t, nx, 0, 0)
+    emit_ins(ob, O_JMP, top, 0, 0, 0)
+    emit_ins(ob, O_LABEL, out, 0, 0, 0)
+    ob.brk <- savb
+    ob.cont <- savc
+    ob.zloop <- savz
+end
+
+proc gen_stmt(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    nd := node_at(cx, n)
+    k := nd.kind
+    pg.curstmt <- n
+    if k == N_BIND
+        gen_bind(pg, ob, mi, n)
+        ret
+    end
+    if k == N_PLACE
+        gen_place(pg, ob, mi, n)
+        ret
+    end
+    if k == N_STORE
+        gen_store(pg, ob, mi, n)
+        ret
+    end
+    if k == N_EXPR
+        gen_expr(pg, ob, mi, kid1(cx, n), b[0..0])
+        ret
+    end
+    if k == N_RET
+        gen_ret(pg, ob, mi, n)
+        ret
+    end
+    if k == N_IF
+        gen_if(pg, ob, mi, n)
+        ret
+    end
+    if k == N_IFTHEN
+        gen_ifthen(pg, ob, mi, n)
+        ret
+    end
+    if k == N_WHILE
+        gen_while(pg, ob, mi, n)
+        ret
+    end
+    if k == N_LOOP
+        gen_loop(pg, ob, mi, n)
+        ret
+    end
+    if k == N_EACH
+        gen_each(pg, ob, mi, n)
+        ret
+    end
+    if k == N_FAIL
+        if leaves_zone_ret(ob) == 1
+            oir_err(ob, pg, mi, 900, n)
+            ret
+        end
+        gen_fail(pg, ob, mi, n)
+        ret
+    end
+    if k == N_CASE
+        gen_case(pg, ob, mi, n)
+        ret
+    end
+    if k == N_ZONE
+        gen_zone(pg, ob, mi, n)
+        ret
+    end
+    if k == N_BREAK
+        if ob.brk == 0
+            oir_err(ob, pg, mi, 900, n)
+            ret
+        end
+        if leaves_zone(ob) == 1
+            oir_err(ob, pg, mi, 900, n)
+            ret
+        end
+        emit_ins(ob, O_JMP, ob.brk - 1, 0, 0, 0)
+        ret
+    end
+    if k == N_CONTINUE
+        if ob.cont == 0
+            oir_err(ob, pg, mi, 900, n)
+            ret
+        end
+        if leaves_zone(ob) == 1
+            oir_err(ob, pg, mi, 900, n)
+            ret
+        end
+        emit_ins(ob, O_JMP, ob.cont - 1, 0, 0, 0)
+        ret
+    end
+    if k == N_BODY
+        gen_block(pg, ob, mi, kid1(cx, n))
+        ret
+    end
+    oir_err(ob, pg, mi, 900, n)
+end
+
+proc leaves_zone(ob: ref Oir) -> word
+    -- A jump out of a loop that was entered outside the zone would skip the
+    -- `zone.end` that releases it. Releasing on every exit edge is what the
+    -- construct needs and does not have yet, so the jump is refused instead.
+    if ob.zdepth > ob.zloop
+        ret 1
+    end
+    ret 0
+end
+
+proc gen_block(pg: rw ref Prog, ob: rw ref Oir, mi: u64, first: u64)
+    cx := mod_ctx(pg, mi)
+    s : u64 <- first
+    while s != 0
+        gen_stmt(pg, ob, mi, s)
+        s <- sibling(cx, s)
+    end
+end
+
+-- Procedures ------------------------------------------------------------------
+
+proc count_locals(pg: ref Prog) -> u64
+    ret pg.nloc - pg.locbase
+end
+
+proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
+    -- Parameters are values (OIR_SPEC §3), stored into the places the body
+    -- reads. A view is two words and so two `param` values. Each carries the
+    -- location it arrives in, placed by the same rule the caller used, so
+    -- the two sides agree by construction. `mem2reg` promotes the places back
+    -- to values wherever it can, which is why this is not an optimization
+    -- being undone: it is the one form in which a parameter can be reassigned.
+    b := pg.sbuf
+    regs : u64 <- 0
+    stk : u64 <- 0
+    i : u64 <- pg.locbase
+    while i < pg.nloc
+        l := loc_at(pg, i)
+        if l.kind == L_PARAM
+            s := i - pg.locbase
+            words : u64 <- 1
+            if is_view_type(b[l.t0..l.t1]) == 1
+                words <- 2
+            end
+            loc : u64 <- 0
+            if regs + words <= 6
+                loc <- regs
+                regs <- regs + words
+            else
+                loc <- 6 + stk
+                stk <- stk + words
+            end
+            pv := emit_ins(ob, O_PARAM, loc, 0, 0, 0)
+            emit_ins(ob, O_STORE, s * LOC_WORDS, pv, 0, 0)
+            if words == 2
+                pv2 := emit_ins(ob, O_PARAM, loc + 1, 0, 0, 0)
+                emit_ins(ob, O_STORE, s * LOC_WORDS + 1, pv2, 0, 0)
+            end
+        end
+        i <- i + 1
+    end
+end
+
+proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
+    v := proc_at(pg, pi)
+    mi := v.mod
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, v.node)
+    collect_locals(pg, mi, v.node)
+    pg.sbase <- pg.soff
+    pg.curproc <- pi
+    op := oproc_at(ob, ob.nproc)
+    op.pi <- pi
+    op.mi <- mi
+    op.first <- ob.nins
+    op.nloc <- count_locals(pg)
+    op.isentry <- 0
+    op.codepos <- 0
+    op.bfirst <- 0
+    op.nblk <- 0
+    op.nphi <- 0
+    ob.curloc <- op.nloc
+    ob.curtmp <- 0
+    if v.node == pg.entrynode
+        if mi == pg.entrymod
+            op.isentry <- 1
+            ob.entryp <- ob.nproc
+        end
+    end
+    ob.curp <- ob.nproc
+    ob.brk <- 0
+    ob.cont <- 0
+    gen_params(pg, ob, v.node)
+    params := kid1(cx, v.node)
+    k : u64 <- sibling(cx, params)
+    if nd.val == 1
+        k <- sibling(cx, k)
+    end
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_BODY
+            gen_block(pg, ob, mi, kid1(cx, k))
+            k <- 0
+        else
+            k <- sibling(cx, k)
+        end
+    end
+    -- Every block ends in a terminator, so a body that can fall off its end
+    -- gets the `ret` the machine would have executed anyway.
+    need : u64 <- 1
+    if ob.nins > op.first
+        tail := ins_at(ob, ob.nins - 1)
+        if tail.op == O_RET
+            need <- 0
+        end
+    end
+    if need == 1
+        emit_ins(ob, O_RET, 0, 0, 0, 0)
+    end
+    op2 := oproc_at(ob, ob.nproc)
+    op2.n <- ob.nins - op2.first
+    op2.nval <- op2.n
+    op2.ntmp <- ob.curtmp
+    build_blocks(ob, ob.nproc)
+    ob.nproc <- ob.nproc + 1
+end
+
+proc build_oir(pg: rw ref Prog, ob: rw ref Oir)
+    q : u64 <- 0
+    while q < pg.nproc
+        gen_proc(pg, ob, q)
+        q <- q + 1
+    end
+end
+
+-- `--show-oir` -----------------------------------------------------------------
+
+proc oir_op_name(op: u64) -> view u8
+    if op == O_CONST
+        ret "const"
+    end
+    if op == O_SADDR
+        ret "addr.of static"
+    end
+    if op == O_SLEN
+        ret "len.of static"
+    end
+    if op == O_LOAD
+        ret "load frame"
+    end
+    if op == O_STORE
+        ret "store frame"
+    end
+    if op == O_BIN
+        ret "bin"
+    end
+    if op == O_UN
+        ret "un"
+    end
+    if op == O_TRUNC
+        ret "trunc"
+    end
+    if op == O_ARG
+        ret "arg"
+    end
+    if op == O_CALL
+        ret "call"
+    end
+    if op == O_SYSCALL
+        ret "syscall"
+    end
+    if op == O_RET
+        ret "ret"
+    end
+    if op == O_LABEL
+        ret "label"
+    end
+    if op == O_JMP
+        ret "jump"
+    end
+    if op == O_BRANCH
+        ret "branch"
+    end
+    if op == O_PARAM
+        ret "param"
+    end
+    if op == O_TRAP
+        ret "trap"
+    end
+    if op == O_FADDR
+        ret "addr.of frame"
+    end
+    if op == O_RLOAD
+        ret "raw.load"
+    end
+    if op == O_RSTORE
+        ret "raw.store"
+    end
+    if op == O_CHKB
+        ret "check.bounds"
+    end
+    if op == O_CHKR
+        ret "check.range"
+    end
+    if op == O_ZNEW
+        ret "zone.new"
+    end
+    if op == O_ZEND
+        ret "zone.end"
+    end
+    if op == O_ZALLOC
+        ret "zone.alloc"
+    end
+    if op == O_RDX
+        ret "call.len"
+    end
+    if op == O_CHKA
+        ret "check.align"
+    end
+    if op == O_DEAD
+        ret "dead"
+    end
+    ret "phi"
+end
+
+proc oir_bin_name(c: u64) -> view u8
+    if c == B_ADD
+        ret "add"
+    end
+    if c == B_SUB
+        ret "sub"
+    end
+    if c == B_MUL
+        ret "mul"
+    end
+    if c == B_DIV
+        ret "div"
+    end
+    if c == B_REM
+        ret "rem"
+    end
+    if c == B_AND
+        ret "and"
+    end
+    if c == B_OR
+        ret "or"
+    end
+    if c == B_XOR
+        ret "xor"
+    end
+    if c == B_SHL
+        ret "shl"
+    end
+    if c == B_SHR
+        ret "shr"
+    end
+    if c == B_EQ
+        ret "cmp.eq"
+    end
+    if c == B_NE
+        ret "cmp.ne"
+    end
+    if c == B_LT
+        ret "cmp.lt"
+    end
+    if c == B_LE
+        ret "cmp.le"
+    end
+    if c == B_GT
+        ret "cmp.gt"
+    end
+    ret "cmp.ge"
+end
+
+proc oir_un_name(c: u64) -> view u8
+    if c == U1_NEG
+        ret "neg"
+    end
+    if c == U1_BNOT
+        ret "not.bits"
+    end
+    ret "not"
+end
+
+proc pv(ob: ref Oir, pg: ref Prog, v: u64)
+    -- Values are numbered from the start of their procedure, like the blocks:
+    -- the same procedure prints the same names whatever precedes it, and a
+    -- rebuilt stream does not renumber the whole program.
+    op := oproc_at(ob, ob.curp)
+    put(1, "%")
+    put_uint(1, pg.tmp, v - op.first)
+end
+
+proc print_oir(pg: ref Prog, ob: rw ref Oir)
+    tmp := pg.tmp
+    put(1, "(oir")
+    s : u64 <- 0
+    while s < ob.nstat
+        st := stat_at(ob, s)
+        put(1, "\n  (static ")
+        put_uint(1, tmp, s)
+        if st.dead == 1
+            put(1, " removed)")
+        else
+            put(1, " len=")
+            put_uint(1, tmp, st.len)
+            put(1, ")")
+        end
+        s <- s + 1
+    end
+    q : u64 <- 0
+    while q < ob.nproc
+        print_oproc(pg, ob, q)
+        q <- q + 1
+    end
+    put(1, ")\n")
+end
+
+proc pbb(ob: ref Oir, pg: ref Prog, b: u64)
+    -- Blocks are numbered from the start of their procedure, so the same
+    -- program prints the same names whatever precedes it.
+    op := oproc_at(ob, ob.curp)
+    put(1, "bb")
+    put_uint(1, pg.tmp, b - op.bfirst)
+end
+
+proc print_oproc(pg: ref Prog, ob: rw ref Oir, q: u64)
+    tmp := pg.tmp
+    op := oproc_at(ob, q)
+    v := proc_at(pg, op.pi)
+    cx := mod_ctx(pg, v.mod)
+    nd := node_at(cx, v.node)
+    ob.curp <- q
+    put(1, "\n  (proc ")
+    put(1, tok_text(cx, nd.t0))
+    put(1, " locals=")
+    put_uint(1, tmp, op.nloc)
+    if op.ntmp > 0
+        put(1, " temps=")
+        put_uint(1, tmp, op.ntmp)
+    end
+    if op.isentry == 1
+        put(1, " entry")
+    end
+    b : u64 <- op.bfirst
+    last := op.bfirst + op.nblk
+    while b < last
+        if live_blk(ob, b) == 1
+            print_blk(pg, ob, b)
+        end
+        b <- b + 1
+    end
+    put(1, ")")
+end
+
+proc print_blk(pg: ref Prog, ob: ref Oir, b: u64)
+    bk := blk_at(ob, b)
+    put(1, "\n    (")
+    pbb(ob, pg, b)
+    if bk.npred > 0
+        put(1, " preds")
+        k : u64 <- 0
+        while k < bk.npred
+            put(1, " ")
+            pbb(ob, pg, cell_get(ob.preds, bk.pfirst + k))
+            k <- k + 1
+        end
+    end
+    i : u64 <- bk.first
+    last := bk.first + bk.n
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op != O_DEAD
+            put(1, "\n      ")
+            print_ins(pg, ob, i)
+        end
+        print_proofs(pg, ob, i)
+        i <- i + 1
+    end
+    put(1, "\n      ")
+    print_term(pg, ob, b)
+    put(1, ")")
+end
+
+proc print_proofs(pg: ref Prog, ob: ref Oir, i: u64)
+    -- A check that went, written where it stood, with the proof that let it
+    -- (OIR_SPEC §5 prints a removal exactly this way).
+    k : u64 <- 0
+    while k < ob.nproof
+        pr := proof_at(ob, k)
+        if pr.ins == i
+            put(1, "\n      ; check.")
+            put(1, trap_kind_name(pr.kind))
+            put(1, " ")
+            pv(ob, pg, pr.val)
+            put(1, " -- removed: proof(")
+            put(1, proof_name(pr.why))
+            put(1, ")")
+        end
+        k <- k + 1
+    end
+end
+
+proc proof_name(why: u64) -> view u8
+    if why == PR_CONST
+        ret "constant"
+    end
+    if why == PR_DIVISOR
+        ret "divisor"
+    end
+    if why == PR_LOOP
+        ret "loop-bound"
+    end
+    ret "unreachable"
+end
+
+proc print_term(pg: ref Prog, ob: ref Oir, b: u64)
+    bk := blk_at(ob, b)
+    if bk.top == O_JMP
+        put(1, "jump ")
+        pbb(ob, pg, bk.ta)
+        ret
+    end
+    if bk.top == O_BRANCH
+        put(1, "branch ")
+        pv(ob, pg, bk.ta)
+        put(1, ", ")
+        pbb(ob, pg, bk.tb)
+        put(1, ", ")
+        pbb(ob, pg, bk.tc)
+        ret
+    end
+    put(1, "ret")
+    if bk.tc > 0
+        put(1, " ")
+        pv(ob, pg, bk.ta)
+    end
+    if bk.tc == 2
+        -- A pair: the address and length of a view, or the tag and payload
+        -- of a `T or E`.
+        put(1, ", ")
+        pv(ob, pg, bk.tb)
+    end
+end
+
+proc print_checks(pg: ref Prog, ob: ref Oir, i: u64)
+    -- The checks a trapping operation carries, printed as the separate
+    -- instructions OIR_SPEC §4 names them. A divide carries its zero check on
+    -- the divisor; only `/` also carries the MIN/-1 check, because `%` has the
+    -- answer 0 there and does not trap (design 0006).
+    ins := ins_at(ob, i)
+    if ins.op == O_BIN
+        if is_divide(ins.bop) == 1
+            if ins.site > 0
+                put(1, "\n      check.div_zero ")
+                pv(ob, pg, ins.b)
+            end
+            if ins.site2 > 0
+                put(1, "\n      check.overflow ")
+                pv(ob, pg, i)
+            end
+            ret
+        end
+    end
+    if ins.site > 0
+        put(1, "\n      check.overflow ")
+        pv(ob, pg, i)
+    end
+end
+
+proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
+    tmp := pg.tmp
+    ins := ins_at(ob, i)
+    op := ins.op
+    if op == O_STORE
+        put(1, "store frame.")
+        put_uint(1, tmp, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_ARG
+        if ins.b >= 6
+            put(1, "arg.stack.")
+            put_uint(1, tmp, ins.b - 6)
+            put(1, " ")
+        else
+            put(1, "arg ")
+        end
+        pv(ob, pg, ins.a)
+        ret
+    end
+    if op == O_RSTORE
+        put(1, "raw.store.")
+        put_uint(1, tmp, ins.c * 8)
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_CHKB
+        put(1, "check.bounds ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_CHKA
+        put(1, "check.align ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        put_uint(1, tmp, ins.b)
+        ret
+    end
+    if op == O_CHKR
+        put(1, "check.range ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        put(1, ", ")
+        pv(ob, pg, ins.val)
+        ret
+    end
+    if op == O_ZNEW
+        put(1, "zone.new ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_ZEND
+        put(1, "zone.end ")
+        pv(ob, pg, ins.a)
+        ret
+    end
+    pv(ob, pg, i)
+    put(1, " = ")
+    if op == O_CONST
+        put(1, "const ")
+        put_uint(1, tmp, ins.val)
+        ret
+    end
+    if op == O_SADDR
+        put(1, "addr.of static.")
+        put_uint(1, tmp, ins.a)
+        ret
+    end
+    if op == O_SLEN
+        put(1, "len.of static.")
+        put_uint(1, tmp, ins.a)
+        ret
+    end
+    if op == O_LOAD
+        put(1, "load frame.")
+        put_uint(1, tmp, ins.a)
+        ret
+    end
+    if op == O_BIN
+        put(1, oir_bin_name(ins.bop))
+        if ins.c == 1
+            put(1, ".s")
+        end
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        print_checks(pg, ob, i)
+        ret
+    end
+    if op == O_UN
+        put(1, oir_un_name(ins.bop))
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        print_checks(pg, ob, i)
+        ret
+    end
+    if op == O_TRUNC
+        put(1, "trunc.")
+        put_uint(1, tmp, ins.b)
+        if ins.c == 1
+            put(1, ".s")
+        end
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        ret
+    end
+    if op == O_CALL
+        v := proc_at(pg, ins.a)
+        cx := mod_ctx(pg, v.mod)
+        nd := node_at(cx, v.node)
+        put(1, "call ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, "/")
+        put_uint(1, tmp, ins.b)
+        ret
+    end
+    if op == O_SYSCALL
+        put(1, "syscall/")
+        put_uint(1, tmp, ins.b)
+        ret
+    end
+    if op == O_TRAP
+        -- The operation folded to the trap it always took (§6): its operands
+        -- were constants and the answer was one the type cannot hold. It
+        -- keeps the index the operation had, because the operands that named
+        -- it still do; nothing reads what it leaves, as it does not return.
+        put(1, "trap ")
+        put(1, trap_kind_name(ins.c))
+        ret
+    end
+    if op == O_PARAM
+        if ins.a >= 6
+            put(1, "param stack.")
+            put_uint(1, tmp, ins.a - 6)
+        else
+            put(1, "param ")
+            put_uint(1, tmp, ins.a)
+        end
+        ret
+    end
+    if op == O_FADDR
+        put(1, "addr.of frame.")
+        put_uint(1, tmp, ins.a)
+        ret
+    end
+    if op == O_RLOAD
+        put(1, "raw.load.")
+        put_uint(1, tmp, ins.b * 8)
+        if ins.c == 1
+            put(1, ".s")
+        end
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        ret
+    end
+    if op == O_ZALLOC
+        put(1, "zone.alloc ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        if ins.c > 16
+            put(1, " align=")
+            put_uint(1, tmp, ins.c)
+        end
+        ret
+    end
+    if op == O_RDX
+        if ins.c == 1
+            put(1, "call.payload")
+        else
+            put(1, "call.len")
+        end
+        ret
+    end
+    if op == O_PHI
+        put(1, "phi")
+        k : u64 <- 0
+        while k < ins.b
+            pa := phiarg_at(ob, ins.a + k)
+            put(1, " [")
+            pbb(ob, pg, pa.blk)
+            put(1, " ")
+            pv(ob, pg, pa.val)
+            put(1, "]")
+            k <- k + 1
+        end
+        ret
+    end
+    put(1, oir_op_name(op))
+end

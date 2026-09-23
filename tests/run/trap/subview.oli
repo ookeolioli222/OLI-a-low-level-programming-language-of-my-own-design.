@@ -1,0 +1,14 @@
+module trap_subview
+-- A subview whose high bound is past the end of the view: one check covers
+-- `a <= b <= len`, and this fails the second half.
+-- expect: trap: bounds at stdin:9
+proc start -> s32
+    entry
+    v := "abc"
+    k : uword <- 9
+    s := v[1..k]
+    if s.len == 0
+        ret 1
+    end
+    ret 0
+end

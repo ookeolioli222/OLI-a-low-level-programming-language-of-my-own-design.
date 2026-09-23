@@ -7,6 +7,10 @@ own intermediate representation (OIR), own x86-64 encoder and own ELF64 writer
 hand-written machine code and then written in Oli-- itself. No Rust, C or
 C++ in the toolchain. No LLVM, GCC, `as` or `ld`. No runtime, no libc.
 
+**GitHub guide:** [`GITHUB.md`](GITHUB.md) is the single entry point that
+collects the project's status, setup instructions, language overview,
+architecture, specifications, roadmap and links to the complete documentation.
+
 ## Guiding question
 
 > If C, C++ and Rust had never existed, but we knew modern CPUs, RAM and
@@ -34,7 +38,17 @@ diagnostics of all fifteen negative parse fixtures and all fifteen negative
 semantic fixtures (`docs/design/0022`). Genesis step 6f then added explicit
 conversions (`T(x)`, `T.wrap(x)`, `T.bits(x)`) to oli-core and closed the last
 measured gap: `compiler/` is written in oli-core **and** satisfies every V0
-rule `olic` implements, with nothing gated.**
+rule `olic` implements, with nothing gated. Three stages of the back end now
+follow: `olic` builds OIR, cuts it into basic blocks, promotes every place to
+a value with phi nodes, folds what is constant and removes what is dead —
+never a check without recording the proof that allowed it — verifies the
+result against `OIR_SPEC` §8, lowers it to x86-64 and writes an ELF64, so
+`olic < examples/hello.oli > hello && ./hello` prints `Hello Oli--` from a
+284-byte static binary with no libc and no linker — **M1**. Arithmetic traps
+on overflow as the language says it does (`trap: overflow at stdin:7`, exit
+134); `wrap(e)` turns the trap off. Anything the back end cannot lower yet —
+`choice`, `machine` blocks, statics, `[N]T` places — is `E0900` and
+writes no file.**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -44,9 +58,9 @@ rule `olic` implements, with nothing gated.**
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
 | G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6f done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`), module constants, typed places, `rw` field types, `loop` and explicit conversions (`T(x)`, `T.wrap(x)`, `T.bits(x)`) |
-| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all fifteen `tests/sema/err` fixtures exact**); **`olic` analyses its own source without a single diagnostic, and that source is now valid V0 with no gated rule left**; reproduces every AST **and every semantic** snapshot byte for byte; OIR, x64 lowering and ELF next; fixpoint `stage2 == stage3` | **in progress** |
-| M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | not started |
-| M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | not started |
+| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all fifteen `tests/sema/err` fixtures exact**), plus back-end stages 1-3: the OIR instruction stream, **basic blocks, dominators and the `OIR_SPEC` §8 verifier**, **`mem2reg` with phi nodes placed by iterated dominance frontier**, **the passes of §6 — constant folding, check elision with a proof recorded for every removal, copy propagation and dead code** (`--show-oir`, `--show-ssa` and `--show-oir=opt`, nine snapshots), x86-64 lowering with trapping arithmetic, **zones, views, `each`, layouts, refs and fallible results** with `bounds`, `misaligned` and `zone_exhausted` traps, and the ELF64 writer; **`olic` analyses all seventeen of its own modules without a single diagnostic**; reproduces every AST **and every semantic** snapshot byte for byte; register allocation, common-subexpression elimination and the fixpoint `stage2 == stage3` remain | **in progress** |
+| M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | **done** (layer 5 of `genesis/test.sh`) |
+| M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | variables, trapping arithmetic, `wrap`, control flow, procedures, zones, views, `each`, layouts and refs run |
 | M3 | Freestanding binary with own entry point and own stack | not started |
 | M4 | Minimal kernel written in Oli-- | not started |
 
@@ -70,11 +84,16 @@ genesis/build/fib.elf; echo $?           # 55 - an oli-core program compiled by 
 genesis/build/show_tokens < examples/hello.oli    # the front end of olic, built by oli1
 genesis/build/show_ast    < examples/hello.oli
 genesis/build/show_sema   < examples/hello.oli    # the full semantic graph
+genesis/build/show_oir    < examples/hello.oli    # the OIR the back end lowers
+
+genesis/build/olic < examples/hello.oli > genesis/build/hello2.elf
+chmod +x genesis/build/hello2.elf
+genesis/build/hello2.elf                 # Hello Oli-- - high-level Oli--, compiled by olic
 ```
 
-This example uses the genesis machine sub-language. The high-level
-`examples/hello.oli`, self-hosting, kernel and ecosystem libraries are still
-future milestones. See [verified status and completion gates](docs/PROJECT_STATUS.md)
+The first example uses the genesis machine sub-language; the last compiles the
+high-level `examples/hello.oli` with `olic` itself. Self-hosting, the kernel
+and the ecosystem libraries are still future milestones. See [verified status and completion gates](docs/PROJECT_STATUS.md)
 and [the exact assembler subset](genesis/2-asm/SPEC.md#9-implementation-status-genesis2-asmasmhex2).
 
 ## Document map

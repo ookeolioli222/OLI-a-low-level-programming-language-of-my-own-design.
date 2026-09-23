@@ -1,0 +1,14 @@
+module trap_div_min
+-- The one signed quotient with no representation. `word.bits` is how the most
+-- negative value is written: `0 - 9223372036854775808` would trap on the
+-- negation itself.
+-- expect: trap: overflow at stdin:10
+proc start -> s32
+    entry
+    a : word <- word.bits(9223372036854775808)
+    b : word <- 0 - 1
+    if a / b > 0
+        ret 1
+    end
+    ret 0
+end

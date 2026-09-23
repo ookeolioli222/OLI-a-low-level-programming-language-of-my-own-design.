@@ -11,7 +11,7 @@ Status marks used throughout:
 | Mark | Meaning |
 |------|---------|
 | **[runs]** | implemented and covered by `sh genesis/test.sh` today |
-| **[parses]** | the front end accepts and analyses it; no code is generated yet |
+| **[parses]** | the front end accepts and analyses it; the back end reports `E0900` and generates no code |
 | **[planned]** | specified, not implemented |
 
 ---
@@ -116,31 +116,66 @@ On a rejected program `oli1` writes `oli1: error at line N` on stderr, exits 2
 and produces no output. A program that traps at run time (bounds, alignment,
 zone exhausted) prints `oli: trap` and exits 3.
 
-### 3.3 Inspect the front end **[runs]**
+### 3.3 Inspect the compiler **[runs]**
 
 ```bash
 genesis/build/show_tokens < examples/hello.oli   # one token per line
 genesis/build/show_ast    < examples/hello.oli   # the syntax tree
 genesis/build/show_sema   < examples/hello.oli   # the semantic graph, typed
+genesis/build/show_oir    < examples/hello.oli   # the OIR in blocks
+genesis/build/show_ssa    < examples/hello.oli   # the same, after mem2reg
+genesis/build/show_opt    < examples/hello.oli   # and after the OIR passes
 ```
 
 Each writes its result on stdout and diagnostics on stderr, and exits 1 if it
-reported any. `show_sema` resolves `import` by reading `lib/<path>.oli`, so
+reported any. `show_oir` and `show_ssa` verify the OIR against
+`docs/OIR_SPEC.md` §8 before printing it and exit 4 if it fails, which would
+be a defect in the compiler rather than in the program.
+
+`bin/olic` is the same compiler as a command — `olic f.oli`, `olic --check
+f.oli`, `olic --show-opt f.oli` — for the PATH; in VS Code,
+`.vscode/tasks.json` runs it on the current file and `tools/vscode-oli/` is
+a grammar for highlighting. `tools/vscode-oli/README.md` is the step by
+step guide. All of it is a convenience outside the toolchain. `show_sema` resolves `import` by reading `lib/<path>.oli`, so
 run it from the repository root.
 
 Token lines are `LINE:COL kind [value] [text]`; the tree is the S-expression
 format of `tests/snapshots/*.ast`; the semantic graph is
 `tests/snapshots/*.sema` exactly — every expression with its type, and with
-its region when the value may point into a parameter's memory or a zone.
+its region when the value may point into a parameter's memory or a zone; the
+OIR is `tests/snapshots/*.oir` exactly — one instruction per value, in
+evaluation order, with `check.overflow` and `check.div_zero` where plain
+arithmetic traps.
 
-### 3.4 Assemble a `machine x64` program **[runs]**
+### 3.4 Compile a high-level program **[runs]**
+
+```bash
+genesis/build/olic < examples/hello.oli > /tmp/hello
+chmod +x /tmp/hello && /tmp/hello       # Hello Oli--
+```
+
+`olic` reads the source on stdin and writes a static ELF64 on stdout — its own
+encoder, its own ELF writer, no linker and no libc. It writes nothing unless
+the whole pipeline agreed on the program: a front-end diagnostic or an `E0900`
+from the back end stops it with exit 1.
+
+The back end lowers procedures with SysV parameters and a result, integers,
+characters, `true`/`false`, module constants, string literals, locals,
+`.addr`/`.len`, the arithmetic, bit, shift and comparison operators,
+`-`/`~`/`not`, the short-circuiting `and`/`or`, `wrap(e)`, the explicit
+conversions, `if`/`elif`/`else`, `while`, `loop`, `break`, `continue`, calls
+and `os.syscall`. Everything else — zones, views beyond a string's two words,
+layouts, refs, raw memory, fallible results, `each`, `case`, `sat(e)`,
+`checked(e)` and `machine` blocks — is `E0900`: refused, never approximated.
+
+### 3.5 Assemble a `machine x64` program **[runs]**
 
 ```bash
 genesis/build/asm.bin < examples/genesis/hello.oli > /tmp/h.elf
 chmod +x /tmp/h.elf && /tmp/h.elf      # Hello Oli--
 ```
 
-### 3.5 The commands that do not exist yet **[planned]**
+### 3.6 The commands that do not exist yet **[planned]**
 
 `olic` as a single binary with flags, and the project tool `oli`, are specified
 in `docs/COMMANDS.md` but not implemented; today each front-end stage is its own
@@ -150,8 +185,8 @@ command line yet.
 | Planned command | Meaning |
 |-----------------|---------|
 | `olic file.oli` | compile to a native ELF — own encoder, own ELF writer, no linker |
-| `olic --show-tokens/--show-ast/--show-sema` | the three front-end dumps (all three exist as drivers, one per stage, reading stdin) |
-| `olic --show-oir/--show-machine-ir/--show-asm/--show-bytes` | back-end dumps |
+| `olic --show-tokens/--show-ast/--show-sema/--show-oir/--show-ssa/--show-oir=opt` | the six dumps (all six exist as drivers, one per stage, reading stdin) |
+| `olic --show-machine-ir/--show-asm/--show-bytes` | the remaining back-end dumps |
 | `olic --check` / `--check-syntax` | analyse / parse only |
 | `olic --freestanding` | no OS: own entry point, own stack |
 | `olic --lib DIR` | where to find imported modules (today: always `lib/`) |
@@ -417,8 +452,8 @@ parameters. The name `main` has no special meaning.
 | `fail` | `fail` or `fail expr`, only in a `-> T or E` procedure | **[runs]** |
 | `if` | `if c` … `elif c` … `else` … `end`, or one line: `if c then stmt` | **[runs]** |
 | `while` | `while c` … `end` | **[runs]** |
-| `each` | `each x in v` … `end` over a view, an array place or a range | **[parses]** |
-| `loop` | `loop` … `end`, left only by `break`, `ret`, `fail` or a `never` call | **[parses]** |
+| `each` | `each x in v` … `end` over a view **[runs]**; over an array place or a range **[parses]** | **[runs]** |
+| `loop` | `loop` … `end`, left only by `break`, `ret`, `fail` or a `never` call | **[runs]** |
 | `break` / `continue` | innermost loop only | **[runs]** |
 | `case` | `case e` … `when p` … `else` … `end`, exhaustive | **[runs]** for `ok`/`fail` |
 | `zone` | `zone z SIZE [at a] [from s]` … `end` | **[runs]** |
@@ -486,9 +521,14 @@ Members: `v.addr`, `v.len` on a view; `r.field` on a ref or a layout place;
 `Name.size`, `Name.align`, `Name.at(v)` on a layout; `z.bytes(n)`,
 `z.try_bytes(n)`, `z.make(T)` on a zone.
 
-Arithmetic modes: `wrap(e)`, `sat(e)`, `checked(e)` — `checked` yields a
-fallible value that must be resolved. Overflow is otherwise a trap
-(`docs/design/0006-overflow-and-bounds.md`).
+Arithmetic modes: `wrap(e)` **[runs]**, `sat(e)` **[parses]**, `checked(e)`
+**[parses]** — `checked` yields a fallible value that must be resolved.
+Overflow is otherwise a trap (`docs/design/0006-overflow-and-bounds.md`): a
+program built by `olic` writes `trap: overflow at <module>:<line>` on fd 2 and
+exits 134. `wrap(e)` clears that trap for every operator inside `e` and keeps
+the width of the type, so the result is the value modulo 2^width. The two
+traps of division stay inside `wrap`, because neither a zero divisor nor the
+most negative value over -1 has a wrapped answer to name.
 
 ---
 
@@ -794,7 +834,8 @@ capability checks, then OIR, x86-64 lowering, the ELF writer, and the fixpoint
 | `examples/` | `hello.oli`, `packet_demo.oli`, `genesis/hello.oli` |
 | `tests/parse/ok,err` | programs that must parse, and programs with `-- expect: CODE @ L:C` |
 | `tests/sema/ok,err` | the same for semantic analysis |
-| `tests/snapshots/` | expected `--show-tokens`, `--show-ast` and `--show-sema` output |
+| `tests/run`, `tests/run/trap` | programs `olic` compiles and runs: a fixture exits 42, or writes its `.out` file and exits 0; a trap fixture prints its `-- expect:` line on fd 2 and exits 134 |
+| `tests/snapshots/` | expected `--show-tokens`, `--show-ast`, `--show-sema`, `--show-oir`, `--show-ssa` and `--show-oir=opt` output |
 | `spec/` | the normative V0 specification: syntax, semantics, memory |
 | `docs/` | design documents; `design/` holds the numbered decision records |
 | `docs/PROJECT_STATUS.md` | the verified baseline and the ordered completion gates |

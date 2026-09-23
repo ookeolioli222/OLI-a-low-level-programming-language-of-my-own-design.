@@ -1,0 +1,18 @@
+module trap_at_misaligned
+-- `Name.at` over a view whose address is not a multiple of the layout's
+-- alignment; `packed` would allow it, this layout is not.
+layout Word
+    v : u64
+end
+proc start -> s32
+    entry
+    zone z 4096
+        b := z.bytes(64)
+        w := Word.at(b[1..])
+        if w.v == 1
+            ret 1
+        end
+    end
+    ret 0
+end
+-- expect: trap: misaligned at stdin:11

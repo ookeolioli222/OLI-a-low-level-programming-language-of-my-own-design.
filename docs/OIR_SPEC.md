@@ -1,12 +1,55 @@
 # OIR — Oli Intermediate Representation
 
-> **Status (2026-09-22).** A design for the back end of G4. No OIR exists yet:
-> `olic` ends at the semantic graph, which `--show-sema` prints
-> (`compiler/SPEC.md`). Everything below — the instruction set, the passes, the
-> verifier and the `--show-oir` / `--show-machine-ir` / `--show-asm` flags — is
-> the plan for the next stage, not the state of the repository. The only code
-> generator that exists is `oli1`, which lowers oli-core straight to machine
-> bytes with no intermediate representation at all (`genesis/3-oli1/SPEC.md`).
+> **Status (2026-09-23).** Stage 4 of this document exists. `compiler/oir.oli`
+> builds the instruction stream, `compiler/cfg.oli` cuts it into the basic
+> blocks of §3 with one terminator each and computes predecessors, reverse
+> postorder and immediate dominators, and `compiler/ssa.oli` is `mem2reg`: it
+> promotes every place of a procedure to a value and puts a phi where two
+> definitions meet, placed by the iterated dominance frontier, so the form is
+> built minimal rather than built maximal and pruned. `--show-oir` prints the
+> blocks before any pass and `--show-ssa` prints them after `mem2reg`
+> (`tests/snapshots/*.oir` and `*.ssa`). The verifier of §8 runs on both, and
+> `compiler/verify_check.oli` is its negative test: ten hand-made corruptions,
+> each rejected with the invariant it breaks. `compiler/x64.oli` lowers the
+> blocks — a phi becomes parallel copies on the edges that reach it — and
+> `compiler/elf.oli` writes the executable, so `olic` compiles a program end to
+> end for the subset in `compiler/oir.oli`; anything outside it is `E0900`.
+> `compiler/opt.oli` then runs the passes of §6 to a fixpoint — constant
+> folding (including a branch on a constant, and an operation whose constant
+> answer its type cannot hold, which becomes the `trap` it always took), check
+> elision, copy propagation over phis, and dead code — and `--show-oir=opt`
+> prints the result with every removed check written where it stood and the
+> proof that allowed it. §8.7 is enforced as an identity: the checks that
+> stood before the passes equal the checks that stand after plus the proofs
+> recorded. Since stage 4 the stream also carries `addr.of frame`,
+> `raw.load`/`raw.store`, `check.bounds`/`check.range` and
+> `zone.new`/`zone.alloc`/`zone.end` and `check.align`, so zones, views,
+> `each` over a view, layouts and refs compile and run
+> (`tests/snapshots/memory.*`, `layouts.*`; `tests/run/memory.oli`,
+> `layouts.oli`), and `mem2reg` keeps the place an `addr.of frame` names, as
+> §2.1 says — `ref x` of a local is the first thing that takes one. A
+> `T or E` travels as the pair (tag, payload) of §2 — `ret`, `fail`, the
+> `else` handlers and `case` all read and write that pair, and a default joins
+> the ok path through a phi. Three
+> proofs remove checks today — `constant`, `divisor` and `loop-bound` (a
+> dominating branch on the same `cmp.lt`, which is the loop of `each` and of
+> `while i < v.len`) — and the dead-code pass also drops the statics nothing
+> names, so a proved-away trap leaves no message in the image.
+>
+> What does **not** exist yet: `zone.new` from a parent zone, a buffer or raw
+> memory (only the `os` source is lowered), `view.load`/`view.store` and
+> `ref.field`/`ref.load`/`ref.store` as instructions of their own (a view or
+> field access is its check plus address arithmetic and a raw access), the
+> `own`, choice, machine, hardware and intrinsic groups of §4, virtual
+> registers and the linear-scan allocator of §7, and the `--show-machine-ir`
+> / `--show-asm` flags. The lowering still
+> allocates nothing: each value owns a frame word. Constant folding answers
+> only inside a window of ±2^31 per operand, because oli-core compares and
+> divides signed; outside it the operation and its check both stay. The
+> proof §6 calls dominance by an equal check — two equal checked *operations*
+> — waits for common-subexpression elimination to make two exist. Invariants 3-6 and 8
+> of §8 are not checked because no construct that can break them is lowered
+> yet.
 
 OIR is the compiler's central data structure between the semantic graph and
 machine lowering. It is designed for Oli-- semantics — zones, views, memory
@@ -20,8 +63,8 @@ source (.oli)
   ↓  lexer                    --show-tokens
   ↓  parser → AST             --show-ast
   ↓  semantic graph           (names, types, regions, capabilities, definite assignment)
-  ↓  OIR                      --show-oir        (before passes: --show-oir=raw)
-  ↓  OIR passes               --show-oir=opt    (check elision, const fold, DCE, mem2reg, copy-prop)
+  ↓  OIR                      --show-oir        (blocks, before any pass)
+  ↓  OIR passes               --show-ssa (after mem2reg), --show-oir=opt (after all of §6)
   ↓  machine lowering → MIR-x64 (virtual registers, two-address form)   --show-machine-ir
   ↓  register allocation (linear scan)                                  --show-machine-ir=alloc
   ↓  x86-64 encoder → bytes                                             --show-asm, --show-bytes

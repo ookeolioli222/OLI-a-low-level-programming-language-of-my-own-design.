@@ -1,0 +1,50 @@
+module olic.main
+-- `olic`: the Oli-- compiler. Source on stdin, a native ELF64 on stdout.
+--
+-- Genesis drivers have no access to argv, so the root module is stdin and
+-- imports are resolved under `lib/`, exactly as the other drivers do
+-- (`compiler/load.oli`). Command-line handling arrives with the `oli` tool.
+--
+-- Anything the front end reports stops the compilation; anything the back end
+-- cannot lower is reported as `E0900` by `compiler/oir.oli` and stops it too,
+-- so a written file is always a file the whole pipeline agreed on.
+--
+-- Between them the OIR is cut into blocks, promoted to SSA by `mem2reg`, run
+-- through the passes of docs/OIR_SPEC.md §6 and verified against §8 after
+-- each. A verifier failure is a defect in the compiler, not in the program it
+-- was given, so it says so and exits 4.
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 201326592
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        if pg.nerr > 0
+            ret 1
+        end
+        ob := oir_new(z)
+        build_oir(pg, ob)
+        if pg.nerr > 0
+            ret 1
+        end
+        before := count_checks(ob)
+        build_ssa(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        optimize(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        if pg.entrynode == 0
+            put(2, "olic: no entry procedure\n")
+            ret 1
+        end
+        mc := mach_new(z)
+        lower_all(pg, ob, mc, BASE_ADDR + HDR_SIZE)
+        write_elf(ob, mc, z)
+        ret 0
+    end
+end

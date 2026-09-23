@@ -725,6 +725,16 @@ proc p_unary(cx: ref Ctx) -> u64
     if at_op(cx, OP_MINUS)
         i := tpos(cx)
         adv(cx)
+        if tkind(cx) == TK_INT
+            -- A minus in front of a literal is part of the literal, not an
+            -- operation on it. Only this makes the most negative value of a
+            -- signed type writable: `-128` fits `s8`, while negating the 128
+            -- it is written with does not, and would trap at run time.
+            li := p_int(cx)
+            ln := node_at(cx, li)
+            ln.sub <- 1
+            ret li
+        end
         n := mk(cx, N_UNOP, i)
         nd := node_at(cx, n)
         nd.sub <- U_NEG
@@ -772,8 +782,18 @@ proc p_unary(cx: ref Ctx) -> u64
         ret n5
     end
     if at_kw(cx, KW_RW)
+        -- `rw ref x`: the `rw` belongs to the reference it introduces and is
+        -- recorded on it (`val` = 1), so that the reference types as
+        -- writable. Anywhere else `rw` in an expression means nothing.
         adv(cx)
-        ret p_unary(cx)
+        n6 := p_unary(cx)
+        nd6 := node_at(cx, n6)
+        if nd6.kind == N_UNOP
+            if nd6.sub == U_REFOF
+                nd6.val <- 1
+            end
+        end
+        ret n6
     end
     ret p_postfix(cx)
 end
@@ -1017,9 +1037,16 @@ proc p_range(cx: ref Ctx) -> u64
     i := tpos(cx)
     adv(cx)
     n := mk(cx, N_RANGE, i)
+    -- `sub` says which bounds are present (1 low, 2 high), because a range
+    -- with one kid is `a..` or `..b` and the kid alone cannot say which.
+    nd := node_at(cx, n)
     add_kid(cx, n, lo)
+    if lo != 0
+        nd.sub <- 1
+    end
     if starts_expr(cx)
         add_kid(cx, n, p_or(cx))
+        nd.sub <- nd.sub + 2
     end
     ret n
 end

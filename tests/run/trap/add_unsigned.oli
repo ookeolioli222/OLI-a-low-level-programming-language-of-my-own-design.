@@ -1,0 +1,11 @@
+module trap_add_unsigned
+-- expect: trap: overflow at stdin:7
+proc start -> s32
+    entry
+    a : u64 <- 18446744073709551615
+    b : u64 <- 1
+    if a + b > 0
+        ret 1
+    end
+    ret 0
+end

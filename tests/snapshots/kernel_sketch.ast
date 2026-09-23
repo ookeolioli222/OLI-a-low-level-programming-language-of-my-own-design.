@@ -100,8 +100,8 @@
               (store (index (name buf) (name i)) (convert u8 wrap (name i)))))
           (bind v (index (name buf) (range (int 8) end)))))
       (expr (call (name load_gdt)))
-      (place x : s64 (neg (int 5)))
-      (if (< (name x) (neg (int 1)))
+      (place x : s64 (int -5))
+      (if (< (name x) (int -1))
         (then
           (store (name x) (bitnot (name x))))
         (elif (or (== (name x) (int 0)) (not (and (> (name x) (int 3)) (< (name x) (int 9)))))

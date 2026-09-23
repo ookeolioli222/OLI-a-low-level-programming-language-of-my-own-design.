@@ -12,7 +12,7 @@ ITEM_MAX := 256
 FLD_MAX := 1024
 VAL_MAX := 1024
 PROC_MAX := 2048
-SRC_MAX := 262144
+SRC_MAX := 1048576
 
 layout Chk
     mod : u64
@@ -73,6 +73,7 @@ layout Prog
     locs : rw view u8
     sbuf : rw view u8
     tmp : rw view u8
+    lastft : u64
     nmod : u64
     nproc : u64
     nloc : u64
@@ -116,6 +117,7 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.locs <- z.bytes(LOC_MAX * Loc.size)
     pg.sbuf <- z.bytes(SBUF_MAX)
     pg.tmp <- z.bytes(32)
+    pg.lastft <- 0
     pg.nproc <- 0
     pg.nloc <- 0
     pg.soff <- 0

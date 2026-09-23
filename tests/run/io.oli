@@ -1,0 +1,20 @@
+module io
+import std.os
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 65536
+        input := z.bytes(4)
+        count := os.syscall(0, 0, input.addr, input.len)
+        if count != 4
+            ret 1
+        end
+        value : u64 <- 29
+        if value % 6 != 5
+            ret 2
+        end
+        os.syscall(os.WRITE, 1, input.addr, input.len)
+        ret 0
+    end
+end

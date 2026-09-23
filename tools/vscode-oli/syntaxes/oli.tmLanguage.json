@@ -1,0 +1,47 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Oli--",
+    "scopeName": "source.oli",
+    "patterns": [
+        { "include": "#doc-comment" },
+        { "include": "#comment" },
+        { "include": "#string" },
+        { "include": "#char" },
+        { "include": "#number" },
+        { "include": "#keyword" },
+        { "include": "#type" },
+        { "include": "#capability" },
+        { "include": "#operator" }
+    ],
+    "repository": {
+        "doc-comment": { "match": "---.*$", "name": "comment.block.documentation.oli" },
+        "comment": { "match": "--.*$", "name": "comment.line.double-dash.oli" },
+        "string": {
+            "begin": "\"", "end": "\"", "name": "string.quoted.double.oli",
+            "patterns": [{ "match": "\\\\(n|t|r|0|\\\\|\"|'|x[0-9A-Fa-f]{2})", "name": "constant.character.escape.oli" }]
+        },
+        "char": { "match": "'(\\\\(n|t|r|0|\\\\|\"|'|x[0-9A-Fa-f]{2})|[^'\\\\])'", "name": "string.quoted.single.oli" },
+        "number": { "match": "\\b(0x[0-9A-Fa-f_]+|0b[01_]+|0o[0-7_]+|[0-9][0-9_]*[KMG]?)\\b", "name": "constant.numeric.oli" },
+        "keyword": {
+            "patterns": [
+                { "match": "(?<![.\\w])(module|import|pub|proc|permit|calls|section|align|entry|export|traps)\\b", "name": "keyword.other.declaration.oli" },
+                { "match": "(?<![.\\w])(ret|fail|if|then|elif|else|end|while|each|in|loop|break|continue|case|when|zone|at|from)\\b", "name": "keyword.control.oli" },
+                { "match": "(?<![.\\w])(layout|choice|packed|machine|clobber)\\b", "name": "keyword.other.oli" },
+                { "match": "(?<![.\\w])(and|or|not)\\b", "name": "keyword.operator.logical.oli" },
+                { "match": "(?<![.\\w])(true|false|none|never)\\b", "name": "constant.language.oli" },
+                { "match": "(?<![.\\w])(rw|mmio|addr|ref|view|own|port|be|le)\\b", "name": "storage.modifier.oli" },
+                { "match": "(?<![.\\w])(wrap|sat|checked)\\b", "name": "keyword.operator.mode.oli" }
+            ]
+        },
+        "type": { "match": "(?<![.\\w])(u8|s8|byte|u16|s16|u32|s32|u64|s64|word|uword|bool|physaddr|zone)\\b", "name": "storage.type.oli" },
+        "capability": { "match": "\\b(os\\.syscall|memory\\.raw|cpu\\.asm)\\b", "name": "entity.name.tag.capability.oli" },
+        "operator": {
+            "patterns": [
+                { "match": ":=", "name": "keyword.operator.bind.oli" },
+                { "match": "<-", "name": "keyword.operator.store.oli" },
+                { "match": "<~", "name": "keyword.operator.move.oli" },
+                { "match": "->|\\.\\.|==|!=|<=|>=|<<|>>|[-+*/%&|^~<>]", "name": "keyword.operator.oli" }
+            ]
+        }
+    }
+}

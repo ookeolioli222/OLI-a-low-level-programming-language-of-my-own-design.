@@ -957,6 +957,9 @@ proc ety(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
             ret mk_type(pg, "addr ", elem_of(aty))
         end
         if s == U_REFOF
+            if nd.val == 1
+                ret mk_type(pg, "rw ref ", ety(pg, mi, kid1(cx, n), b[0..0]))
+            end
             ret mk_type(pg, "ref ", ety(pg, mi, kid1(cx, n), b[0..0]))
         end
         ret ety(pg, mi, kid1(cx, n), want)
@@ -1876,14 +1879,14 @@ proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
             put(1, "(slice ")
             pexpr(pg, mi, kid1(cx, n), b[0..0])
             put(1, " ")
-            lo := kid1(cx, ix)
+            lo := range_lo(cx, ix)
             if lo == 0
                 put(1, "(int 0):uword")
             else
                 pexpr(pg, mi, lo, "uword")
             end
             put(1, " ")
-            hi := kid2(cx, ix)
+            hi := range_hi(cx, ix)
             if hi == 0
                 put(1, "end")
             else
@@ -1932,7 +1935,11 @@ proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
             ret
         end
         if s == U_REFOF
-            put(1, "(ref-of ")
+            if nd.val == 1
+                put(1, "(rw-ref-of ")
+            else
+                put(1, "(ref-of ")
+            end
             pplace(pg, mi, arg)
             put(1, ")")
             ret
@@ -1962,9 +1969,13 @@ proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
         if binop_is_compare(op)
             ot <- binop_operand_type(pg, mi, n)
         end
+        rt2 : view u8 <- ot
+        if is_shift(op)
+            rt2 <- shift_count_type(pg, mi, kid2(cx, n))
+        end
         pexpr(pg, mi, kid1(cx, n), ot)
         put(1, " ")
-        pexpr(pg, mi, kid2(cx, n), ot)
+        pexpr(pg, mi, kid2(cx, n), rt2)
         put(1, ")")
         ret
     end
@@ -2012,6 +2023,27 @@ proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
         ret
     end
     put(1, "(error)")
+end
+
+proc is_shift(op: view u8) -> word
+    if view_eq(op, "<<")
+        ret 1
+    end
+    if view_eq(op, ">>")
+        ret 1
+    end
+    ret 0
+end
+
+proc shift_count_type(pg: ref Prog, mi: u64, n: u64) -> view u8
+    -- A shift count is any unsigned integer (semantics §4); a count with no
+    -- type of its own is `uword`, the same default `each a..b` uses.
+    b := pg.sbuf
+    t := ety(pg, mi, n, b[0..0])
+    if t.len > 0
+        ret t
+    end
+    ret "uword"
 end
 
 proc binop_operand_type(pg: ref Prog, mi: u64, n: u64) -> view u8
@@ -2571,9 +2603,9 @@ proc pstmt(pg: rw ref Prog, mi: u64, n: u64, ind: u64)
         itn := node_at(cx, it)
         if itn.kind == N_RANGE
             put(1, "(range ")
-            pexpr(pg, mi, kid1(cx, it), "uword")
+            pexpr(pg, mi, range_lo(cx, it), "uword")
             put(1, " ")
-            pexpr(pg, mi, kid2(cx, it), "uword")
+            pexpr(pg, mi, range_hi(cx, it), "uword")
             put(1, ")")
         else
             pexpr(pg, mi, it, b[0..0])
@@ -2774,12 +2806,12 @@ proc tbinop(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
     end
     if view_eq(op, "<<")
         texpr(pg, mi, lhs, ot)
-        texpr(pg, mi, rhs, b[0..0])
+        texpr(pg, mi, rhs, shift_count_type(pg, mi, rhs))
         ret
     end
     if view_eq(op, ">>")
         texpr(pg, mi, lhs, ot)
-        texpr(pg, mi, rhs, b[0..0])
+        texpr(pg, mi, rhs, shift_count_type(pg, mi, rhs))
         ret
     end
     if ot.len == 0
@@ -2939,8 +2971,8 @@ proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
         ix := kid2(cx, n)
         ixn := node_at(cx, ix)
         if ixn.kind == N_RANGE
-            texpr(pg, mi, kid1(cx, ix), "uword")
-            texpr(pg, mi, kid2(cx, ix), "uword")
+            texpr(pg, mi, range_lo(cx, ix), "uword")
+            texpr(pg, mi, range_hi(cx, ix), "uword")
         else
             texpr(pg, mi, ix, "uword")
         end
@@ -3115,8 +3147,8 @@ proc tstmt(pg: rw ref Prog, mi: u64, n: u64)
         it := kid1(cx, n)
         itn := node_at(cx, it)
         if itn.kind == N_RANGE
-            texpr(pg, mi, kid1(cx, it), "uword")
-            texpr(pg, mi, kid2(cx, it), "uword")
+            texpr(pg, mi, range_lo(cx, it), "uword")
+            texpr(pg, mi, range_hi(cx, it), "uword")
         else
             texpr(pg, mi, it, b[0..0])
         end

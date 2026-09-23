@@ -1,0 +1,37 @@
+module olic.show_opt
+-- `olic --show-oir=opt`: the OIR after the passes of docs/OIR_SPEC.md §6 —
+-- constants folded, a branch on a constant turned into a jump, the blocks
+-- nothing reaches and the values nothing reads removed, and every check that
+-- went printed where it stood with the proof that let it.
+--
+-- The verifier runs before and after the passes, so what is printed is a form
+-- that passed §8 both times, checks and proofs included.
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 201326592
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        if pg.nerr > 0
+            ret 1
+        end
+        ob := oir_new(z)
+        build_oir(pg, ob)
+        if pg.nerr > 0
+            ret 1
+        end
+        before := count_checks(ob)
+        build_ssa(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        optimize(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        print_oir(pg, ob)
+        ret 0
+    end
+end

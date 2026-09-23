@@ -1,0 +1,14 @@
+module trap_zone
+-- More bytes than the zone has: the mapping is one page, the request is not.
+-- expect: trap: zone_exhausted at stdin:8
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 4096
+        b := z.bytes(100000)
+        if b.len == 0
+            ret 1
+        end
+    end
+    ret 0
+end

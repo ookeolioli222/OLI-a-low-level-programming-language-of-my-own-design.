@@ -99,8 +99,8 @@ C_ENTRY := 5
 C_EXPORT := 6
 C_TRAPS := 7
 
-NODE_MAX := 120000
-TOK_MAX := 120000
+NODE_MAX := 200000
+TOK_MAX := 200000
 OUT_MAX := 4194304
 
 layout Node
@@ -416,16 +416,37 @@ proc pe_lit(cx: ref Ctx, n: u64)
     emit(cx, ")")
 end
 
+proc range_lo(cx: ref Ctx, n: u64) -> u64
+    -- The low bound of a range, or 0 when it was left out (`..b`).
+    nd := node_at(cx, n)
+    if nd.sub % 2 == 1
+        ret kid1(cx, n)
+    end
+    ret 0
+end
+
+proc range_hi(cx: ref Ctx, n: u64) -> u64
+    -- The high bound of a range, or 0 when it was left out (`a..`).
+    nd := node_at(cx, n)
+    if nd.sub < 2
+        ret 0
+    end
+    if nd.sub % 2 == 1
+        ret kid2(cx, n)
+    end
+    ret kid1(cx, n)
+end
+
 proc pe_range(cx: ref Ctx, n: u64)
     emit(cx, "(range ")
-    a := kid1(cx, n)
+    a := range_lo(cx, n)
     if a == 0
         emit(cx, "begin")
     else
         pe(cx, a)
     end
     emit(cx, " ")
-    b := kid2(cx, n)
+    b := range_hi(cx, n)
     if b == 0
         emit(cx, "end")
     else
@@ -534,6 +555,11 @@ proc pe(cx: ref Ctx, n: u64)
     end
     if k == N_UNOP
         emit(cx, "(")
+        if nd.sub == U_REFOF
+            if nd.val == 1
+                emit(cx, "rw-")
+            end
+        end
         emit(cx, unop_name(nd.sub))
         emit(cx, " ")
         pe(cx, kid1(cx, n))

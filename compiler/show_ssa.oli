@@ -1,0 +1,30 @@
+module olic.show_ssa
+-- `olic --show-ssa`: the OIR of the typed body after `mem2reg`, which is the
+-- SSA form of docs/OIR_SPEC.md §3 — places promoted to values, a phi where
+-- two definitions of a place meet, and no block a path cannot reach. The
+-- verifier runs on it first, so what is printed is a form that passed §8.
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 201326592
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        if pg.nerr > 0
+            ret 1
+        end
+        ob := oir_new(z)
+        build_oir(pg, ob)
+        if pg.nerr > 0
+            ret 1
+        end
+        before := count_checks(ob)
+        build_ssa(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        print_oir(pg, ob)
+        ret 0
+    end
+end

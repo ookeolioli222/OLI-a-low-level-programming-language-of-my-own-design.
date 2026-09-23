@@ -1,10 +1,14 @@
 # Oli-- Machine Model
 
 > **Status (2026-09-22).** The model is what the language is defined against,
-> not a description of running code. Where a trap is concerned, what exists
-> today is `oli1`'s: a trapping oli-core program writes `oli: trap` on fd 2 and
-> exits 3. The `trap: <kind> at <module>:<line>` routine and exit status 134
-> described below belong to V0's `core.trap`, which arrives with the back end.
+> not a description of running code. Two trap routines exist. `oli1` writes
+> `oli: trap` on fd 2 and exits 3. A program built by `olic` uses V0's
+> `core.trap`: it writes `trap: <kind> at <module>:<line>` on fd 2 and exits
+> 134, and it is in the binary only when the program has a trap site
+> (`tests/run/trap/`). The kinds `olic` can reach today are `overflow` and
+> `div_zero`; `bounds`, `misaligned`, `zone_exhausted`, `unreachable` and
+> `assert` arrive with the constructs that raise them. The freestanding `traps`
+> clause is not implemented.
 
 The abstract machine that Oli-- semantics are defined against. It is
 deliberately close to a real x86-64 (or any modern register machine) so that

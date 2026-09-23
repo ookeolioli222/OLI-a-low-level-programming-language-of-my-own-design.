@@ -988,6 +988,17 @@ echo "ok: oli1 compiles T(x)/T.wrap(x)/T.bits(x) with the exact truncation bytes
 echo "genesis: layer 3 (oli-core compiler, steps 0-6f) passed"
 
 # --- layer 4: olic (G4), written in oli-core and compiled by oli1 ---
+# The compiler in dependency order; a driver (`show_*.oli`, `olic.oli`) is
+# appended to it to make a program.
+OLIC_MODULES="../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli
+../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli
+../compiler/body.oli ../compiler/check.oli ../compiler/oir.oli ../compiler/cfg.oli
+../compiler/ssa.oli ../compiler/opt.oli ../compiler/x64.oli ../compiler/elf.oli"
+OLIC_FRONT="../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli
+../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli
+../compiler/body.oli ../compiler/check.oli"
+# The back end without the machine: enough for the OIR drivers.
+OLIC_OIR="../compiler/oir.oli ../compiler/cfg.oli ../compiler/ssa.oli ../compiler/opt.oli"
 cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/show_tokens.oli > build/show_tokens.oli
 ./build/oli1.bin < build/show_tokens.oli > build/show_tokens || fail "oli1 could not compile compiler/ (show_tokens)"
 chmod +x build/show_tokens
@@ -1069,19 +1080,18 @@ done
 # The compiler analyses its own source, as one program and file by file, and
 # must report nothing: `compiler/` is valid V0, not merely valid oli-core.
 : > build/self.oli
-for f in ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli \
-         ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli \
-         ../compiler/body.oli ../compiler/check.oli ../compiler/show_sema.oli; do
+for f in $OLIC_MODULES ../compiler/olic.oli; do
     if [ -s build/self.oli ]; then grep -v '^module ' "$f" >> build/self.oli; else cat "$f" >> build/self.oli; fi
 done
 ( cd .. && genesis/build/show_sema < genesis/build/self.oli > genesis/build/self.out 2> genesis/build/self.err ) \
     || fail "self-analysis: olic reports $(grep -c 'error\[' build/self.err) diagnostics on its own source: $(head -2 build/self.err)"
 grep -q '(proc olic.io.check_proc' build/self.out || fail "self-analysis: the whole compiler was not analysed"
+grep -q '(proc olic.io.lower_all' build/self.out || fail "self-analysis: the back end was not analysed"
 for f in ../compiler/*.oli; do
     ( cd .. && genesis/build/show_sema < "${f#../}" > genesis/build/items.out 2> genesis/build/items.err ) || fail "items: $f reports $(head -1 build/items.err)"
     head -c 9 build/items.out | grep -q '^(program' || fail "items: $f produced no program"
 done
-echo "ok: olic analyses its own source - all eleven modules as one program - without a single diagnostic"
+echo "ok: olic analyses its own source - front end and back end, all seventeen modules as one program - without a single diagnostic"
 
 echo "ok: olic resolves packed/aligned layouts, nested payloads and every library module it imports"
 # Procedure signatures and locals again on their own, so a failure says which
@@ -1111,3 +1121,176 @@ done
 echo "ok: olic reports exactly the diagnostics of all fifteen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, address spaces and implicit narrowing - and none on any positive fixture"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic front end and semantic analysis) passed"
+
+# --- layer 5: olic back end - OIR, x86-64 lowering and the ELF writer ---
+for d in show_oir show_ssa show_opt verify_check; do
+    cat $OLIC_FRONT $OLIC_OIR ../compiler/$d.oli > build/$d.oli
+    ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
+    chmod +x build/$d
+    ./build/oli1.bin < build/$d.oli > build/$d.again
+    cmp build/$d build/$d.again || fail "$d build is not deterministic"
+done
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli"; do
+    set -- $pair
+    ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
+    cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
+    ( cd .. && genesis/build/show_ssa < "$2" > genesis/build/$1.ssa 2> genesis/build/ssa.err ) || fail "ssa: diagnostics for $2: $(cat build/ssa.err)"
+    cmp build/$1.ssa ../tests/snapshots/$1.ssa || fail "ssa: $1 differs from tests/snapshots/$1.ssa"
+    ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
+    cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
+done
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+
+# What mem2reg must have done: no place is left, every join that needs one has
+# a phi, and every block of the printed form is one a path can reach.
+for n in hello control values; do
+    if grep -q 'frame\.' build/$n.ssa; then
+        fail "ssa: $n still loads or stores a frame place after mem2reg"
+    fi
+done
+# A zone's triple has its address taken, so it is the one place that stays.
+[ "$(grep -c 'addr\.of frame\.' build/memory.ssa || true)" -ge 1 ] || fail "ssa: the zone of memory.oli lost its place"
+if grep -q 'load frame\.\|store frame\.' build/memory.ssa; then
+    fail "ssa: memory.ssa still loads or stores a promotable place"
+fi
+grep -q 'phi \[bb0 %2\] \[bb3 %10\]' build/memory.ssa || fail "ssa: the each loop of memory.oli did not get the phi OIR_SPEC 5 shows"
+[ "$(grep -c 'phi \[' build/control.ssa)" -ge 3 ] || fail "ssa: control.ssa has fewer than three phis"
+grep -q 'phi \[bb0 %1\] \[bb2 %6\]' build/control.ssa || fail "ssa: the loop of sum_to did not get the phi OIR_SPEC 5 shows"
+[ "$(grep -c 'phi \[' build/hello.ssa)" = 0 ] || fail "ssa: hello.ssa has a phi and has no join"
+echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two definitions meet, and builds no unreachable block (--show-ssa)"
+
+# The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
+# rule the verifier enforces and the printed form shows where it stood.
+for n in hello control values memory layouts fallible; do
+    a=$(grep -c '; check\.' build/$n.opt || true)
+    b=$(grep -c 'removed: proof(' build/$n.opt || true)
+    [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
+done
+[ "$(grep -c '^      check\.' build/values.opt || true)" = 0 ] \
+    || fail "opt: values.opt still carries a check, and every operand in it is a constant"
+[ "$(grep -c 'removed: proof(constant)' build/values.opt || true)" -ge 10 ] \
+    || fail "opt: values.opt removed fewer than ten checks by constant folding"
+grep -q 'ret %86' build/values.opt || fail "opt: the self-test of values.oli did not fold to its answer"
+grep -q '; check\.div_zero %5 -- removed: proof(divisor)' build/control.opt \
+    || fail "opt: the constant divisor of control.oli did not remove the zero check"
+[ "$(grep -c '^      check\.overflow' build/control.opt || true)" = 4 ] \
+    || fail "opt: control.opt should keep the four checks whose operands are not constants"
+grep -q '; check\.bounds %9 -- removed: proof(constant)' build/memory.opt \
+    || fail "opt: a bounds check on two constants was not proved away"
+[ "$(grep -c 'removed: proof(loop-bound)' build/memory.opt || true)" -ge 2 ] \
+    || fail "opt: the checks of each and of while-below-len were not proved by the loop bound"
+grep -q '^      check\.range' build/memory.opt \
+    || fail "opt: memory.opt should keep the range check whose bound is a parameter"
+grep -q 'check\.bounds' build/memory.oir || fail "oir: each must emit its bounds check, so that removing it is a proof and not an omission"
+# Data the passes left nothing naming is not in the image.
+[ "$(grep -c '(static [0-9]* removed)' build/values.opt || true)" = 9 ] \
+    || fail "opt: the nine trap messages of values.oli should all be removed with their checks"
+# Layouts: a `Name.at` carries its size and alignment checks, `z.make` asks
+# for the layout's alignment, and a field is read at its own width.
+grep -q 'check\.align' build/layouts.oir || fail "oir: Name.at over a non-packed layout must check the alignment"
+grep -q 'zone\.alloc .* align=32' build/layouts.oir || fail "oir: z.make of a layout aligned 32 must ask for it"
+grep -q 'raw\.load\.16\.s' build/layouts.oir || fail "oir: an s16 field must be loaded sign-extended at 16 bits"
+grep -q 'raw\.store\.32' build/layouts.oir || fail "oir: a u32 field must be stored at 32 bits"
+# Fallible results: a call answers with (tag, payload), `ret`/`fail` return a
+# pair, and a default joins the ok path through a phi.
+grep -q 'call\.payload' build/fallible.oir || fail "oir: a fallible call must read its payload out"
+[ "$(grep -c 'phi \[' build/fallible.ssa || true)" -ge 2 ] || fail "ssa: an else-default must become a phi"
+( cd .. && genesis/build/show_opt < tests/run/trap/narrow.oli > genesis/build/narrow.opt )
+grep -q '= trap overflow' build/narrow.opt \
+    || fail "opt: a constant sum that its type cannot hold did not fold to a trap"
+echo "ok: the passes fold constants, turn a branch on one into a jump, drop the blocks and the values that leaves, and remove a check only with a proof recorded (--show-oir=opt)"
+
+set +e
+( cd .. && genesis/build/verify_check < tests/run/control.oli 2> genesis/build/vc.err )
+st=$?
+set -e
+[ "$st" = 0 ] || fail "verify_check: exit $st - the verifier missed a corruption ($(head -1 build/vc.err))"
+[ "$(grep -c 'OIR invariant' build/vc.err)" = 10 ] || fail "verify_check: $(grep -c 'OIR invariant' build/vc.err) invariants reported, want 10"
+echo "ok: the verifier accepts the OIR olic builds and rejects all ten hand-made corruptions of it - terminators, targets, dominance, phi shape and a check removed without a proof"
+
+cat $OLIC_MODULES ../compiler/olic.oli > build/olic.oli
+./build/oli1.bin < build/olic.oli > build/olic || fail "oli1 could not compile compiler/ (olic)"
+chmod +x build/olic
+./build/oli1.bin < build/olic.oli > build/olic.again
+cmp build/olic build/olic.again || fail "olic build is not deterministic"
+echo "ok: oli1 builds olic - the whole pipeline, front end and back end - deterministically"
+
+# M1: the hello program, compiled by olic, running with no libc and no linker.
+( cd .. && genesis/build/olic < examples/hello.oli > genesis/build/hello.elf 2> genesis/build/hello.err ) \
+    || fail "olic: examples/hello.oli reported $(head -1 build/hello.err)"
+chmod +x build/hello.elf
+( cd .. && genesis/build/olic < examples/hello.oli > genesis/build/hello.again )
+cmp build/hello.elf build/hello.again || fail "olic: hello.elf is not byte-identical on a second run"
+head -c 4 build/hello.elf | od -A n -t x1 | tr -d ' \n' | grep -q '^7f454c46$' || fail "olic: hello.elf is not an ELF file"
+got=$(./build/hello.elf) || fail "olic-built hello exited non-zero"
+[ "$got" = "Hello Oli--" ] || fail "olic-built hello printed [$got]"
+echo "ok: M1 - olic compiles examples/hello.oli to a static ELF64 that prints 'Hello Oli--' (no libc, no linker)"
+
+# Behavioral fixtures: a fixture with a .out file writes it and exits 0, any
+# other fixture exits 42. The exit status is the assertion, so a wrong value
+# names the check that failed. A fixture reads NAME.in on stdin when there is
+# one and /dev/null otherwise, so no fixture can ever wait on a terminal.
+for f in ../tests/run/*.oli; do
+    n=$(basename "$f" .oli)
+    ( cd .. && genesis/build/olic < "tests/run/$n.oli" > genesis/build/$n.elf 2> genesis/build/$n.err ) \
+        || fail "run: olic could not compile $f: $(head -1 build/$n.err)"
+    chmod +x build/$n.elf
+    stdin=/dev/null
+    [ -f "../tests/run/$n.in" ] && stdin="../tests/run/$n.in"
+    if [ -f "../tests/run/$n.out" ]; then
+        set +e; timeout 20 ./build/$n.elf < "$stdin" > build/$n.got; st=$?; set -e
+        [ "$st" = 0 ] || fail "run: $n exited $st"
+        cmp build/$n.got "../tests/run/$n.out" || fail "run: $n wrote output differing from tests/run/$n.out"
+    else
+        set +e; timeout 20 ./build/$n.elf < "$stdin"; st=$?; set -e
+        [ "$st" = 42 ] || fail "run: $n exited $st, want 42 (the check number that failed)"
+    fi
+done
+echo "ok: olic compiles and runs every tests/run fixture - arithmetic, control flow, procedures with register and stack arguments, constants, conversions, zones, views, each, layouts, refs, fallible results with else and case, and stdout"
+# The self-test of arith.oli is decided at compile time, and the messages of
+# the checks that were proved away are not in its image.
+[ "$(wc -c < build/arith.elf)" -lt 200 ] || fail "opt: arith.elf still carries the messages of checks that were proved away"
+
+# Trapping arithmetic (design 0006, MACHINE_MODEL.md §4): the message names the
+# kind and the line, and the status is 134.
+for f in ../tests/run/trap/*.oli; do
+    n=$(basename "$f" .oli)
+    want=$(grep -- '-- expect: ' "$f" | sed 's/-- expect: //')
+    ( cd .. && genesis/build/olic < "tests/run/trap/$n.oli" > genesis/build/t_$n.elf 2> genesis/build/t_$n.err ) \
+        || fail "trap: olic could not compile $f: $(head -1 build/t_$n.err)"
+    chmod +x build/t_$n.elf
+    set +e; ./build/t_$n.elf 2> build/t_$n.out; st=$?; set -e
+    [ "$st" = 134 ] || fail "trap: $n exited $st, want 134"
+    got=$(cat build/t_$n.out)
+    [ "$got" = "$want" ] || fail "trap: $n printed [$got], want [$want]"
+done
+echo "ok: overflow, narrow-width overflow, division by zero, MIN/-1, negation, an index or subview outside its view, a short or misaligned Name.at and an exhausted zone trap with the kind and line on fd 2 and exit 134"
+
+# A program with no trap site carries no trap routine.
+printf 'module notrap\nproc start -> s32\n    entry\n    ret 0\nend\n' > build/notrap.oli
+( cd .. && genesis/build/olic < genesis/build/notrap.oli > genesis/build/notrap.elf ) || fail "olic could not compile notrap.oli"
+[ "$(wc -c < build/notrap.elf)" -lt 200 ] || fail "notrap.elf is $(wc -c < build/notrap.elf) bytes: the trap routine was emitted anyway"
+echo "ok: the trap routine and its messages are in the binary only when a trap site is"
+
+# Anything the back end cannot lower is E0900, never approximated: here a zone
+# opened inside another one, which needs the parent source of OIR_SPEC 4.
+printf 'module z\nproc start -> s32\n    entry\n    zone q 4096\n        zone r 4096\n            b := r.bytes(16)\n            b[0] <- 1\n        end\n    end\n    ret 0\nend\n' > build/nolower.oli
+set +e
+( cd .. && genesis/build/olic < genesis/build/nolower.oli > genesis/build/nolower.elf 2> genesis/build/nolower.err )
+st=$?
+set -e
+[ "$st" = 1 ] || fail "back end: an unlowered construct exited $st"
+# A system call has the number and six argument registers (ABI.md 5) and no
+# stack words: an eighth word is refused.
+printf 'module s8\nproc start -> s32\n    entry\n    permit os.syscall\n    os.syscall(1, 2, 3, 4, 5, 6, 7, 8)\n    ret 0\nend\n' > build/s8.oli
+set +e
+( cd .. && genesis/build/olic < genesis/build/s8.oli > genesis/build/s8.elf 2> genesis/build/s8.err )
+st=$?
+set -e
+[ "$st" = 1 ] || fail "back end: an eight-word syscall exited $st, want a refusal"
+grep -q 'E0900' build/s8.err || fail "back end: an eight-word syscall must report E0900"
+[ ! -s build/s8.elf ] || fail "back end: an eight-word syscall wrote a file"
+grep -q 'E0900' build/nolower.err || fail "back end: an unlowered construct must report E0900"
+[ ! -s build/nolower.elf ] || fail "back end: a refused program still wrote a binary"
+echo "ok: a construct the back end cannot lower is E0900 and writes no file"
+echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"

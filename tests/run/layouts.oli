@@ -1,0 +1,222 @@
+module layouts
+-- M2: layouts over zone memory — `Name.at` over a view, `z.make`, field
+-- loads at every width and signedness, field stores, a view field, a ref
+-- field, a layout held by value inside another, `packed` and `align`, refs
+-- as parameters and results, and `ref` of a field. The exit status is the
+-- number of the check that failed, or 42.
+
+layout Header
+    magic : u32
+    length : u16
+    flags : u16
+    payload : u64
+end
+
+layout Mixed
+    a : s8
+    b : u8
+    c : s16
+    d : u16
+    e : s32
+    f : u32
+    g : s64
+end
+
+layout Token
+    kind : u8
+    text : view u8
+end
+
+layout Rect
+    w : u32
+    h : u32
+end
+
+layout Pair
+    first : Rect
+    second : Rect
+    link : ref Rect
+end
+
+layout P packed
+    a : u8
+    b : u32
+end
+
+layout A align 32
+    x : u8
+end
+
+layout F
+    a : u8
+    b : u8 align 4
+    c : u16
+end
+
+proc make_rect(z: zone, w: u64, h: u64) -> rw ref Rect
+    r := z.make(Rect)
+    r.w <- u32.wrap(w)
+    r.h <- u32.wrap(h)
+    ret r
+end
+
+proc area(r: ref Rect) -> u64
+    ret u64(r.w) * u64(r.h)
+end
+
+proc text_len(t: ref Token) -> uword
+    w := t.text
+    ret w.len
+end
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 65536
+        -- Header.at over a byte buffer: stores are visible as bytes.
+        buf := z.bytes(64)
+        h := Header.at(buf)
+        h.magic <- 305419896
+        h.length <- 513
+        h.flags <- 7
+        h.payload <- 1000000
+        if buf[0] != 120
+            ret 1
+        end
+        if buf[4] != 1
+            ret 2
+        end
+        if buf[6] != 7
+            ret 3
+        end
+        if h.payload != 1000000
+            ret 4
+        end
+        if Header.size != 16
+            ret 5
+        end
+        -- Every width, read back sign- or zero-extended: the all-ones
+        -- pattern of each width, stored through a wrapping conversion of a
+        -- typed value (a bare literal would be refused as lossy, E0202).
+        big : u64 <- 4294967295
+        m := Mixed.at(z.bytes(Mixed.size))
+        m.a <- s8.wrap(big)
+        m.b <- 255
+        m.c <- s16.wrap(big)
+        m.d <- 65535
+        m.e <- s32.wrap(big)
+        m.f <- 4294967295
+        m.g <- 0 - 1
+        if m.a != 0 - 1
+            ret 6
+        end
+        if m.b != 255
+            ret 7
+        end
+        if m.c != 0 - 1
+            ret 8
+        end
+        if m.d != 65535
+            ret 9
+        end
+        if m.e != 0 - 1
+            ret 10
+        end
+        if m.f != 4294967295
+            ret 11
+        end
+        if m.g != 0 - 1
+            ret 12
+        end
+        -- a@0 b@1 c@2 d@4 e@8 f@12 g@16: 24 bytes with natural alignment.
+        if Mixed.size != 24
+            ret 13
+        end
+        -- A view field, and a ref handed to a procedure.
+        t := z.make(Token)
+        t.kind <- 3
+        t.text <- "hello"
+        if text_len(t) != 5
+            ret 14
+        end
+        u := t
+        v := u.text
+        if u64(v[1]) != 101
+            ret 15
+        end
+        if u.kind != 3
+            ret 16
+        end
+        -- Refs as results and parameters.
+        ra := make_rect(z, 6, 7)
+        rb := make_rect(z, 2, 3)
+        if area(ra) - area(rb) != 36
+            ret 17
+        end
+        if Rect.size != 8
+            ret 18
+        end
+        -- A layout held by value, and a ref field.
+        pr := z.make(Pair)
+        pr.first.w <- 4
+        pr.first.h <- 5
+        pr.second.w <- 1
+        pr.second.h <- 1
+        pr.link <- ra
+        if area(pr.first) != 20
+            ret 19
+        end
+        if area(pr.link) != 42
+            ret 20
+        end
+        if Pair.size != 24
+            ret 21
+        end
+        -- packed, align on a layout and on a field.
+        pb := z.bytes(64)
+        p := P.at(pb[1..])
+        p.b <- 258
+        if pb[2] != 2
+            ret 22
+        end
+        if P.size != 5
+            ret 23
+        end
+        if P.align != 1
+            ret 24
+        end
+        if A.size != 32
+            ret 25
+        end
+        if A.align != 32
+            ret 26
+        end
+        -- `z.make` of an aligned layout asks the zone for that alignment.
+        pa := z.make(A)
+        pa.x <- 1
+        if pa.x != 1
+            ret 30
+        end
+        if F.size != 8
+            ret 27
+        end
+        -- `ref` of a field: the address of that part of the record, which
+        -- reads what the record holds there.
+        pr.second.w <- 9
+        pr.second.h <- 2
+        rr := ref pr.second
+        if area(rr) != 18
+            ret 28
+        end
+        if u64(rr.w) + u64(rr.h) != 11
+            ret 29
+        end
+        -- `rw ref` of a field is writable through.
+        rw2 := rw ref pr.first
+        rw2.w <- 3
+        if area(pr.first) != 15
+            ret 31
+        end
+        ret 42
+    end
+end

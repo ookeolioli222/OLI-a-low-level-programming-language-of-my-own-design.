@@ -1,0 +1,28 @@
+module olic.show_oir
+-- `olic --show-oir`: the OIR built from the typed body, in blocks, before
+-- any pass has run — `--show-oir=raw` of docs/OIR_SPEC.md §1. Places are
+-- still places here; `--show-ssa` is the same program after `mem2reg`.
+-- The verifier runs first, so what is printed is a form that passed §8.
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 201326592
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        if pg.nerr > 0
+            ret 1
+        end
+        ob := oir_new(z)
+        build_oir(pg, ob)
+        if pg.nerr > 0
+            ret 1
+        end
+        if verify_oir(pg, ob) > 0
+            ret 4
+        end
+        print_oir(pg, ob)
+        ret 0
+    end
+end

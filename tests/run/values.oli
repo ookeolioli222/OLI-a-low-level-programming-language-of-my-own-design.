@@ -1,0 +1,84 @@
+module values
+-- M2: module constants, characters, booleans, unary operators, the explicit
+-- conversions and the width every narrow type keeps after arithmetic.
+LIMIT := 100
+STEP := 7
+
+proc clamp(v: u64) -> u64
+    if v > LIMIT
+        ret LIMIT
+    end
+    ret v
+end
+
+proc start -> s32
+    entry
+    -- Module constants take the type of their use.
+    if clamp(30) != 30
+        ret 1
+    end
+    if clamp(300) != LIMIT
+        ret 2
+    end
+    n : u64 <- LIMIT / STEP
+    if n != 14
+        ret 3
+    end
+    -- Characters are u8 values.
+    c : u8 <- 'A'
+    if c != 65
+        ret 4
+    end
+    if 'z' - 'a' != c - c + 25
+        ret 5
+    end
+    -- Booleans: and, or, not, and the short forms of comparison.
+    t : bool <- true
+    f : bool <- false
+    if not f != t
+        ret 6
+    end
+    if t and f
+        ret 7
+    end
+    if not (t or f)
+        ret 8
+    end
+    -- Signed arithmetic and comparison.
+    s : word <- 0 - 5
+    if s > 0
+        ret 9
+    end
+    if 0 - s != 5
+        ret 10
+    end
+    if s * 3 != 0 - 15
+        ret 11
+    end
+    -- Explicit conversions: widening, wrapping and reinterpreting.
+    b : u8 <- 200
+    w := u64(b)
+    if w != 200
+        ret 12
+    end
+    -- `b + 100` would trap: the sum does not fit `u8`. The wrap is of a
+    -- `u64` sum, which is the width the addition is actually done in.
+    if u8.wrap(u64(b) + 100) != 44
+        ret 13
+    end
+    if u64.bits(s) != 18446744073709551611
+        ret 14
+    end
+    if word.bits(u64.bits(s)) != s
+        ret 15
+    end
+    -- Narrow types keep their width across arithmetic.
+    h : u16 <- 65000
+    if u64(h) + 1000 != 66000
+        ret 16
+    end
+    if u16.wrap(u64(h) + 1000) != 464
+        ret 17
+    end
+    ret 42
+end

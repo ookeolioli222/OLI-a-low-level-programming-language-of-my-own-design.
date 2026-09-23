@@ -1,0 +1,271 @@
+(oir
+  (static 0 len=27)
+  (static 1 len=27)
+  (static 2 len=27)
+  (static 3 len=27)
+  (static 4 len=27)
+  (static 5 len=27)
+  (static 6 len=27)
+  (static 7 len=27)
+  (static 8 len=27)
+  (proc clamp locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 100
+      %4 = cmp.gt %2, %3
+      branch %4, bb1, bb3)
+    (bb1 preds bb0
+      %6 = const 100
+      ret %6)
+    (bb2
+      jump bb3)
+    (bb3 preds bb0 bb2
+      %11 = load frame.0
+      ret %11))
+  (proc start locals=8 temps=2 entry
+    (bb0
+      %0 = const 30
+      arg %0
+      %2 = call clamp/1
+      %3 = const 30
+      %4 = cmp.ne %2, %3
+      branch %4, bb1, bb3)
+    (bb1 preds bb0
+      %6 = const 1
+      ret %6)
+    (bb2
+      jump bb3)
+    (bb3 preds bb0 bb2
+      %11 = const 300
+      arg %11
+      %13 = call clamp/1
+      %14 = const 100
+      %15 = cmp.ne %13, %14
+      branch %15, bb4, bb6)
+    (bb4 preds bb3
+      %17 = const 2
+      ret %17)
+    (bb5
+      jump bb6)
+    (bb6 preds bb3 bb5
+      %22 = const 100
+      %23 = const 7
+      %24 = div %22, %23
+      check.div_zero %23
+      check.overflow %24
+      store frame.0, %24
+      %26 = load frame.0
+      %27 = const 14
+      %28 = cmp.ne %26, %27
+      branch %28, bb7, bb9)
+    (bb7 preds bb6
+      %30 = const 3
+      ret %30)
+    (bb8
+      jump bb9)
+    (bb9 preds bb6 bb8
+      %35 = const 65
+      store frame.3, %35
+      %37 = load frame.3
+      %38 = const 65
+      %39 = cmp.ne %37, %38
+      branch %39, bb10, bb12)
+    (bb10 preds bb9
+      %41 = const 4
+      ret %41)
+    (bb11
+      jump bb12)
+    (bb12 preds bb9 bb11
+      %46 = const 122
+      %47 = const 97
+      %48 = sub %46, %47
+      check.overflow %48
+      %49 = load frame.3
+      %50 = load frame.3
+      %51 = sub %49, %50
+      check.overflow %51
+      %52 = const 25
+      %53 = add %51, %52
+      check.overflow %53
+      %54 = cmp.ne %48, %53
+      branch %54, bb13, bb15)
+    (bb13 preds bb12
+      %56 = const 5
+      ret %56)
+    (bb14
+      jump bb15)
+    (bb15 preds bb12 bb14
+      %61 = const 1
+      store frame.6, %61
+      %63 = const 0
+      store frame.9, %63
+      %65 = load frame.9
+      %66 = not %65
+      %67 = load frame.6
+      %68 = cmp.ne %66, %67
+      branch %68, bb16, bb18)
+    (bb16 preds bb15
+      %70 = const 6
+      ret %70)
+    (bb17
+      jump bb18)
+    (bb18 preds bb15 bb17
+      %75 = load frame.6
+      store frame.24, %75
+      branch %75, bb19, bb20)
+    (bb19 preds bb18
+      %78 = load frame.9
+      store frame.24, %78
+      jump bb20)
+    (bb20 preds bb18 bb19
+      %81 = load frame.24
+      branch %81, bb21, bb23)
+    (bb21 preds bb20
+      %83 = const 7
+      ret %83)
+    (bb22
+      jump bb23)
+    (bb23 preds bb20 bb22
+      %88 = load frame.6
+      store frame.25, %88
+      %90 = not %88
+      branch %90, bb24, bb25)
+    (bb24 preds bb23
+      %92 = load frame.9
+      store frame.25, %92
+      jump bb25)
+    (bb25 preds bb23 bb24
+      %95 = load frame.25
+      %96 = not %95
+      branch %96, bb26, bb28)
+    (bb26 preds bb25
+      %98 = const 8
+      ret %98)
+    (bb27
+      jump bb28)
+    (bb28 preds bb25 bb27
+      %103 = const 0
+      %104 = const 5
+      %105 = sub.s %103, %104
+      check.overflow %105
+      store frame.12, %105
+      %107 = load frame.12
+      %108 = const 0
+      %109 = cmp.gt.s %107, %108
+      branch %109, bb29, bb31)
+    (bb29 preds bb28
+      %111 = const 9
+      ret %111)
+    (bb30
+      jump bb31)
+    (bb31 preds bb28 bb30
+      %116 = const 0
+      %117 = load frame.12
+      %118 = sub.s %116, %117
+      check.overflow %118
+      %119 = const 5
+      %120 = cmp.ne.s %118, %119
+      branch %120, bb32, bb34)
+    (bb32 preds bb31
+      %122 = const 10
+      ret %122)
+    (bb33
+      jump bb34)
+    (bb34 preds bb31 bb33
+      %127 = load frame.12
+      %128 = const 3
+      %129 = mul.s %127, %128
+      check.overflow %129
+      %130 = const 0
+      %131 = const 15
+      %132 = sub.s %130, %131
+      check.overflow %132
+      %133 = cmp.ne.s %129, %132
+      branch %133, bb35, bb37)
+    (bb35 preds bb34
+      %135 = const 11
+      ret %135)
+    (bb36
+      jump bb37)
+    (bb37 preds bb34 bb36
+      %140 = const 200
+      store frame.15, %140
+      %142 = load frame.15
+      store frame.18, %142
+      %144 = load frame.18
+      %145 = const 200
+      %146 = cmp.ne %144, %145
+      branch %146, bb38, bb40)
+    (bb38 preds bb37
+      %148 = const 12
+      ret %148)
+    (bb39
+      jump bb40)
+    (bb40 preds bb37 bb39
+      %153 = load frame.15
+      %154 = const 100
+      %155 = add %153, %154
+      check.overflow %155
+      %156 = trunc.8 %155
+      %157 = const 44
+      %158 = cmp.ne %156, %157
+      branch %158, bb41, bb43)
+    (bb41 preds bb40
+      %160 = const 13
+      ret %160)
+    (bb42
+      jump bb43)
+    (bb43 preds bb40 bb42
+      %165 = load frame.12
+      %166 = const 18446744073709551611
+      %167 = cmp.ne %165, %166
+      branch %167, bb44, bb46)
+    (bb44 preds bb43
+      %169 = const 14
+      ret %169)
+    (bb45
+      jump bb46)
+    (bb46 preds bb43 bb45
+      %174 = load frame.12
+      %175 = load frame.12
+      %176 = cmp.ne.s %174, %175
+      branch %176, bb47, bb49)
+    (bb47 preds bb46
+      %178 = const 15
+      ret %178)
+    (bb48
+      jump bb49)
+    (bb49 preds bb46 bb48
+      %183 = const 65000
+      store frame.21, %183
+      %185 = load frame.21
+      %186 = const 1000
+      %187 = add %185, %186
+      check.overflow %187
+      %188 = const 66000
+      %189 = cmp.ne %187, %188
+      branch %189, bb50, bb52)
+    (bb50 preds bb49
+      %191 = const 16
+      ret %191)
+    (bb51
+      jump bb52)
+    (bb52 preds bb49 bb51
+      %196 = load frame.21
+      %197 = const 1000
+      %198 = add %196, %197
+      check.overflow %198
+      %199 = trunc.16 %198
+      %200 = const 464
+      %201 = cmp.ne %199, %200
+      branch %201, bb53, bb55)
+    (bb53 preds bb52
+      %203 = const 17
+      ret %203)
+    (bb54
+      jump bb55)
+    (bb55 preds bb52 bb54
+      %208 = const 42
+      ret %208)))

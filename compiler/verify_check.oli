@@ -1,0 +1,414 @@
+module olic.verify_check
+-- The test obligation docs/OIR_SPEC.md §6 puts on the verifier: it must
+-- reject invalid OIR. There is no reader for the text form, so the invalid
+-- OIR is made here — the program on stdin is compiled, one instruction,
+-- block or phi of the result is broken in a named way, and the verifier is
+-- asked what it sees. Each case says which invariant of §8 must fire; the
+-- driver exits 0 when every one of them did, and with the number of the first
+-- case that did not.
+--
+-- A case that corrupts the SSA form runs `mem2reg` first, so the phi rules
+-- and the check-preservation rule are exercised on a form that really has
+-- phis in it.
+
+NCASE := 11
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 201326592
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        if pg.nerr > 0
+            put(2, "verify_check: the program on stdin does not analyse\n")
+            ret 1
+        end
+        ob := oir_new(z)
+        k : u64 <- 0
+        while k < NCASE
+            got := run_case(pg, ob, k)
+            want := case_want(k)
+            if got != want
+                put(2, "verify_check: case ")
+                put_uint(2, pg.tmp, k)
+                put(2, " reported invariant ")
+                put_uint(2, pg.tmp, got)
+                put(2, ", expected ")
+                put_uint(2, pg.tmp, want)
+                put(2, "\n")
+                ret 42
+            end
+            k <- k + 1
+        end
+        ret 0
+    end
+end
+
+proc case_want(k: u64) -> u64
+    -- 0 is the uncorrupted build: the verifier must accept it.
+    if k == 0
+        ret 0
+    end
+    if k == 1
+        ret 2
+    end
+    if k == 2
+        ret 2
+    end
+    if k == 3
+        ret 2
+    end
+    if k == 4
+        ret 1
+    end
+    if k == 5
+        ret 1
+    end
+    if k == 6
+        ret 1
+    end
+    if k == 7
+        ret 9
+    end
+    if k == 8
+        ret 9
+    end
+    if k == 9
+        ret 9
+    end
+    ret 7
+end
+
+proc case_is_ssa(k: u64) -> word
+    if k >= 7
+        ret 1
+    end
+    if k == 0
+        ret 1
+    end
+    ret 0
+end
+
+proc run_case(pg: rw ref Prog, ob: rw ref Oir, k: u64) -> u64
+    oir_reset(ob)
+    build_oir(pg, ob)
+    before := count_checks(ob)
+    if case_is_ssa(k) == 1
+        build_ssa(ob)
+    end
+    corrupt(ob, k)
+    if case_is_ssa(k) == 1
+        ret verify_ssa(pg, ob, before)
+    end
+    ret verify_oir(pg, ob)
+end
+
+-- Finding something to break ------------------------------------------------
+-- Every search walks the blocks the procedures own, not the arena: after
+-- `mem2reg` the arena still holds the stream the rebuild was made from, and
+-- breaking something there would prove nothing, because nothing reads it.
+
+proc blk_lo(ob: ref Oir, q: u64) -> u64
+    op := oproc_at(ob, q)
+    ret op.bfirst
+end
+
+proc blk_hi(ob: ref Oir, q: u64) -> u64
+    op := oproc_at(ob, q)
+    ret op.bfirst + op.nblk
+end
+
+proc first_blk_with_phi(ob: ref Oir) -> word
+    q : u64 <- 0
+    while q < ob.nproc
+        b : u64 <- blk_lo(ob, q)
+        while b < blk_hi(ob, q)
+            bk := blk_at(ob, b)
+            if bk.n > 0
+                ins := ins_at(ob, bk.first)
+                if ins.op == O_PHI
+                    ret word.bits(b)
+                end
+            end
+            b <- b + 1
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc first_blk_with_ins(ob: ref Oir, want: u64) -> word
+    q : u64 <- 0
+    while q < ob.nproc
+        b : u64 <- blk_lo(ob, q)
+        while b < blk_hi(ob, q)
+            bk := blk_at(ob, b)
+            if bk.n >= want
+                ret word.bits(b)
+            end
+            b <- b + 1
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc no_phi_blk(ob: ref Oir) -> word
+    -- A block of at least two instructions whose first is not a phi.
+    q : u64 <- 0
+    while q < ob.nproc
+        b : u64 <- blk_lo(ob, q)
+        while b < blk_hi(ob, q)
+            bk := blk_at(ob, b)
+            if bk.n >= 2
+                ins := ins_at(ob, bk.first)
+                if ins.op != O_PHI
+                    ret word.bits(b)
+                end
+            end
+            b <- b + 1
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc first_blk_top(ob: ref Oir, top: u64) -> word
+    q : u64 <- 0
+    while q < ob.nproc
+        b : u64 <- blk_lo(ob, q)
+        while b < blk_hi(ob, q)
+            bk := blk_at(ob, b)
+            if bk.top == top
+                ret word.bits(b)
+            end
+            b <- b + 1
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc first_op(ob: ref Oir, op: u64) -> word
+    -- The first instruction with this opcode that stands inside a block.
+    q : u64 <- 0
+    while q < ob.nproc
+        b : u64 <- blk_lo(ob, q)
+        while b < blk_hi(ob, q)
+            bk := blk_at(ob, b)
+            i : u64 <- bk.first
+            last := bk.first + bk.n
+            while i < last
+                ins := ins_at(ob, i)
+                if ins.op == op
+                    ret word.bits(i)
+                end
+                i <- i + 1
+            end
+            b <- b + 1
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc bin_with_later_def(ob: ref Oir) -> word
+    -- An operation whose block still has a definition after it: the one shape
+    -- a use-before-definition can be made out of without inventing a value.
+    q : u64 <- 0
+    while q < ob.nproc
+        b : u64 <- blk_lo(ob, q)
+        while b < blk_hi(ob, q)
+            bk := blk_at(ob, b)
+            i : u64 <- bk.first
+            last := bk.first + bk.n
+            while i < last
+                ins := ins_at(ob, i)
+                if ins.op == O_BIN
+                    if later_def(ob, i) >= 0
+                        ret word.bits(i)
+                    end
+                end
+                i <- i + 1
+            end
+            b <- b + 1
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc first_site(ob: ref Oir) -> word
+    q : u64 <- 0
+    while q < ob.nproc
+        op := oproc_at(ob, q)
+        i : u64 <- op.first
+        last := op.first + op.n
+        while i < last
+            ins := ins_at(ob, i)
+            if ins.site > 0
+                ret word.bits(i)
+            end
+            i <- i + 1
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc later_def(ob: ref Oir, i: u64) -> word
+    -- A value defined after `i` but inside the same block: naming it from `i`
+    -- is a use before a definition.
+    b := cell_get(ob.iblk, i)
+    bk := blk_at(ob, b)
+    j : u64 <- i + 1
+    last := bk.first + bk.n
+    while j < last
+        ins := ins_at(ob, j)
+        if defines_value(ins.op) == 1
+            ret word.bits(j)
+        end
+        j <- j + 1
+    end
+    ret -1
+end
+
+proc undominating_def(ob: ref Oir, i: u64) -> word
+    -- A value defined in a block of the same procedure that does not dominate
+    -- the block of `i`: naming it from `i` is a use the definition never
+    -- reaches.
+    atb := cell_get(ob.iblk, i)
+    q : u64 <- 0
+    while q < ob.nproc
+        if atb >= blk_lo(ob, q)
+            if atb < blk_hi(ob, q)
+                b : u64 <- blk_lo(ob, q)
+                while b < blk_hi(ob, q)
+                    bk := blk_at(ob, b)
+                    if bk.rpo > 0
+                        if b != atb
+                            if dominates(ob, b, atb) == 0
+                                j := first_def_in(ob, b)
+                                if j >= 0
+                                    ret j
+                                end
+                            end
+                        end
+                    end
+                    b <- b + 1
+                end
+            end
+        end
+        q <- q + 1
+    end
+    ret -1
+end
+
+proc first_def_in(ob: ref Oir, b: u64) -> word
+    bk := blk_at(ob, b)
+    j : u64 <- bk.first
+    last := bk.first + bk.n
+    while j < last
+        ins := ins_at(ob, j)
+        if defines_value(ins.op) == 1
+            ret word.bits(j)
+        end
+        j <- j + 1
+    end
+    ret -1
+end
+
+-- The corruptions --------------------------------------------------------------
+
+proc corrupt(ob: rw ref Oir, k: u64)
+    permit os.syscall
+    if k == 0
+        ret
+    end
+    if k == 1
+        -- A block with no terminator at all.
+        bk := blk_at(ob, u64.bits(must(first_blk_with_ins(ob, 0), k)))
+        bk.top <- 0
+        ret
+    end
+    if k == 2
+        -- A jump to a block that does not exist.
+        bk2 := blk_at(ob, u64.bits(must(first_blk_top(ob, O_JMP), k)))
+        bk2.ta <- ob.nblk + 100
+        ret
+    end
+    if k == 3
+        -- A terminator in the middle of a block.
+        b3 := blk_at(ob, u64.bits(must(first_blk_with_ins(ob, 1), k)))
+        i3 := ins_at(ob, b3.first)
+        i3.op <- O_RET
+        ret
+    end
+    if k == 4
+        -- An operand naming a value defined later in the same block.
+        u4 := must(bin_with_later_def(ob), k)
+        d4 := must(later_def(ob, u64.bits(u4)), k)
+        i4 := ins_at(ob, u64.bits(u4))
+        i4.a <- u64.bits(d4)
+        ret
+    end
+    if k == 5
+        -- An operand naming a value from a block that does not dominate it.
+        u5 := must(first_op(ob, O_BIN), k)
+        d5 := must(undominating_def(ob, u64.bits(u5)), k)
+        i5 := ins_at(ob, u64.bits(u5))
+        i5.a <- u64.bits(d5)
+        ret
+    end
+    if k == 6
+        -- An operand naming an instruction that defines no value.
+        st := must(first_op(ob, O_STORE), k)
+        u6 := must(later_def(ob, u64.bits(st)), k)
+        i6 := ins_at(ob, u64.bits(u6))
+        i6.op <- O_UN
+        i6.a <- u64.bits(st)
+        ret
+    end
+    if k == 7
+        -- A phi with one operand too many.
+        b7 := blk_at(ob, u64.bits(must(first_blk_with_phi(ob), k)))
+        i7 := ins_at(ob, b7.first)
+        i7.b <- i7.b + 1
+        ret
+    end
+    if k == 8
+        -- The operands of a phi out of predecessor order.
+        b8 := blk_at(ob, u64.bits(must(first_blk_with_phi(ob), k)))
+        i8 := ins_at(ob, b8.first)
+        p0 := phiarg_at(ob, i8.a)
+        p1 := phiarg_at(ob, i8.a + 1)
+        t8 := p0.blk
+        p0.blk <- p1.blk
+        p1.blk <- t8
+        ret
+    end
+    if k == 9
+        -- A phi standing after an ordinary instruction.
+        b9 := blk_at(ob, u64.bits(must(no_phi_blk(ob), k)))
+        i9 := ins_at(ob, b9.first + 1)
+        i9.op <- O_PHI
+        i9.a <- 0
+        i9.b <- b9.npred
+        ret
+    end
+    -- A check that disappeared with no proof recorded.
+    ia := ins_at(ob, u64.bits(must(first_site(ob), k)))
+    ia.site <- 0
+end
+
+proc must(v: word, k: u64) -> word
+    -- The program on stdin must contain what the case breaks; if it does not,
+    -- the case proves nothing, and saying so is the only honest outcome.
+    permit os.syscall
+    if v < 0
+        put(2, "verify_check: a case found nothing to break in this program\n")
+        os.syscall(60, 43)
+    end
+    ret v
+end

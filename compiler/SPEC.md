@@ -52,7 +52,18 @@ deterministic and runs the acceptance tests below.
 | `olic.check` | `check.oli` | capabilities (E0401), unimplemented features (E0900), constant cycles (E0106), constant range (E0212), recursive layouts (E0204) | done |
 | `olic.body` | `body.oli` | expression typing (contexts, conversions, regions), the typed-body printer and E0201/E0202/E0203 | done |
 | `olic.show_sema` | `show_sema.oli` | driver for `--show-sema`: the whole semantic graph, and every check | done |
-| `olic.oir`, `olic.x64`, `olic.elf` | — | back end | planned |
+| `olic.oir` | `oir.oli` | the OIR instruction stream, statics, trap sites and the printer of both block forms; E0900 for anything outside the lowered subset; zones, views, `each`, layouts and refs (the memory instructions of `OIR_SPEC` §4) | done |
+| `olic.cfg` | `cfg.oli` | basic blocks with one terminator each, predecessors, reverse postorder, immediate dominators, and the verifier of `OIR_SPEC` §8 | done |
+| `olic.ssa` | `ssa.oli` | `mem2reg`: places become values, phis placed by the iterated dominance frontier, the procedure rebuilt without its unreachable blocks | done |
+| `olic.opt` | `opt.oli` | the passes of `OIR_SPEC` §6 to a fixpoint: constant folding (arithmetic, comparisons, conversions, a branch on a constant, and a constant overflow folded to `trap`), check elision with a proof recorded for every removal (`constant`, `divisor`, `loop-bound`), copy propagation over phis, dead code, and the statics nothing names dropped from the image | done |
+| `olic.x64` | `x64.oli` | machine lowering stage 2: the blocks, every value in a frame slot, a phi as parallel copies on its edges, SysV calls, the overflow/division checks and `core.trap`, `mmap`/`munmap` zones with a bump cursor, bounds-checked view access and view results in rax:rdx | done |
+| `olic.elf` | `elf.oli` | the ELF64 writer: one loadable segment, no section headers and no symbol table | done |
+| `olic.show_oir` | `show_oir.oli` | driver for `--show-oir`: stdin → the blocks before any pass | done |
+| `olic.show_ssa` | `show_ssa.oli` | driver for `--show-ssa`: stdin → the blocks after `mem2reg` | done |
+| `olic.show_opt` | `show_opt.oli` | driver for `--show-oir=opt`: stdin → the blocks after the passes, removed checks and their proofs included | done |
+| `olic.verify_check` | `verify_check.oli` | the verifier's negative test: ten corruptions of a real program, each rejected with the invariant it breaks | done |
+| `olic.main` | `olic.oli` | driver: source on stdin, a native ELF64 on stdout | done |
+| — | — | raw word access, `choice`, `machine` lowering, statics, `[N]T` places, common-subexpression elimination and register allocation | planned |
 
 ## Conventions imposed by oli-core
 

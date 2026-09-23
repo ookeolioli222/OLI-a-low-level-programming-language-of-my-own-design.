@@ -1,0 +1,39 @@
+module modes
+-- M2: `wrap(e)` turns off the overflow trap of every operator inside it and
+-- keeps the width of the type, so the result is the value modulo 2^width.
+proc start -> s32
+    entry
+    a : u8 <- 200
+    b : u8 <- 100
+    if wrap(a + b) != 44
+        ret 1
+    end
+    -- The mode covers every operator in the expression, at any depth.
+    if wrap(a * 2 + b) != 244
+        ret 2
+    end
+    c : u64 <- 18446744073709551615
+    if wrap(c + 1) != 0
+        ret 3
+    end
+    if wrap(c * 3) != 18446744073709551613
+        ret 4
+    end
+    d : u8 <- 5
+    e : u8 <- 10
+    if wrap(d - e) != 251
+        ret 5
+    end
+    -- The most negative signed value negates to itself under `wrap`.
+    -- Division is the exception: `wrap` does not silence its two traps,
+    -- because neither has a wrapped answer to name.
+    m : word <- word.bits(9223372036854775808)
+    if wrap(0 - m) != m
+        ret 6
+    end
+    -- Outside the mode the same arithmetic would trap; here it is exact.
+    if a + 1 != 201
+        ret 8
+    end
+    ret 42
+end

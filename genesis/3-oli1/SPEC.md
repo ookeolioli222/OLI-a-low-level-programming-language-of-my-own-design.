@@ -385,6 +385,14 @@ rejection was detected (added with G4, when `oli1` started compiling
 multi-module programs); codes arrive with `olic`.
 
 Two limits were raised for G4: the scratch mapping is 4 MiB and the code
-temporary used at finalize has 2 MiB, so a compiled program may hold up to
-384 KiB of code and string data (the output region). `name..` after a name in
+temporary used at finalize has 2 MiB. The output region — the header, the
+string data and the code of a compiled program — held 384 KiB at `base+1M`
+until `olic` gained zones and views and reached 383 KiB of it. It now lives
+in the unused upper half of the mapping, `[base+8M, base+12M)`, and the code
+alone is bounded at 2 MiB, which is what the code temporary can hold: a
+program may have up to 2 MiB of code and 1 MiB of string data. What is still
+unchecked is the input: `oli1` reads stdin into `[base, base+1M)` until EOF
+and does not stop at the end of the region, so a source over 1 MiB (the
+whole of `olic` is 0.4 MiB) would overwrite the symbol table at `base+1.5M`
+rather than be refused. That bound belongs with the next change to this file. `name..` after a name in
 an index (`v[i..]`) is a range, not a member access, since G4.

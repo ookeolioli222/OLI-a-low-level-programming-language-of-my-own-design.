@@ -1,0 +1,55 @@
+module control
+-- M2: if/elif/else, while, loop, break, continue and one-line `if ... then`.
+proc classify(n: u64) -> u64
+    if n < 10
+        ret 1
+    elif n < 100
+        ret 2
+    elif n < 1000
+        ret 3
+    else
+        ret 4
+    end
+end
+proc sum_to(n: u64) -> u64
+    t : u64 <- 0
+    i : u64 <- 1
+    while i <= n
+        t <- t + i
+        i <- i + 1
+    end
+    ret t
+end
+proc first_square_over(n: u64) -> u64
+    i : u64 <- 0
+    loop
+        i <- i + 1
+        if i % 3 == 0
+            continue
+        end
+        if i * i > n then break
+    end
+    ret i
+end
+proc start -> s32
+    entry
+    if classify(5) != 1
+        ret 1
+    end
+    if classify(55) != 2
+        ret 2
+    end
+    if classify(555) != 3
+        ret 3
+    end
+    if classify(5555) != 4
+        ret 4
+    end
+    if sum_to(10) != 55
+        ret 5
+    end
+    if first_square_over(20) != 5
+        ret 6
+    end
+    ret 42
+end
