@@ -881,12 +881,34 @@ constant in `.rodata`).
   `tests/sema/err/not_implemented.oli` now expects `E0401` where `calls
   interrupt` lacks its permit, not `E0900`.
 
+## Implemented in back-end stage 18 (2026-09-23): byte order, `mem.get/put`, the reference program runs
+
+- **`be T` / `le T` fields** (ABI.md §3): a `be` field is loaded at its
+  width and byte-swapped — shifts, masks and ors of the integer group, no
+  `bswap` instruction yet — then re-extended when signed; stored swapped;
+  a `le` field is the machine's own order. **`mem.get_u16/u32/u64`,
+  `get_be*`, `get_le*`, `put_*`** over a view: `check.range` that the view
+  holds the width (`bounds` when short), one load or store, the swap for
+  `be`. `tests/run/bytes.oli` pins nineteen checks by looking at the bytes.
+- **A layout as the failure of a fallible result** (`fail os.Error { code:
+  n }`): its bytes as the payload word when it is eight bytes or less; a
+  qualified literal head (`os.Error { … }`) resolves to the item. A wider
+  layout failure stays E0900.
+- **`examples/packet_demo.oli`, the reference program of the language
+  documents, compiles and runs** under `olic`: a zone, a packet built with
+  `mem.put_*`, `Header.at` over a view with a `be u16` length, a `choice`
+  failure taken apart with `case`, `each` over the payload, `os.syscall`
+  writes through a fallible procedure with `else ret`, `cpuid` through a
+  `machine` block with three outputs, a raw address peek. The harness runs
+  it and checks its exit status and output — the vendor string is the
+  machine's own `cpuid`.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 24,024 lines) into
+compiles its own source (`compiler/`, seventeen modules, 24,185 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 893,667 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 900,406 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

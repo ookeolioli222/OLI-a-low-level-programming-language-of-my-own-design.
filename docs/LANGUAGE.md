@@ -299,7 +299,7 @@ left at the end of a line is `E0032`.
 | `never` | the bottom type: the procedure does not return | **[parses]** |
 | `zone` | 8 bytes, a zone handle | **[runs]** |
 | `port T` | an I/O port (V1) | **[parses]** |
-| `be T` / `le T` | an integer with a fixed byte order | **[parses]** |
+| `be T` / `le T` | an integer with a fixed byte order; a `be` field is swapped on load and store | **[runs]** |
 | `mmio view/ref T` | memory-mapped I/O; never dropped by a conversion | **[parses]** |
 | `own T` | reserved in V0: parsed, rejected by the checker (`E0900`) | **[parses]** |
 

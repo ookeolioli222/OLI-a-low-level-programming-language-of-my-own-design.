@@ -1,0 +1,51 @@
+module bytes
+import core.mem
+-- Byte order: `be` and `le` fields of a layout over a buffer, read and
+-- written through their bytes, and the `mem.get_*` / `mem.put_*` accessors
+-- over a view, native, big- and little-endian, with the range check a
+-- short view trips. The exit status is the number of the check that failed;
+-- 42 when every one held.
+
+layout Wire
+    magic : u32
+    length : be u16
+    flags : le u16
+    big : be u32
+    signed : be s16
+end
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 4096
+        buf := z.bytes(64)
+        mem.put_u32(buf[0..4], 0x11223344)
+        if mem.get_u32(buf[0..4]) != 0x11223344 then ret 1
+        if buf[0] != 0x44 then ret 2
+        mem.put_be16(buf[4..6], 0x0102)
+        if buf[4] != 1 then ret 3
+        if buf[5] != 2 then ret 4
+        if mem.get_be16(buf[4..6]) != 0x0102 then ret 5
+        mem.put_le32(buf[8..12], 0xAABBCCDD)
+        if buf[8] != 0xDD then ret 6
+        if mem.get_le32(buf[8..12]) != 0xAABBCCDD then ret 7
+        w := Wire.at(buf[16..32])
+        w.length <- 300
+        if buf[20] != 1 then ret 8
+        if buf[21] != 0x2C then ret 9
+        if w.length != 300 then ret 10
+        w.big <- 0x01020304
+        if buf[24] != 1 then ret 11
+        if buf[27] != 4 then ret 12
+        if w.big != 0x01020304 then ret 13
+        w.signed <- 0 - 2
+        if w.signed != 0 - 2 then ret 14
+        if buf[28] != 0xFF then ret 15
+        if buf[29] != 0xFE then ret 16
+        w.flags <- 0x0506
+        if buf[22] != 6 then ret 17
+        if w.flags != 0x0506 then ret 18
+        if mem.get_be64(buf[16..24]) == 0 then ret 19
+    end
+    ret 42
+end

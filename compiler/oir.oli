@@ -1765,6 +1765,83 @@ proc gen_bytes(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ret r
 end
 
+proc gen_mem_get(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `mem.get_u16/u32/u64(v)`, `mem.get_be*(v)`, `mem.get_le*(v)`: the
+    -- view must hold the width (a range check, `bounds` when short), then
+    -- one load, byte-swapped for `be`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    name := tok_text(cx, cn.t0)
+    w := u64.bits(mem_width(name))
+    e := mem_endian(name)
+    a := sibling(cx, ce)
+    if a == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    v := gen_expr(pg, ob, mi, a, b[0..0])
+    ln := ob.lastlen
+    zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    wc := emit_ins(ob, O_CONST, 0, 0, 0, w / 8)
+    ck := emit_ins(ob, O_CHKR, zero, wc, 0, ln)
+    ci := ins_at(ob, ck)
+    ci.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+    r := emit_ins(ob, O_RLOAD, v, w / 8, 0, 0)
+    ob.lastlen <- 0
+    if e == 1
+        ret gen_bswap(ob, r, w)
+    end
+    ret r
+end
+
+proc gen_mem_put(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `mem.put_*(v, x)`: the same check, then one store, byte-swapped for
+    -- `be`. A statement: the value is nothing.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    name := tok_text(cx, cn.t0)
+    w := u64.bits(mem_width(name))
+    e := mem_endian(name)
+    a := sibling(cx, ce)
+    if a == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    x := sibling(cx, a)
+    if x == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    v := gen_expr(pg, ob, mi, a, b[0..0])
+    ln := ob.lastlen
+    zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    wc := emit_ins(ob, O_CONST, 0, 0, 0, w / 8)
+    ck := emit_ins(ob, O_CHKR, zero, wc, 0, ln)
+    ci := ins_at(ob, ck)
+    ci.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+    val : u64 <- gen_expr(pg, ob, mi, x, mem_type(w))
+    if e == 1
+        val <- gen_bswap(ob, val, w)
+    end
+    emit_ins(ob, O_RSTORE, v, val, w / 8, 0)
+    ob.lastlen <- 0
+    ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+end
+
+proc mem_type(w: u64) -> view u8
+    if w == 16
+        ret "u16"
+    end
+    if w == 32
+        ret "u32"
+    end
+    ret "u64"
+end
+
 proc gen_try_bytes(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `z.try_bytes(k)`: the same bytes as `z.bytes(k)`, but exhaustion is the
     -- failure of a `rw view u8 or none` and not a trap. The cursor is read,
@@ -1821,6 +1898,12 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     if ck == CK_AT
         ret gen_at(pg, ob, mi, n)
+    end
+    if ck == CK_GET
+        ret gen_mem_get(pg, ob, mi, n)
+    end
+    if ck == CK_PUT
+        ret gen_mem_put(pg, ob, mi, n)
     end
     if ck == CK_HALT
         emit_ins(ob, O_CPU, 0, 0, 0, 0)
@@ -2039,12 +2122,56 @@ proc gen_field_addr(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ret addr_add(ob, r, off)
 end
 
+proc byte_order(t: view u8) -> u64
+    -- 1 for a `be` field, 2 for `le`, 0 for the machine's own order.
+    if starts_with(t, "be ")
+        ret 1
+    end
+    if starts_with(t, "le ")
+        ret 2
+    end
+    ret 0
+end
+
+proc gen_bswap(ob: rw ref Oir, v: u64, nb: u64) -> u64
+    -- The bytes of an `nb`-bit value reversed, with the shifts, masks and
+    -- ors of the integer group (no `bswap` instruction of its own yet): a
+    -- `be` field on this little-endian machine.
+    bytes := nb / 8
+    m255 := emit_ins(ob, O_CONST, 0, 0, 0, 255)
+    r : u64 <- 0
+    k : u64 <- 0
+    while k < bytes
+        piece : u64 <- v
+        if k > 0
+            sh := emit_ins(ob, O_CONST, 0, 0, 0, k * 8)
+            piece <- emit_bin(ob, B_SHR, v, sh, 0)
+        end
+        piece <- emit_bin(ob, B_AND, piece, m255, 0)
+        up := (bytes - 1 - k) * 8
+        if up > 0
+            sh2 := emit_ins(ob, O_CONST, 0, 0, 0, up)
+            piece <- emit_bin(ob, B_SHL, piece, sh2, 0)
+        end
+        if k == 0
+            r <- piece
+        else
+            r <- emit_bin(ob, B_OR, r, piece, 0)
+        end
+        k <- k + 1
+    end
+    ret r
+end
+
 proc gen_field_load(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
-    -- `r.f`, by the field's type: an integer at its width and signedness, a
-    -- view as its two words, a ref or an address as one word, and a layout
-    -- held by value as the address of that part of the record.
+    -- `r.f`, by the field's type: an integer at its width and signedness
+    -- (a `be` one byte-swapped after the load, then re-extended), a view as
+    -- its two words, a ref or an address as one word, and a layout held by
+    -- value as the address of that part of the record.
     p := gen_field_addr(pg, ob, mi, n)
-    ft := field_text(pg, pg.lastft)
+    ft0 := field_text(pg, pg.lastft)
+    bo := byte_order(ft0)
+    ft := native_int(ft0)
     if is_view_type(ft) == 1
         a := emit_ins(ob, O_RLOAD, p, 8, 0, 0)
         eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
@@ -2058,6 +2185,14 @@ proc gen_field_load(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
             sg <- 1
         end
         ob.lastlen <- 0
+        if bo == 1
+            raw := emit_ins(ob, O_RLOAD, p, u64.bits(nb) / 8, 0, 0)
+            sw := gen_bswap(ob, raw, u64.bits(nb))
+            if sg == 1
+                ret emit_ins(ob, O_TRUNC, sw, u64.bits(nb), 1, 0)
+            end
+            ret sw
+        end
         ret emit_ins(ob, O_RLOAD, p, u64.bits(nb) / 8, sg, 0)
     end
     if is_ref_type(ft) == 1
@@ -2082,8 +2217,15 @@ proc gen_store_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     tgt := kid1(cx, n)
     p := gen_field_addr(pg, ob, mi, tgt)
     fi := pg.lastft
-    ft := field_text(pg, fi)
-    v := gen_expr(pg, ob, mi, kid2(cx, n), ft)
+    ft0 := field_text(pg, fi)
+    bo := byte_order(ft0)
+    ft := native_int(ft0)
+    v0 := gen_expr(pg, ob, mi, kid2(cx, n), ft)
+    v : u64 <- v0
+    if bo == 1
+        -- A `be` field: the bytes reversed before the store.
+        v <- gen_bswap(ob, v0, u64.bits(int_bits(ft)))
+    end
     if is_view_type(ft) == 1
         ln := ob.lastlen
         emit_ins(ob, O_RSTORE, p, v, 8, 0)
@@ -3117,10 +3259,25 @@ proc gen_fail(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
         oir_err(ob, pg, mi, 900, n)
         ret
     end
-    ci := item_find(pg, et)
+    ci := layout_of(pg, et)
     if ci >= 0
-        -- A `choice` error: its image, one word when it fits (ABI.md §3).
-        if choice_fits(pg, ob, mi, u64.bits(ci), n) == 0
+        item := item_at(pg, u64.bits(ci))
+        if item.kind == 1
+            -- A `choice` error: its image, one word when it fits (ABI.md §3).
+            if choice_fits(pg, ob, mi, u64.bits(ci), n) == 0
+                ret
+            end
+        else
+            -- A layout error (`os.Error`): its bytes as the payload word,
+            -- eight at most; wider would need memory the caller owns.
+            if item.size > 8
+                oir_err(ob, pg, mi, 900, n)
+                ret
+            end
+            la := gen_expr(pg, ob, mi, ev, et)
+            lw := emit_ins(ob, O_RLOAD, la, item.size, 0, 0)
+            gen_release_to(ob, 0)
+            emit_ins(ob, O_RET, one, lw, 2, 0)
             ret
         end
     end
@@ -3490,7 +3647,11 @@ proc gen_variant_lit(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- A layout literal by value is not lowered.
     cx := mod_ctx(pg, mi)
     hn := node_at(cx, kid1(cx, n))
-    vname := tok_text(cx, hn.t0)
+    vname : view u8 <- tok_text(cx, hn.t0)
+    if hn.t1 > hn.t0 + 1
+        -- `os.Error { … }`: the item by its own name.
+        vname <- last_part(mod_text(cx, hn.t0, hn.t1))
+    end
     vi := variant_fields_of(pg, vname)
     if vi < 0
         li := item_find(pg, vname)

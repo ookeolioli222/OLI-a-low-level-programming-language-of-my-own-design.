@@ -1140,7 +1140,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1149,7 +1149,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1171,7 +1171,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1371,6 +1371,19 @@ for f in ../tests/freestanding/*.oli; do
     [ ! -s build/fs_$n.out ] || fail "freestanding: $n wrote output, and it has no OS to write to"
 done
 echo "ok: a freestanding program runs from its own entry with no frame, installs its own stack, and a trap in it reaches the traps procedure with the kind and the core.Site of the line"
+
+# The reference program of the language documents runs: examples/packet_demo.oli
+# builds a packet in a zone, parses its header through a layout with a `be`
+# field, sums the payload, writes on stdout, reads cpuid through a machine
+# block and prints the vendor, and peeks a raw address — every construct the
+# document introduces, compiled by olic and executed here.
+( cd .. && genesis/build/olic < examples/packet_demo.oli > genesis/build/packet_demo.elf 2> genesis/build/packet_demo.err ) || fail "packet_demo: olic could not compile examples/packet_demo.oli: $(head -1 build/packet_demo.err)"
+chmod +x build/packet_demo.elf
+set +e; timeout 10 ./build/packet_demo.elf > build/packet_demo.out 2>&1; st=$?; set -e
+[ "$st" = 0 ] || fail "packet_demo: exited $st, want 0"
+[ "$(head -1 build/packet_demo.out)" = "empty" ] || fail "packet_demo: the first line must be the checksum verdict"
+[ "$(wc -c < build/packet_demo.out)" = 19 ] || fail "packet_demo: the output is the verdict, the twelve-byte cpuid vendor and a newline"
+echo "ok: examples/packet_demo.oli - the reference program of the language documents - compiles and runs: zone, layout with a be field, choice failures, each, syscalls, machine block, raw address"
 
 # M3 (FREESTANDING.md 8): the kernel image. No emulator runs here, so the
 # image is checked structurally: linked at the address its `-- load:` line
