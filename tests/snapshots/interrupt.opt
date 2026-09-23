@@ -1,0 +1,46 @@
+(oir
+  (data 0 size=8 zero)
+  (data 1 size=8 zero)
+  (proc handler locals=1
+    (bb0
+      %0 = param 0
+      %1 = raw.load.64 %0
+      %2 = addr.of data.0
+      raw.store.64 %2, %1
+      %4 = const 8
+      %5 = add %0, %4
+      %6 = raw.load.64 %5
+      %7 = addr.of data.1
+      raw.store.64 %7, %6
+      ret))
+  (proc start locals=3 entry
+    (bb0
+      machine x64
+      %4 = machine.out rbx
+      %5 = machine.out rdx
+      %6 = machine.out rax
+      %7 = const 1234
+      %8 = cmp.ne %4, %7
+      branch %8, bb1, bb2)
+    (bb1 preds bb0
+      %9 = const 1
+      ret %9)
+    (bb2 preds bb0
+      %10 = addr.of data.0
+      %11 = raw.load.64 %10
+      %12 = cmp.ne %11, %6
+      branch %12, bb3, bb4)
+    (bb3 preds bb2
+      %13 = const 2
+      ret %13)
+    (bb4 preds bb2
+      %14 = addr.of data.1
+      %15 = raw.load.64 %14
+      %16 = cmp.ne %15, %5
+      branch %16, bb5, bb6)
+    (bb5 preds bb4
+      %17 = const 3
+      ret %17)
+    (bb6 preds bb4
+      %18 = const 42
+      ret %18)))

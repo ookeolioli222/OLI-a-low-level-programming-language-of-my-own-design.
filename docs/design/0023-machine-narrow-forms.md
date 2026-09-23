@@ -25,6 +25,13 @@ else that names a narrow register (E0900 otherwise):
 | `mov ax, es\|cs\|ss\|ds\|fs\|gs` | `8C /r` |
 | `mov ax, imm16` | `66 B8 iw` |
 | `retfq` | `48 CB` |
+| `pushfq` / `popfq` | `9C` / `9D` |
+| `int imm8` / `int3` | `CD ib` / `CC` |
+| `lea r64, [.label]` | `48 8D /r` with `[rip + rel32]` to the label |
+
+The last three are not narrow forms; they are listed here because they
+entered the encoder with the interrupt work of M4 (a handler is tested in a
+hosted program by pushing the frame the CPU would push and jumping to it).
 
 `in`/`out` directives (`in REG <- e`, `out REG -> place`) keep r64 and r32
 only: the accumulator's low byte is what the block computes from a value

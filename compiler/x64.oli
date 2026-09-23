@@ -88,6 +88,7 @@ layout Mach
     trapproc : u64
     curnone : u64
     curnever : u64
+    curint : u64
 end
 
 proc mach_new(z: zone) -> rw ref Mach
@@ -119,6 +120,7 @@ proc mach_new(z: zone) -> rw ref Mach
     mc.trapproc <- 0
     mc.curnone <- 0
     mc.curnever <- 0
+    mc.curint <- 0
     ret mc
 end
 
@@ -1365,8 +1367,56 @@ proc lower_leave(ob: rw ref Oir)
     cb(ob, 195)
 end
 
+proc lower_leave_only(ob: rw ref Oir)
+    cb(ob, 201)
+end
+
+proc push_all(ob: rw ref Oir)
+    -- rax, rcx, rdx, rbx, rsi, rdi, r8 .. r15: fourteen pushes, 112 bytes;
+    -- the interrupt frame the CPU pushed lies above them and the saved rbp.
+    r : u64 <- 0
+    while r < 16
+        if int_saved(r) == 1
+            rex(ob, 0, NOREG, NOREG, r)
+            cb(ob, 80 + r % 8)
+        end
+        r <- r + 1
+    end
+end
+
+proc pop_all(ob: rw ref Oir)
+    r : u64 <- 16
+    while r > 0
+        r <- r - 1
+        if int_saved(r) == 1
+            rex(ob, 0, NOREG, NOREG, r)
+            cb(ob, 88 + r % 8)
+        end
+    end
+end
+
+proc int_saved(r: u64) -> word
+    if r == 4
+        ret 0
+    end
+    if r == 5
+        ret 0
+    end
+    ret 1
+end
+
 proc lower_ret(ob: rw ref Oir, mc: ref Mach, b: u64)
     bk := blk_at(ob, b)
+    if mc.curint == 1
+        -- The handler's return: the frame goes, the fourteen registers come
+        -- back, and `iretq` pops what the CPU pushed.
+        restore_regs(ob, mc)
+        lower_leave_only(ob)
+        pop_all(ob)
+        cb(ob, 72)
+        cb(ob, 207)
+        ret
+    end
     if mc.curnone == 1
         -- The end of a `calls none` body, or of one that never returns: the
         -- front end proved it is not reached, so it is `ud2`.
@@ -1488,6 +1538,16 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
             cb(ob, 141)
             modrm_bp(ob, R_AX)
             c32(ob, 16 + (ins.a - 6) * 8)
+            st_val(ob, mc, R_AX, i)
+            ret
+        end
+        if ins.c == 2
+            -- The interrupt frame: above the saved rbp and the fourteen
+            -- registers `push_all` saved — rbp + 8 + 112.
+            rex_w(ob, R_AX)
+            cb(ob, 141)
+            modrm_bp(ob, R_AX)
+            c32(ob, 120)
             st_val(ob, mc, R_AX, i)
             ret
         end
@@ -1828,6 +1888,7 @@ proc lower_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
     mc.curq <- q
     mc.curnone <- op.nocalls
     mc.curnever <- op.isnever
+    mc.curint <- op.isint
     op.codepos <- ob.ncode
     if op.isentry == 1
         mc.entrypos <- ob.ncode
@@ -1843,6 +1904,13 @@ proc lower_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
             b0 <- b0 + 1
         end
         ret
+    end
+    if op.isint == 1
+        -- An interrupt handler (`calls interrupt`): every general register
+        -- but rsp and rbp is pushed before the frame is set up, so the
+        -- interrupted code gets them all back from `iretq`; rbp comes back
+        -- through the ordinary epilogue.
+        push_all(ob)
     end
     cb(ob, 85)
     cb(ob, 72)

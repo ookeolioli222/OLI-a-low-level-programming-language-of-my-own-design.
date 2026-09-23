@@ -171,6 +171,7 @@ end
 | `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw` and `cpu.asm` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`) / analysed (the rest) |
 | `calls sysv` | the default convention | analysed |
 | `calls none` | no prologue, no frame: the body is `machine` blocks alone, without `in`/`out` (boot code) | **runs** (`tests/run/freestanding.oli`) |
+| `calls interrupt` | an interrupt handler (`permit cpu.interrupt`): the prologue pushes every general register but rsp and rbp, the one parameter is `ref core.x64.InterruptFrame` — the rip, cs, rflags, rsp and ss the CPU pushed — and the return is `iretq`; no result | **runs** (`tests/run/interrupt.oli` enters one through a frame pushed by hand; `examples/kernel.oli` installs one on vector 3 and reaches it with `int 3`) |
 | `calls interrupt` | an interrupt handler | reserved (V1) |
 | `section "x"`, `align N`, `export ["sym"]` | placement and linkage: `section ".text.boot"` places a procedure first in the code and a static in the read-only segment in front of the code (as does `".rodata"`), `align N` on a static is honoured (the natural alignment otherwise); other sections and `export` are recorded but not placed (the ELF writer emits two segments and no symbol table) | **runs** for those; the rest analysed |
 | `entry` | the program's start; `-> s32` hosted (the result is the exit status), `-> never` freestanding. There is no `main` | **runs** |
@@ -302,7 +303,7 @@ port.u8[0x3F8] <- b                  -- V1: port I/O as an indexed place
 | `arch.x64.cr0/2/3/4/8`, `msr[n]`, `gdt`, `idt`, `tr`, `segments()` | `cpu.control` / `cpu.msr` | planned (V1) |
 | `port.u8/u16/u32[n]`, the `port T` type | `io.port` | reserved (V1) |
 | `atomic.load/store/add/sub/and/or/xor/cas(ref, ..., order)` | — | planned (V1) |
-| `machine x64 ... end` with `in`, `out`, `clobber` | `cpu.asm` | **runs**: `in REG <- e` loads the value before the block, `out REG -> place` stores the register after it, a callee-saved register the block names (rbx, r12–r15) is kept for the caller; `.label:` and jumps to it stay inside the block; port I/O (`in al\|ax\|eax, dx\|imm8`, `out dx\|imm8, al\|ax\|eax`), `mov SREG, ax`, `mov ax, SREG`, `mov ax, imm16` and `retfq` per design 0023; any other 8/16-bit form is `E0900` |
+| `machine x64 ... end` with `in`, `out`, `clobber` | `cpu.asm` | **runs**: `in REG <- e` loads the value before the block, `out REG -> place` stores the register after it, a callee-saved register the block names (rbx, r12–r15) is kept for the caller; `.label:` and jumps to it stay inside the block; port I/O (`in al\|ax\|eax, dx\|imm8`, `out dx\|imm8, al\|ax\|eax`), `mov SREG, ax`, `mov ax, SREG`, `mov ax, imm16`, `retfq`, `pushfq`/`popfq`, `int n`/`int3` and `lea r64, [.label]` per design 0023; any other 8/16-bit form is `E0900` |
 
 Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 `--explain`.

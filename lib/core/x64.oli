@@ -1,0 +1,32 @@
+--- The x86-64 shapes a kernel written in Oli-- needs (docs/KERNEL_PROGRAMMING.md).
+module core.x64
+
+--- What the CPU pushes on an interrupt or exception without an error code,
+--- in the order it lies in memory from the handler's frame pointer upward:
+--- a `calls interrupt` procedure receives a `ref InterruptFrame` to it and
+--- returns with `iretq`, which pops exactly these.
+pub layout InterruptFrame
+    rip : u64
+    cs : u64
+    rflags : u64
+    rsp : u64
+    ss : u64
+end
+
+--- One entry of the interrupt descriptor table: the handler's address in
+--- three pieces around the selector, the stack-table index and the type.
+pub layout IdtGate
+    offset_lo : u16
+    selector : u16
+    ist : u8
+    kind : u8
+    offset_mid : u16
+    offset_hi : u32
+    reserved : u32
+end
+
+--- What `lidt` and `lgdt` read: a limit and a base.
+pub layout TablePointer packed
+    limit : u16
+    base : u64
+end

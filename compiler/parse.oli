@@ -1421,7 +1421,9 @@ end
 
 proc pm_operand(cx: ref Ctx) -> u64
     if at_op(cx, OP_LBRACK)
-        ret pm_mem(cx, 0, 0)
+        -- No size word: the node's token is the bracket, so that a
+        -- diagnostic on the operand names its line.
+        ret pm_mem(cx, tpos(cx), 0)
     end
     if tkind(cx) == TK_INT
         ret pm_int(cx)

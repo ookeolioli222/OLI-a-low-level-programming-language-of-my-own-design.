@@ -1,11 +1,14 @@
 -- target: freestanding
 -- load: 0x100000
 module kernel
--- M3 (docs/FREESTANDING.md §8): a flat kernel image for QEMU or GRUB — a
--- Multiboot2 header in `.text.boot`, its own entry with no frame, its own
--- stack, a line on COM1 through port I/O, the same line in the VGA text
--- buffer through raw stores, `cpuid` through a machine block, then `hlt`
--- forever. No system calls, no libc: nothing in the image but this program.
+import core.x64
+-- M3 (docs/FREESTANDING.md §8) and the first step of M4: a flat kernel
+-- image for QEMU or GRUB — a Multiboot2 header in `.text.boot`, its own
+-- entry with no frame, its own stack, a line on COM1 through port I/O, the
+-- same line in the VGA text buffer through raw stores, `cpuid` through a
+-- machine block, an interrupt descriptor table with a `calls interrupt`
+-- handler on vector 3 that a software `int 3` reaches, then `hlt` forever.
+-- No system calls, no libc: nothing in the image but this program.
 --
 --   bin/olic examples/kernel.oli -o kernel.elf
 --   qemu-system-x86_64 -kernel kernel.elf -serial stdio -display none
@@ -27,6 +30,11 @@ header : Multiboot2 <- Multiboot2 { magic: 0xE85250D6, arch: 0, len: 24, checksu
 stack : [16K]u8
     section ".bss.boot"
     align 16
+
+idt : [256]core.x64.IdtGate
+    align 16
+
+idtr : core.x64.TablePointer
 
 proc start -> never
     entry
@@ -74,6 +82,56 @@ proc vga_write(s : view u8)
     end
 end
 
+proc on_int3(frame : ref core.x64.InterruptFrame)
+    calls interrupt
+    permit cpu.interrupt
+    serial_write("int 3 at ")
+    serial_hex(frame.rip)
+    serial_write("\n")
+end
+
+proc serial_hex(v : u64)
+    -- Sixteen hex digits, most significant first.
+    shift : u64 <- 64
+    while shift > 0
+        shift <- shift - 4
+        d := u8.wrap((v >> shift) & 15)
+        if d < 10
+            outb(0x3F8, 48 + d)
+        else
+            outb(0x3F8, 87 + d)
+        end
+    end
+end
+
+proc set_gate(vector : uword, handler : u64)
+    -- An interrupt gate (type 0xE, present, ring 0) in the kernel code
+    -- segment the boot loader left in cs (Multiboot2: 0x08 is conventional
+    -- for a flat 64-bit segment set up by the loader's GDT).
+    idt[vector].offset_lo <- u16.wrap(handler)
+    idt[vector].selector <- 8
+    idt[vector].ist <- 0
+    idt[vector].kind <- 0x8E
+    idt[vector].offset_mid <- u16.wrap(handler >> 16)
+    idt[vector].offset_hi <- u32.wrap(handler >> 32)
+    idt[vector].reserved <- 0
+end
+
+proc install_idt()
+    permit cpu.asm, cpu.interrupt
+    h : u64 <- 0
+    machine x64
+        mov rax, on_int3
+        out rax -> h
+    end
+    set_gate(3, h)
+    idtr.limit <- 256 * 16 - 1
+    idtr.base <- u64(idt.addr)
+    machine x64
+        lidt [idtr]
+    end
+end
+
 proc cpu_vendor_word() -> u32
     permit cpu.asm
     b : u32 <- 0
@@ -87,7 +145,7 @@ proc cpu_vendor_word() -> u32
 end
 
 proc main -> never
-    permit cpu.halt
+    permit cpu.halt, cpu.asm
     outb(0x3F9, 0)
     outb(0x3FB, 0x80)
     outb(0x3F8, 3)
@@ -103,6 +161,11 @@ proc main -> never
     else
         serial_write("cpu: other\n")
     end
+    install_idt()
+    machine x64
+        int 3
+    end
+    serial_write("back from int 3\n")
     loop
         cpu.halt()
     end

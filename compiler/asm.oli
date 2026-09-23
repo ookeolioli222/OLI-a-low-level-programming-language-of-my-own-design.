@@ -442,6 +442,21 @@ proc mem_operand(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64, o: rw ref Opnd) 
             if tn.sub == 1
                 ret 0
             end
+            st := ctok(cx, sn.t0)
+            if st.kind == TK_OP
+                -- `[.label]`: RIP-relative, the label's address itself.
+                if tn.val > 0
+                    ret 0
+                end
+                if hassym == 1
+                    ret 0
+                end
+                o.issym <- 2
+                o.sym <- sn.t0 + 1
+                hassym <- 1
+                k <- sibling(cx, k)
+                continue
+            end
             name := tok_text(cx, sn.t0)
             r := reg64(name)
             if r < 0
@@ -493,12 +508,19 @@ proc mem_operand(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64, o: rw ref Opnd) 
         k <- sibling(cx, k)
     end
     if hassym == 1
-        -- `[static + disp]`: an absolute address, no base and no index.
+        -- `[static + disp]`: an absolute address, no base and no index;
+        -- `[.label]`: RIP-relative, no displacement either.
         if o.base != NOREG
             ret 0
         end
         if o.index != NOREG
             ret 0
+        end
+        if o.issym == 2
+            if o.hasdisp == 1
+                ret 0
+            end
+            ret 1
         end
         -- A disp32 is sign-extended: only the low 2 GiB and the top 2 GiB
         -- of the address space can be named this way.
@@ -596,6 +618,15 @@ proc emit_mem(ob: rw ref Oir, reg: u64, o: ref Opnd, mfix: u64)
     -- means none (rbp and r13 take a zero disp8, rsp and r12 a SIB), a
     -- written one is always disp32.
     r := reg % 8
+    if o.issym == 2
+        -- mod=00 rm=101: `[rip + disp32]`, the displacement from the end
+        -- of the instruction — the same rel32 a jump to the label takes,
+        -- because nothing follows the displacement.
+        cb(ob, 5 + r * 8)
+        note_label_ref(ob, ob.ncode, o.sym)
+        c32(ob, 0)
+        ret
+    end
     if o.issym == 1
         cb(ob, 4 + r * 8)
         cb(ob, 37)
@@ -792,6 +823,22 @@ proc enc_instr(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> word
     if view_eq(m, "lidt")
         ret enc_sys_mem(ob, nop, 3)
     end
+    if view_eq(m, "int")
+        -- `int imm8`: CD ib.
+        if nop != 1
+            ret 0
+        end
+        v := opnd_at(ob, 0)
+        if v.kind != OK_IMM
+            ret 0
+        end
+        if v.imm > 255
+            ret 0
+        end
+        cb(ob, 205)
+        cb(ob, v.imm)
+        ret 1
+    end
     if nop != 0
         ret 0
     end
@@ -862,6 +909,18 @@ proc enc_fixed(ob: rw ref Oir, m: view u8) -> word
     if view_eq(m, "retfq")
         cb(ob, 72)
         cb(ob, 203)
+        ret 1
+    end
+    if view_eq(m, "pushfq")
+        cb(ob, 156)
+        ret 1
+    end
+    if view_eq(m, "popfq")
+        cb(ob, 157)
+        ret 1
+    end
+    if view_eq(m, "int3")
+        cb(ob, 204)
         ret 1
     end
     ret 0

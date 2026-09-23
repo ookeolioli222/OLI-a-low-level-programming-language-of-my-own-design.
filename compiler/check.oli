@@ -1288,7 +1288,9 @@ proc check_proc(pg: rw ref Prog, mi: u64, node: u64)
             if kn.sub == C_CALLS
                 c := node_at(cx, kid1(cx, k))
                 if view_eq(mod_text(cx, c.t0, c.t1), "interrupt")
-                    sdiag(pg, mi, 900, kn.t0)
+                    -- An interrupt handler (KERNEL_PROGRAMMING.md §1) is a
+                    -- `cpu.interrupt` matter.
+                    need(pg, mi, "cpu.interrupt", kn.t0)
                 end
             end
         end

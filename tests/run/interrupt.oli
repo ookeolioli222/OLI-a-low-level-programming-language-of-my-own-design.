@@ -1,0 +1,54 @@
+module interrupt
+import core.x64
+-- A `calls interrupt` handler run for real, in a hosted program: the frame
+-- the CPU would push — ss, rsp, rflags, cs, rip — is pushed by hand in a
+-- machine block and the handler is jumped to; its prologue saves every
+-- register, its body reads the frame through `ref core.x64.InterruptFrame`,
+-- and its `iretq` pops the frame and comes back to the line after the jump
+-- with every register as it was. The exit status is the number of the
+-- check that failed; 42 when every one held.
+
+seen_rip : u64
+seen_cs : u64
+
+proc handler(frame : ref core.x64.InterruptFrame)
+    calls interrupt
+    permit cpu.interrupt
+    seen_rip <- frame.rip
+    seen_cs <- frame.cs
+end
+
+proc start -> s32
+    entry
+    permit cpu.asm
+    back : u64 <- 0
+    kept : u64 <- 0
+    cs_now : u64 <- 0
+    machine x64
+        mov rbx, 1234
+        mov rcx, rsp
+        xor eax, eax
+        mov ax, ss
+        push rax
+        push rcx
+        pushfq
+        xor eax, eax
+        mov ax, cs
+        mov rdx, rax
+        push rax
+        lea rax, [.back]
+        push rax
+        mov rax, handler
+        jmp rax
+    .back:
+        out rbx -> kept
+        out rdx -> cs_now
+        lea rax, [.back]
+        out rax -> back
+        clobber rax, rcx, rdx
+    end
+    if kept != 1234 then ret 1
+    if seen_rip != back then ret 2
+    if seen_cs != cs_now then ret 3
+    ret 42
+end

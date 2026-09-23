@@ -854,12 +854,39 @@ constant in `.rodata`).
   counter a place that becomes the phi at the head.
 - `tests/run/records.oli` pins twenty-three checks over all of it.
 
+## Implemented in back-end stage 17 (2026-09-23): M4 begins — `calls interrupt`
+
+- **Interrupt handlers run.** A procedure with `calls interrupt` (which
+  needs `permit cpu.interrupt`; the front end used to refuse it as V1) gets
+  a prologue that pushes every general register but rsp and rbp before the
+  ordinary frame, its one parameter — a `ref core.x64.InterruptFrame` — is
+  the address of what the CPU pushed (rip, cs, rflags, rsp, ss), above the
+  saved rbp and the fourteen registers, and every `ret` restores the
+  allocated registers, drops the frame, pops the fourteen and ends in
+  `iretq`. It answers nothing. `lib/core/x64.oli` holds the frame, the
+  IDT gate and the `lidt`/`lgdt` pointer layouts.
+- **Verified by execution, in a hosted program.** `tests/run/interrupt.oli`
+  pushes in a machine block exactly the frame the CPU would push — ss, the
+  rsp of before, rflags (`pushfq`), cs, the address of a local label — and
+  jumps to the handler; the handler reads `frame.rip` and `frame.cs` into
+  statics, and its `iretq` comes back to the label with rbx as it was.
+  Three checks, exit 42. The encoder gained `pushfq`, `popfq`, `int n`,
+  `int3` and `lea r64, [.label]` (RIP-relative), and a memory operand
+  without a size word now carries its bracket's token, so a refused operand
+  is reported on its own line rather than at 1:1.
+- **`examples/kernel.oli`** builds a 256-entry IDT (`core.x64.IdtGate`),
+  installs a `calls interrupt` handler on vector 3 with `lidt`, raises
+  `int 3` and prints the interrupted rip on COM1 from the handler; the
+  harness checks the `cd 03`, the `lidt` and the one `iretq` in the image.
+  `tests/sema/err/not_implemented.oli` now expects `E0401` where `calls
+  interrupt` lacks its permit, not `E0900`.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 23,852 lines) into
+compiles its own source (`compiler/`, seventeen modules, 24,024 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 887,951 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 893,667 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

@@ -251,6 +251,7 @@ layout OProc
     nocalls : u64
     isnever : u64
     boot : u64
+    isint : u64
 end
 
 layout Stat
@@ -387,6 +388,7 @@ layout Oir
     sretv : u64
     sretslot : u64
     sretsize : u64
+    curint : u64
     entryp : u64
     amode : u64
     ovfacc : u64
@@ -510,6 +512,7 @@ proc oir_reset(ob: rw ref Oir)
     ob.sretv <- 0
     ob.sretslot <- 0
     ob.sretsize <- 0
+    ob.curint <- 0
     ob.entryp <- 0
     ob.amode <- 0
     ob.ovfacc <- 0
@@ -4222,6 +4225,20 @@ proc proc_calls_none(pg: ref Prog, pi: u64) -> u64
     ret 0
 end
 
+proc proc_calls_interrupt(pg: ref Prog, pi: u64) -> u64
+    c := proc_clause(pg, pi, C_CALLS)
+    if c == 0
+        ret 0
+    end
+    v := proc_at(pg, pi)
+    cx := mod_ctx(pg, v.mod)
+    cn := node_at(cx, kid1(cx, c))
+    if view_eq(tok_text(cx, cn.t0), "interrupt")
+        ret 1
+    end
+    ret 0
+end
+
 proc proc_in_boot(pg: ref Prog, pi: u64) -> u64
     -- `section ".text.boot"`: the procedure is placed first in the code.
     c := proc_clause(pg, pi, C_SECTION)
@@ -4332,6 +4349,22 @@ proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
         if l.kind == L_PARAM
             s := i - pg.locbase
             pt := b[l.t0..l.t1]
+            if ob.curint == 1
+                -- The one parameter of an interrupt handler is the frame the
+                -- CPU pushed, a `ref core.x64.InterruptFrame`: its address,
+                -- above the registers the prologue saved.
+                if regs > 0
+                    oir_err(ob, pg, pg.curmod, 900, node)
+                end
+                if is_ref_type(pt) == 0
+                    oir_err(ob, pg, pg.curmod, 900, node)
+                end
+                fp := emit_ins(ob, O_PARAM, 0, 0, 2, 0)
+                emit_ins(ob, O_STORE, local_off(ob, word.bits(s)), fp, 0, 0)
+                regs <- 1
+                i <- i + 1
+                continue
+            end
             words : u64 <- 1
             if is_view_type(pt) == 1
                 words <- 2
@@ -4416,6 +4449,14 @@ proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     op.nphi <- 0
     op.nsave <- 0
     op.nocalls <- proc_calls_none(pg, pi)
+    op.isint <- proc_calls_interrupt(pg, pi)
+    ob.curint <- op.isint
+    if op.isint == 1
+        -- An interrupt handler answers nothing: `iretq` is its return.
+        if nd.val == 1
+            oir_err(ob, pg, mi, 900, v.node)
+        end
+    end
     op.isnever <- 0
     if view_eq(proc_result(pg, tok_text(cx, nd.t0)), "never")
         op.isnever <- 1

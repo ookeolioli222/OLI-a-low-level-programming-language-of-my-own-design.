@@ -13,10 +13,10 @@ construct answers each system-programming requirement.
 > plan, not the state: V1 and V2 rows report `E0900` (`feature not
 > implemented`) — `tests/sema/err/not_implemented.oli` pins that behaviour,
 > and `tests/parse/ok/kernel_sketch.oli` is checked to report `E0900` for
-> `mem.mmio`, `port u8 (…)` and `calls interrupt` and `E0401` for the
-> raw-address conversion it performs without `permit memory.raw`. Library
-> names such as `core.x64.InterruptFrame` and `core.x64.paging` are planned;
-> `lib/` holds what exists. See `docs/LANGUAGE.md`.
+> `mem.mmio` and `port u8 (…)` and `E0401` for the raw-address conversion it
+> performs without `permit memory.raw`. `calls interrupt` handlers run
+> (stage 17): `lib/core/x64.oli` holds `InterruptFrame`, `IdtGate` and
+> `TablePointer`; `core.x64.paging` is still planned. See `docs/LANGUAGE.md`.
 
 ## 1. Requirement → construct
 
@@ -25,7 +25,7 @@ construct answers each system-programming requirement.
 | volatile memory | `mmio view T` / `mmio ref T` — every access is a volatile instruction | V0 (type), V1 (intrinsic `mem.mmio`) |
 | atomic operations | `atomic.load/store/add/sub/and/or/xor/cas(ref rw T, ..., order)` | V1 |
 | memory barriers | `cpu.fence(order)` → `mfence`/`lfence`/`sfence` | V1 |
-| interrupt handlers | `proc h(frame : ref InterruptFrame)` with `calls interrupt` | V1 |
+| interrupt handlers | `proc h(frame : ref core.x64.InterruptFrame)` with `calls interrupt` — **runs**: every general register pushed, `iretq` on return (`tests/run/interrupt.oli`, `examples/kernel.oli`) | V0 |
 | naked functions | `calls none` (body = one `machine` block) | V0 |
 | custom calling conventions | `calls sysv` (default), `calls none`, `calls interrupt`; `calls c` = alias of `sysv` | V0/V1 |
 | packed structures | `layout X packed` | V0 |
