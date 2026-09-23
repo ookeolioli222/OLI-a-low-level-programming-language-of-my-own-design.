@@ -354,10 +354,14 @@ proc collect_pattern(pg: rw ref Prog, mi: u64, subject: view u8, pat: u64, sreg:
         end
         ret
     end
-    if k != N_PATFAIL
-        ret
+    -- The fields a variant pattern binds: under `fail` of a fallible
+    -- subject, or bare when the subject is the choice itself.
+    sub : u64 <- 0
+    if k == N_PATFAIL
+        sub <- kid1(cx, pat)
+    elif k == N_PAT
+        sub <- pat
     end
-    sub := kid1(cx, pat)
     if sub == 0
         ret
     end

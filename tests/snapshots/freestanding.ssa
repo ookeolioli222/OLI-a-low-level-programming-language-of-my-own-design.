@@ -17,10 +17,24 @@
     (bb0
       %0 = param 0
       %1 = param stack.0
-      %2 = const 16
-      %3 = add %1, %2
-      %4 = raw.load.32 %3
-      machine.in edi, %4
+      %2 = addr.of frame.3
+      %3 = raw.load.64 %1
+      raw.store.64 %2, %3
+      %5 = const 8
+      %6 = add %1, %5
+      %7 = add %2, %5
+      %8 = raw.load.64 %6
+      raw.store.64 %7, %8
+      %10 = const 16
+      %11 = add %1, %10
+      %12 = add %2, %10
+      %13 = raw.load.64 %11
+      raw.store.64 %12, %13
+      %15 = addr.of frame.3
+      %16 = const 16
+      %17 = add %15, %16
+      %18 = raw.load.32 %17
+      machine.in edi, %18
       machine x64
       ret))
   (proc main locals=5

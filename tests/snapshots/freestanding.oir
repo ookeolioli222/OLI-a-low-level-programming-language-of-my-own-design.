@@ -18,12 +18,24 @@
       %0 = param 0
       store frame.0, %0
       %2 = param stack.0
-      store frame.1, %2
-      %4 = load frame.1
-      %5 = const 16
-      %6 = add %4, %5
-      %7 = raw.load.32 %6
-      machine.in edi, %7
+      %3 = addr.of frame.3
+      %4 = raw.load.64 %2
+      raw.store.64 %3, %4
+      %6 = const 8
+      %7 = add %2, %6
+      %8 = add %3, %6
+      %9 = raw.load.64 %7
+      raw.store.64 %8, %9
+      %11 = const 16
+      %12 = add %2, %11
+      %13 = add %3, %11
+      %14 = raw.load.64 %12
+      raw.store.64 %13, %14
+      %16 = addr.of frame.3
+      %17 = const 16
+      %18 = add %16, %17
+      %19 = raw.load.32 %18
+      machine.in edi, %19
       machine x64
       ret))
   (proc main locals=5

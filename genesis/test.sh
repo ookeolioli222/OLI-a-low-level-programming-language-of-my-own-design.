@@ -1140,7 +1140,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1149,7 +1149,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1171,7 +1171,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1254,6 +1254,11 @@ for f in ../tests/machine/*.oli; do
     [ "$got" = "$want" ] || fail "asm: the bytes of $n differ from tests/machine/$n.hex"
 done
 echo "ok: olic assembles every machine x64 block of tests/machine/ to the canonical bytes of the genesis assembler - registers, memory operands, conditional branches and r32 forms (--show-asm)"
+# A layout by value travels as its eightbytes: sixteen bytes or less in
+# registers (`arg` per word, `call.word1` for the second word back), more
+# on the stack; a layout literal is a fresh area of the frame.
+grep -q 'call\.word1' build/records.oir || fail "oir: a layout result of sixteen bytes must come back in rax and rdx"
+grep -q 'addr\.of frame' build/records.oir || fail "oir: a layout literal must be an area of the frame"
 # --explain reads the same form plus the frame the lowering laid out: the
 # per-procedure report and the cost of every line are pinned as snapshots.
 for n in cse zones; do
@@ -1326,7 +1331,7 @@ for f in ../tests/run/*.oli; do
         [ "$st" = 42 ] || fail "run: $n exited $st, want 42 (the check number that failed)"
     fi
 done
-echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
+echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
 # The image of a program with statics has two loadable segments, the second
 # read+write on the page after the first; hello.elf still has one.
 [ "$(od -An -tu2 -j56 -N2 build/statics.elf | tr -d ' ')" = 2 ] || fail "elf: statics.elf should have two program headers"

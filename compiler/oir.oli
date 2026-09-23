@@ -40,11 +40,10 @@ module olic.oir
 -- A `machine x64` block is `machine.in REG, %v` for each `in`, the block
 -- (`machine x64`, assembled by compiler/asm.oli) and `%n = machine.out REG`
 -- for each `out`, standing together in the stream.
--- Anything else is refused with E0900 rather than approximated: `each` over
--- a range, a view whose element is a layout, a choice wider than a word, a
--- layout literal by value in an expression (a static's initialiser may be
--- one), a view inside a `T or E` of a procedure and a machine line the
--- encoder does not know.
+-- Anything else is refused with E0900 rather than approximated: a view
+-- whose element is a layout, a choice wider than a word, a layout result
+-- wider than sixteen bytes (`sret`), a view inside a `T or E` of a
+-- procedure and a machine line the encoder does not know.
 --
 -- Plain arithmetic traps on overflow (design 0006), so every `+ - * / %` and
 -- every `-x` carries the width of its type and the static that names its trap
@@ -1415,6 +1414,12 @@ proc local_words(pg: ref Prog, t: view u8) -> u64
     if starts_with(t, "[")
         ret (type_bytes(pg, t) + 7) / 8
     end
+    lp := layout_param(pg, t)
+    if lp > 0
+        -- A layout held by value: its bytes, read and written through the
+        -- address of its first word like a field of one.
+        ret (lp + 7) / 8
+    end
     ret 1
 end
 
@@ -1638,12 +1643,47 @@ proc gen_call_args(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, pi: word) -
             if is_view_type(want) == 1
                 words <- 2
             end
-            if layout_param(pg, want) > 0
-                -- A layout by value: only the trap routine passes one today.
-                oir_err(ob, pg, mi, 900, a)
-            end
+        end
+        lay : u64 <- 0
+        if pi >= 0
+            lay <- layout_param(pg, want)
         end
         v := gen_expr(pg, ob, mi, a, want)
+        if lay > 0
+            -- A layout by value: its words, one `arg` each — in registers
+            -- when it is sixteen bytes or less and they fit (SysV INTEGER
+            -- class), on the stack otherwise (MEMORY class). The eightbytes
+            -- are read whole; every object's storage is padded to a word.
+            lw := (lay + 7) / 8
+            loc1 : u64 <- 0
+            if lay <= 16
+                if regs + lw <= 6
+                    loc1 <- regs
+                    regs <- regs + lw
+                else
+                    loc1 <- 6 + stk
+                    stk <- stk + lw
+                end
+            else
+                loc1 <- 6 + stk
+                stk <- stk + lw
+            end
+            w : u64 <- 0
+            while w < lw
+                src : u64 <- v
+                if w > 0
+                    off := emit_ins(ob, O_CONST, 0, 0, 0, w * 8)
+                    src <- addr_add(ob, v, off)
+                end
+                wv := emit_ins(ob, O_RLOAD, src, 8, 0, 0)
+                emit_ins(ob, O_ARG, wv, loc1 + w, 0, 0)
+                nargs <- nargs + 1
+                w <- w + 1
+            end
+            k <- k + 1
+            a <- sibling(cx, a)
+            continue
+        end
         loc : u64 <- 0
         if regs + words <= 6
             loc <- regs
@@ -1790,6 +1830,28 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ob.lastlen <- 0
     ob.lastpay <- 0
     rt := proc_result(pg, tok_text(cx, cn.t0))
+    rl := layout_param(pg, rt)
+    if rl > 0
+        -- A layout of sixteen bytes or less comes back in rax and rdx
+        -- (ABI.md §2); its words go to a fresh area of the frame, whose
+        -- address is the value. A wider one needs `sret`, not lowered.
+        if rl > 16
+            oir_err(ob, pg, mi, 900, n)
+            ret r
+        end
+        w1 : u64 <- 0
+        if rl > 8
+            w1 <- emit_ins(ob, O_RDX, 0, 0, 2, 0)
+        end
+        area := tmp_area(ob, rl)
+        emit_ins(ob, O_RSTORE, area, r, 8, 0)
+        if rl > 8
+            eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+            emit_ins(ob, O_RSTORE, addr_add(ob, area, eight), w1, 8, 0)
+        end
+        ob.lastlen <- 0
+        ret area
+    end
     if is_view_type(rt) == 1
         -- A view comes back as the pair (address, length); the second half is
         -- read out before anything else can touch the register.
@@ -1835,6 +1897,10 @@ proc gen_name(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
             a := local_base(pg, ob, name)
             ob.lastlen <- emit_ins(ob, O_CONST, 0, 0, 0, arr_count(pg, lt))
             ret a
+        end
+        if layout_param(pg, lt) > 0
+            -- A layout held by value reads as the address of its bytes.
+            ret local_base(pg, ob, name)
         end
         v := emit_ins(ob, O_LOAD, off, 0, 0, 0)
         if is_view_type(lt) == 1
@@ -2007,6 +2073,11 @@ proc gen_store_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     end
     if starts_with(unqual(ft), "addr ")
         emit_ins(ob, O_RSTORE, p, v, 8, 0)
+        ret
+    end
+    lp := layout_param(pg, ft)
+    if lp > 0
+        gen_copy(ob, p, v, lp)
         ret
     end
     oir_err(ob, pg, mi, 900, n)
@@ -2753,10 +2824,64 @@ proc gen_store_local(pg: rw ref Prog, ob: rw ref Oir, mi: u64, name: view u8, va
         ret
     end
     off := local_off(ob, s)
+    lt := loc_type(pg, name)
+    lp := layout_param(pg, lt)
+    if lp > 0
+        -- A layout by value: the bytes are copied into the local's words.
+        gen_copy(ob, local_base(pg, ob, name), val, lp)
+        ret
+    end
     emit_ins(ob, O_STORE, off, val, 0, 0)
-    if is_view_type(loc_type(pg, name)) == 1
+    if is_view_type(lt) == 1
         emit_ins(ob, O_STORE, off + 1, ob.lastlen, 0, 0)
     end
+end
+
+proc gen_copy(ob: rw ref Oir, dst: u64, src: u64, n: u64)
+    -- `n` bytes from `src` to `dst`, exactly: words, then a 4, a 2 and a
+    -- 1 for what is left, so nothing past the object is touched (the COPY
+    -- cost class, one move per piece).
+    pos : u64 <- 0
+    while pos + 8 <= n
+        copy_piece(ob, dst, src, pos, 8)
+        pos <- pos + 8
+    end
+    if pos + 4 <= n
+        copy_piece(ob, dst, src, pos, 4)
+        pos <- pos + 4
+    end
+    if pos + 2 <= n
+        copy_piece(ob, dst, src, pos, 2)
+        pos <- pos + 2
+    end
+    if pos < n
+        copy_piece(ob, dst, src, pos, 1)
+    end
+end
+
+proc copy_piece(ob: rw ref Oir, dst: u64, src: u64, pos: u64, w: u64)
+    s : u64 <- src
+    d : u64 <- dst
+    if pos > 0
+        off := emit_ins(ob, O_CONST, 0, 0, 0, pos)
+        s <- addr_add(ob, src, off)
+        d <- addr_add(ob, dst, off)
+    end
+    v := emit_ins(ob, O_RLOAD, s, w, 0, 0)
+    emit_ins(ob, O_RSTORE, d, v, w, 0)
+end
+
+proc tmp_area(ob: rw ref Oir, nbytes: u64) -> u64
+    -- The address of a fresh area of the frame that holds `nbytes`: as many
+    -- compiler-made words as it takes, the last one first in memory.
+    nw := (nbytes + 7) / 8
+    last : u64 <- 0
+    k : u64 <- 0
+    while k < nw
+        last <- new_tmp(ob)
+        k <- k + 1
+    end
+    ret emit_ins(ob, O_FADDR, last, 0, 0, 0)
 end
 
 proc gen_bind(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
@@ -2895,6 +3020,28 @@ proc gen_ret_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, rv: u64)
     end
     v2 := gen_expr(pg, ob, mi, rv, rt)
     ln := ob.lastlen
+    rl := layout_param(pg, rt)
+    if rl > 0
+        -- A layout by value: its eightbytes in rax and rdx, sixteen bytes
+        -- at most; a wider one needs `sret`, not lowered.
+        if rl > 16
+            oir_err(ob, pg, mi, 900, pg.curstmt)
+            ret
+        end
+        w0 := emit_ins(ob, O_RLOAD, v2, 8, 0, 0)
+        w1 : u64 <- 0
+        if rl > 8
+            eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+            w1 <- emit_ins(ob, O_RLOAD, addr_add(ob, v2, eight), 8, 0, 0)
+        end
+        gen_release_to(ob, 0)
+        if rl > 8
+            emit_ins(ob, O_RET, w0, w1, 2, 0)
+        else
+            emit_ins(ob, O_RET, w0, 0, 1, 0)
+        end
+        ret
+    end
     gen_release_to(ob, 0)
     if is_view_type(rt) == 1
         emit_ins(ob, O_RET, v2, ln, 2, 0)
@@ -3034,6 +3181,14 @@ proc gen_case(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     b := pg.sbuf
     subj := kid1(cx, n)
     ct := ety(pg, mi, subj, b[0..0])
+    if is_fallible(ct) == 0
+        -- `checked(e)` is typed as its `T` (compiler/SPEC.md's known gap)
+        -- but is a fallible value all the same.
+        if is_checked_node(cx, subj) == 0
+            gen_case_value(pg, ob, mi, n)
+            ret
+        end
+    end
     tag := gen_fallible(pg, ob, mi, subj)
     pay := ob.lastpay
     paylen := ob.lastlen
@@ -3104,6 +3259,105 @@ proc gen_case(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     if failarm != 0
         gen_block(pg, ob, mi, kid2(cx, failarm))
     elif elsearm != 0
+        gen_block(pg, ob, mi, kid1(cx, elsearm))
+    end
+    emit_ins(ob, O_LABEL, ldone, 0, 0, 0)
+end
+
+proc is_checked_node(cx: ref Ctx, n: u64) -> word
+    nd := node_at(cx, n)
+    if nd.kind == N_UNOP
+        if nd.sub == U_CHECKED
+            ret 1
+        end
+    end
+    if nd.kind == N_CONVERT
+        mn := node_at(cx, kid1(cx, n))
+        if mn.kind == N_MODE
+            if view_eq(tok_text(cx, mn.t0), "checked")
+                ret 1
+            end
+        end
+    end
+    ret 0
+end
+
+proc gen_case_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `case v when … end` over a `bool`, an integer or a plain `choice`:
+    -- the arms in the order written, each a compare and a jump past it —
+    -- `true`/`false` and an integer against the value, a variant against
+    -- the tag byte of the image with its fields bound — and `else` takes
+    -- the rest.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    subj := kid1(cx, n)
+    ct := ety(pg, mi, subj, b[0..0])
+    v := gen_expr(pg, ob, mi, subj, b[0..0])
+    ci : word <- -1
+    if layout_of(pg, ct) >= 0
+        ci <- item_find(pg, last_part(ct))
+        if ci >= 0
+            it := item_at(pg, u64.bits(ci))
+            if it.kind != 1
+                ci <- -1
+            end
+        end
+    end
+    tagv : u64 <- v
+    if ci >= 0
+        if choice_fits(pg, ob, mi, u64.bits(ci), n) == 0
+            ret
+        end
+        m255 := emit_ins(ob, O_CONST, 0, 0, 0, 255)
+        tagv <- emit_bin(ob, B_AND, v, m255, 0)
+    end
+    ldone := new_label(ob)
+    elsearm : u64 <- 0
+    arm : u64 <- kid2(cx, n)
+    while arm != 0
+        an := node_at(cx, arm)
+        if an.kind == N_ELSE
+            elsearm <- arm
+        else
+            pat := kid1(cx, arm)
+            pn := node_at(cx, pat)
+            want : u64 <- 0
+            if pn.kind == N_PAT
+                if ci < 0
+                    oir_err(ob, pg, mi, 900, arm)
+                    ret
+                end
+                want <- emit_ins(ob, O_CONST, 0, 0, 0, variant_ordinal(pg, u64.bits(ci), tok_text(cx, pn.t0)))
+            elif pn.kind == N_TRUE
+                want <- emit_ins(ob, O_CONST, 0, 0, 0, 1)
+            elif pn.kind == N_FALSE
+                want <- emit_ins(ob, O_CONST, 0, 0, 0, 0)
+            elif pn.kind == N_INT
+                want <- emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, pat))
+            elif pn.kind == N_UNOP
+                want <- emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, pat))
+            else
+                oir_err(ob, pg, mi, 900, arm)
+                ret
+            end
+            c := emit_bin(ob, B_EQ, tagv, want, 0)
+            lnext := new_label(ob)
+            emit_ins(ob, O_BRANCH, c, 0, 0, lnext)
+            if pn.kind == N_PAT
+                pg.curstmt <- pat
+                f : u64 <- kid1(cx, pat)
+                while f != 0
+                    gen_bind_field(pg, ob, mi, v, pat, f)
+                    f <- sibling(cx, f)
+                end
+            end
+            gen_block(pg, ob, mi, kid2(cx, arm))
+            emit_ins(ob, O_JMP, ldone, 0, 0, 0)
+            emit_ins(ob, O_LABEL, lnext, 0, 0, 0)
+        end
+        arm <- sibling(cx, arm)
+    end
+    if elsearm != 0
         gen_block(pg, ob, mi, kid1(cx, elsearm))
     end
     emit_ins(ob, O_LABEL, ldone, 0, 0, 0)
@@ -3193,6 +3447,10 @@ proc gen_variant_lit(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     vname := tok_text(cx, hn.t0)
     vi := variant_fields_of(pg, vname)
     if vi < 0
+        li := item_find(pg, vname)
+        if li >= 0
+            ret gen_layout_lit(pg, ob, mi, n, u64.bits(li))
+        end
         oir_err(ob, pg, mi, 900, n)
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end
@@ -3228,6 +3486,74 @@ end
 
 proc one_u64() -> u64
     ret 1
+end
+
+proc gen_layout_lit(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, li: u64) -> u64
+    -- `Name { f: e, … }` as a value: a fresh area of the frame, zeroed word
+    -- by word, each field written at its offset and width; the value is the
+    -- area's address, as every layout held by value is.
+    cx := mod_ctx(pg, mi)
+    item := item_at(pg, li)
+    base := tmp_area(ob, item.size)
+    zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    k : u64 <- 0
+    while k * 8 < item.size
+        d : u64 <- base
+        if k > 0
+            off := emit_ins(ob, O_CONST, 0, 0, 0, k * 8)
+            d <- addr_add(ob, base, off)
+        end
+        emit_ins(ob, O_RSTORE, d, zero, 8, 0)
+        k <- k + 1
+    end
+    f : u64 <- kid2(cx, n)
+    while f != 0
+        fn := node_at(cx, f)
+        fi := field_of(pg, li, tok_text(cx, fn.t0))
+        if fi < 0
+            oir_err(ob, pg, mi, 900, f)
+            ret base
+        end
+        fr := fld_at(pg, u64.bits(fi))
+        ft := field_text(pg, u64.bits(fi))
+        v := gen_expr(pg, ob, mi, kid1(cx, f), ft)
+        p : u64 <- base
+        if fr.off > 0
+            off2 := emit_ins(ob, O_CONST, 0, 0, 0, fr.off)
+            p <- addr_add(ob, base, off2)
+        end
+        gen_store_typed(pg, ob, p, v, ft)
+        f <- sibling(cx, f)
+    end
+    ob.lastlen <- 0
+    ret base
+end
+
+proc gen_store_typed(pg: rw ref Prog, ob: rw ref Oir, p: u64, v: u64, ft: view u8)
+    -- A value of type `ft` written at `p`: the widths of a field store.
+    -- (Six argument words: the view is two.)
+    if is_view_type(ft) == 1
+        ln := ob.lastlen
+        emit_ins(ob, O_RSTORE, p, v, 8, 0)
+        eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+        emit_ins(ob, O_RSTORE, addr_add(ob, p, eight), ln, 8, 0)
+        ret
+    end
+    nb := int_bits(ft)
+    if nb > 0
+        emit_ins(ob, O_RSTORE, p, v, u64.bits(nb) / 8, 0)
+        ret
+    end
+    if view_eq(ft, "bool")
+        emit_ins(ob, O_RSTORE, p, v, 1, 0)
+        ret
+    end
+    lp := layout_param(pg, ft)
+    if lp > 0
+        gen_copy(ob, p, v, lp)
+        ret
+    end
+    emit_ins(ob, O_RSTORE, p, v, 8, 0)
 end
 
 proc field_bits(t: view u8) -> u64
@@ -3587,6 +3913,50 @@ proc gen_store_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, tgt: u64, v: u64)
     gen_store_local(pg, ob, mi, name, v)
 end
 
+proc gen_each_range(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `each i in a..b`: `i` runs from `a` while it is below `b` — the counter
+    -- is a place `mem2reg` turns into the phi at the head, and the bound is
+    -- computed once. Both bounds are `uword` (the front end says so).
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    it := kid1(cx, n)
+    itn := node_at(cx, it)
+    if itn.sub != 3
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
+    lo := gen_expr(pg, ob, mi, range_lo(cx, it), "uword")
+    hi := gen_expr(pg, ob, mi, range_hi(cx, it), "uword")
+    t := new_tmp(ob)
+    emit_ins(ob, O_STORE, t, lo, 0, 0)
+    top := new_label(ob)
+    out := new_label(ob)
+    savb := ob.brk
+    savc := ob.cont
+    savz := ob.zloop
+    cont := new_label(ob)
+    ob.brk <- out + 1
+    ob.cont <- cont + 1
+    ob.zloop <- ob.zdepth
+    emit_ins(ob, O_LABEL, top, 0, 0, 0)
+    i := emit_ins(ob, O_LOAD, t, 0, 0, 0)
+    c := emit_bin(ob, B_LT, i, hi, 0)
+    emit_ins(ob, O_BRANCH, c, 0, 0, out)
+    ob.lastlen <- 0
+    gen_store_local(pg, ob, mi, tok_text(cx, nd.t0), i)
+    gen_block(pg, ob, mi, kid1(cx, kid2(cx, n)))
+    emit_ins(ob, O_LABEL, cont, 0, 0, 0)
+    i2 := emit_ins(ob, O_LOAD, t, 0, 0, 0)
+    one := emit_ins(ob, O_CONST, 0, 0, 0, 1)
+    nx := emit_bin(ob, B_ADD, i2, one, 0)
+    emit_ins(ob, O_STORE, t, nx, 0, 0)
+    emit_ins(ob, O_JMP, top, 0, 0, 0)
+    emit_ins(ob, O_LABEL, out, 0, 0, 0)
+    ob.brk <- savb
+    ob.cont <- savc
+    ob.zloop <- savz
+end
+
 proc gen_release_one(ob: rw ref Oir, d: u64)
     -- The release of the zone at depth `d` of the stack, whatever its source.
     kind := cell_get(ob.zstk, d * 3)
@@ -3621,7 +3991,7 @@ proc gen_each(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     it := kid1(cx, n)
     itn := node_at(cx, it)
     if itn.kind == N_RANGE
-        oir_err(ob, pg, mi, 900, n)
+        gen_each_range(pg, ob, mi, n)
         ret
     end
     bt := ety(pg, mi, it, b[0..0])
@@ -3913,16 +4283,38 @@ proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
             off := local_off(ob, word.bits(s))
             lay := layout_param(pg, pt)
             if lay > 0
-                -- A layout by value (SysV MEMORY class): the caller left its
-                -- bytes above the return address, and the parameter's word
-                -- is their address — the same form a by-value field takes.
+                lw := (lay + 7) / 8
                 if lay <= 16
-                    oir_err(ob, pg, pg.curmod, 900, node)
+                    -- SysV INTEGER class: one or two eightbytes, placed like
+                    -- the words of a view, stored into the local's words —
+                    -- the first eightbyte at the lower address.
+                    loc0 : u64 <- 0
+                    if regs + lw <= 6
+                        loc0 <- regs
+                        regs <- regs + lw
+                    else
+                        loc0 <- 6 + stk
+                        stk <- stk + lw
+                    end
+                    e0 := emit_ins(ob, O_PARAM, loc0, 0, 0, 0)
+                    e1 : u64 <- 0
+                    if lw == 2
+                        e1 <- emit_ins(ob, O_PARAM, loc0 + 1, 0, 0, 0)
+                    end
+                    -- Through the address: the words are memory from here on.
+                    pb := emit_ins(ob, O_FADDR, off + lw - 1, 0, 0, 0)
+                    emit_ins(ob, O_RSTORE, pb, e0, 8, 0)
+                    if lw == 2
+                        eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+                        emit_ins(ob, O_RSTORE, addr_add(ob, pb, eight), e1, 8, 0)
+                    end
                 else
-                    mw := (lay + 7) / 8
+                    -- SysV MEMORY class: the caller left the bytes above the
+                    -- return address; they are copied into the local's words
+                    -- so that the local reads like any layout held by value.
                     pv0 := emit_ins(ob, O_PARAM, 6 + stk, 0, 1, 0)
-                    stk <- stk + mw
-                    emit_ins(ob, O_STORE, off, pv0, 0, 0)
+                    stk <- stk + lw
+                    gen_copy(ob, emit_ins(ob, O_FADDR, off + lw - 1, 0, 0, 0), pv0, lay)
                 end
             else
                 loc : u64 <- 0
@@ -4657,6 +5049,8 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     if op == O_RDX
         if ins.c == 1
             put(1, "call.payload")
+        elif ins.c == 2
+            put(1, "call.word1")
         else
             put(1, "call.len")
         end

@@ -825,12 +825,37 @@ constant in `.rodata`).
   still lists as planned is the profile *file*, the section order beyond
   `.text.boot`, `mem.mmio` and `own`.
 
+## Implemented in back-end stage 16 (2026-09-23): layouts by value, `case` over values, `each` over a range
+
+- **Layouts held by value run everywhere the language puts them.** A local
+  `p : Name` owns as many frame words as its bytes and reads as their
+  address, exactly as a by-value field does; `Name { f: e, … }` in an
+  expression is a fresh area of the frame, zeroed and written field by
+  field; `q : Name <- p`, `q <- p` and `r.f <- p` copy the bytes exactly —
+  words, then a four, a two and a one, so nothing past the object is
+  touched (the COPY class). A parameter or result of sixteen bytes or less
+  travels as its eightbytes in registers (SysV INTEGER class: `arg` per
+  word, `call.word1` for the second word back), a wider parameter on the
+  stack (MEMORY class), copied into the frame on entry so the local reads
+  like any other; a wider result would need `sret` and stays E0900.
+- **`case` over a `bool`, an integer or a plain `choice`**: the arms in the
+  order written, each a compare and a jump past it — `true`/`false` and an
+  integer against the value, a variant against the tag byte of the image
+  with its fields bound — `else` takes the rest. The front end had never
+  declared the fields a bare variant pattern binds (only those under
+  `fail`), so `when line { len }` left `len` unknown; `collect_pattern`
+  and the definite-assignment binder now handle both. No semantic snapshot
+  changed: the corpus has no such `case`.
+- **`each i in a..b`** counts from `a` while below `b` (both `uword`), the
+  counter a place that becomes the phi at the head.
+- `tests/run/records.oli` pins seventeen checks over all of it.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 23,395 lines) into
+compiles its own source (`compiler/`, seventeen modules, 23,795 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 869,505 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 885,904 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

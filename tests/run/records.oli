@@ -1,0 +1,120 @@
+module records
+-- Layouts held by value — places, literals, copies, fields of layouts,
+-- parameters and results in registers (sixteen bytes or less) or in memory
+-- (more), `case` over a `bool`, an integer and a plain `choice` with its
+-- fields bound, and `each` over a range. The exit status is the number of
+-- the check that failed; 42 when every one held.
+
+layout Small
+    x : u16
+    y : u8
+end
+
+layout Pair
+    a : u32
+    b : u64
+end
+
+layout Big
+    a : u64
+    b : u64
+    c : u64
+end
+
+layout Nest
+    tag : u8
+    p : Pair
+end
+
+choice Shape
+    dot
+    line { len : u32 }
+    box { w : u16, h : u16 }
+end
+
+proc sum_pair(p : Pair) -> u64
+    ret u64(p.a) + p.b
+end
+
+proc sum_big(g : Big) -> u64
+    ret g.a + g.b + g.c
+end
+
+proc make_pair(a : u32, b : u64) -> Pair
+    ret Pair { a: a, b: b }
+end
+
+proc small_sum(s : Small) -> u32
+    ret u32(s.x) + u32(s.y)
+end
+
+proc area(s : Shape) -> u32
+    r : u32 <- 0
+    case s
+    when dot
+        r <- 0
+    when line { len }
+        r <- len
+    when box { w, h }
+        r <- u32(w) * u32(h)
+    end
+    ret r
+end
+
+proc start -> s32
+    entry
+    t : u64 <- 0
+    each i in 0..5
+        t <- t + i
+    end
+    if t != 10 then ret 1
+    n : uword <- 3
+    c : u64 <- 0
+    each j in 1..n
+        c <- c + 1
+    end
+    if c != 2 then ret 2
+    flag := t == 10
+    r : u64 <- 0
+    case flag
+    when true
+        r <- 1
+    when false
+        r <- 2
+    end
+    if r != 1 then ret 3
+    k : u32 <- 7
+    case k
+    when 3
+        r <- 30
+    when 7
+        r <- 70
+    else
+        r <- 99
+    end
+    if r != 70 then ret 4
+    p : Pair <- Pair { a: 5, b: 37 }
+    if p.a != 5 then ret 5
+    if sum_pair(p) != 42 then ret 6
+    q : Pair <- p
+    q.b <- 1
+    if q.b != 1 then ret 7
+    if p.b != 37 then ret 8
+    m := make_pair(2, 40)
+    if sum_pair(m) != 42 then ret 9
+    g : Big <- Big { a: 10, b: 20, c: 12 }
+    if sum_big(g) != 42 then ret 10
+    s : Small <- Small { x: 40, y: 2 }
+    if small_sum(s) != 42 then ret 11
+    nst : Nest <- Nest { tag: 1, p: p }
+    if nst.p.b != 37 then ret 12
+    nst.p <- m
+    if nst.p.a != 2 then ret 13
+    if nst.tag != 1 then ret 14
+    sh : Shape <- box { w: 6, h: 7 }
+    if area(sh) != 42 then ret 15
+    ln9 := line { len: 9 }
+    if area(ln9) != 9 then ret 16
+    if area(dot) != 0 then ret 17
+    ret 42
+end

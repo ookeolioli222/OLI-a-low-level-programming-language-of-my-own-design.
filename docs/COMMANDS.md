@@ -133,6 +133,7 @@ if pkt.len < Header.size then fail too_short
 | Command | Meaning | Cost | Status |
 |---------|---------|------|--------|
 | `layout NAME [packed] [align N] ... end` | a record with a fixed, documented layout: integer, view, ref, address and by-value layout fields, `align N` on a field | — | **runs** (`tests/run/layouts.oli`) |
+| a layout held by value: `p : Name <- Name { f: e, … }`, `q : Name <- p`, `r.f <- p`, `f(p)`, `-> Name` | the bytes live in the frame (or the record); a literal is a fresh area written field by field; a copy is exact (words, then 4, 2, 1); a parameter or result of sixteen bytes or less travels in registers (SysV INTEGER class), a wider parameter on the stack and copied into the frame on entry; a wider result (`sret`) is E0900 | COPY / ZERO | **runs** (`tests/run/records.oli`) |
 | fields of type `be T` / `le T` | an integer stored in a given byte order | ZERO | analysed |
 | `T.size`, `T.align` | compile-time constants | ZERO | **runs** |
 | `T.at(v)` | a `ref T` over a view; `check.range` traps `bounds` when short, `check.align` traps `misaligned` when not aligned (unless `packed`) | CHECK | **runs** |
@@ -218,13 +219,13 @@ end
 | `if/elif/else/end`, `if c then s` | branch (the one-line form has no else) | **runs** |
 | `while`, `loop`, `break`, `continue` | loops | **runs** |
 | `each x in v` | iterate a view; the bounds check is emitted and removed by the loop-bound proof | **runs** |
-| `each i in a..b`, `each x in array_place` | iterate an integer range, or an array in the frame | analysed |
+| `each i in a..b`, `each x in array_place` | iterate an integer range (`i` from `a` while below `b`, both `uword`), or an array in the frame | **runs** (`tests/run/records.oli`, `frames.oli`) |
 | `ret [e]` | the success exit; in the entry procedure, the exit status; in a `T or E` procedure, the pair (tag 0, e) | **runs** |
 | `fail [e]` | the failure exit of a `T or E` procedure: the pair (tag 1, e), or (1, 0) for `none` | **runs** (`tests/run/fallible.oli`) |
 | `e else fail` / `e else ret [v]` / `e else default` | resolve a fallible value: pass the failure on, leave, or take a default (a phi) | **runs** |
 | `case e when ok [x] ... when fail ... end`, with `else` for either arm | match a fallible value whose `E` is an integer type or `none` | **runs** |
 | `fail VARIANT`, `fail VARIANT {…}`, `case … when fail VARIANT { f }` | a `choice` error: the image built with masks and shifts, the tag byte compared arm by arm, each named field read back at its width and sign (`tests/run/choice.oli`) | **runs** (choice ≤ 8 bytes) |
-| `case e when variant ... else ... end` | match a plain `choice` value, exhaustively | analysed |
+| `case e when variant [{ f }] ... else ... end` | match a plain `choice` value (its tag byte, the fields bound), a `bool` (`when true` / `when false`) or an integer (`when 3`, `when - 1`), exhaustively or with `else` | **runs** (`tests/run/records.oli`) |
 | `machine x64 ... end` | inline machine code with declared inputs, outputs and clobbers (see §8); `olic` assembles it with its own encoder (`compiler/asm.oli`) — the genesis assembler's subset byte for byte (`tests/machine/*.hex`) plus `hlt`, `cli`, `sti`, `nop`, `iretq`, `cpuid`, `rdmsr`, `wrmsr`, `rdtsc`, `pause`, `lgdt`, `lidt`, control registers — a line it does not know is `E0900` | **runs** (`tests/run/machine.oli`) |
 
 ---
@@ -371,10 +372,8 @@ tool).
 
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
-review that is: `each` over a range, a view of records, a `choice` wider
-than eight bytes, a `case` over a plain choice or a `bool`, a layout literal
-by value in an expression (a static's initialiser may be one), a layout of
-sixteen bytes or less as a parameter or any layout as an argument, a view inside a `T or E` that a procedure returns,
+review that is: a view of records, a `choice` wider than eight bytes, a
+layout result wider than sixteen bytes (`sret`), a view inside a `T or E` that a procedure returns,
 `be`/`le` fields, a `machine` line the encoder does not know (8/16-bit and segment registers, port I/O, `bytes`), `physaddr(n)`, the `cpu.*` and `mem.*`
 intrinsics, an `os.syscall` with more than seven words (the number and six
 arguments are all the registers a system call has) and aggregate constants.

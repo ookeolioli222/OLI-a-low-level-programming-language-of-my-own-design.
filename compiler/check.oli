@@ -1120,10 +1120,12 @@ proc bind_pattern_names(pg: ref Prog, mi: u64, pat: u64)
         end
         ret
     end
-    if k != N_PATFAIL
-        ret
+    sub : u64 <- 0
+    if k == N_PATFAIL
+        sub <- kid1(cx, pat)
+    elif k == N_PAT
+        sub <- pat
     end
-    sub := kid1(cx, pat)
     if sub == 0
         ret
     end
