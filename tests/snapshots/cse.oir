@@ -1,0 +1,146 @@
+(oir
+  (static 0 len=25)
+  (static 1 len=27)
+  (static 2 len=27)
+  (static 3 len=27)
+  (static 4 len=27)
+  (static 5 len=27)
+  (static 6 len=3)
+  (proc twice locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = param 2
+      store frame.2, %4
+      %6 = load frame.0
+      %7 = load frame.1
+      %8 = load frame.2
+      check.bounds %8, %7
+      %10 = add %6, %8
+      %11 = raw.load.8 %10
+      %12 = load frame.0
+      %13 = load frame.1
+      %14 = load frame.2
+      check.bounds %14, %13
+      %16 = add %12, %14
+      %17 = raw.load.8 %16
+      %18 = add %11, %17
+      check.overflow %18
+      ret %18))
+  (proc square_sum locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = load frame.0
+      %5 = load frame.1
+      %6 = add %4, %5
+      check.overflow %6
+      %7 = load frame.0
+      %8 = load frame.1
+      %9 = add %7, %8
+      check.overflow %9
+      %10 = mul %6, %9
+      check.overflow %10
+      ret %10))
+  (proc pick locals=4
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = param 2
+      store frame.2, %4
+      %6 = load frame.0
+      %7 = load frame.1
+      %8 = add %6, %7
+      check.overflow %8
+      store frame.3, %8
+      %10 = load frame.2
+      branch %10, bb1, bb3)
+    (bb1 preds bb0
+      %12 = load frame.3
+      %13 = load frame.0
+      %14 = load frame.1
+      %15 = add %13, %14
+      check.overflow %15
+      %16 = add %12, %15
+      check.overflow %16
+      ret %16)
+    (bb2
+      jump bb3)
+    (bb3 preds bb0 bb2
+      %21 = load frame.0
+      %22 = load frame.1
+      %23 = add %21, %22
+      check.overflow %23
+      ret %23))
+  (proc start locals=0 entry
+    (bb0
+      %0 = addr.of static.6
+      %1 = len.of static.6
+      arg %0
+      arg %1
+      %4 = const 1
+      arg %4
+      %6 = call twice/3
+      %7 = const 196
+      %8 = cmp.ne %6, %7
+      branch %8, bb1, bb3)
+    (bb1 preds bb0
+      %10 = const 1
+      ret %10)
+    (bb2
+      jump bb3)
+    (bb3 preds bb0 bb2
+      %15 = const 3
+      arg %15
+      %17 = const 4
+      arg %17
+      %19 = call square_sum/2
+      %20 = const 49
+      %21 = cmp.ne %19, %20
+      branch %21, bb4, bb6)
+    (bb4 preds bb3
+      %23 = const 2
+      ret %23)
+    (bb5
+      jump bb6)
+    (bb6 preds bb3 bb5
+      %28 = const 5
+      arg %28
+      %30 = const 6
+      arg %30
+      %32 = const 1
+      arg %32
+      %34 = call pick/3
+      %35 = const 22
+      %36 = cmp.ne %34, %35
+      branch %36, bb7, bb9)
+    (bb7 preds bb6
+      %38 = const 3
+      ret %38)
+    (bb8
+      jump bb9)
+    (bb9 preds bb6 bb8
+      %43 = const 5
+      arg %43
+      %45 = const 6
+      arg %45
+      %47 = const 0
+      arg %47
+      %49 = call pick/3
+      %50 = const 11
+      %51 = cmp.ne %49, %50
+      branch %51, bb10, bb12)
+    (bb10 preds bb9
+      %53 = const 4
+      ret %53)
+    (bb11
+      jump bb12)
+    (bb12 preds bb9 bb11
+      %58 = const 42
+      ret %58)))

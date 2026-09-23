@@ -40,7 +40,7 @@ is complete.
   layer 4 — all four `tests/snapshots/*.ast` **and all three
   `tests/snapshots/*.sema`** are reproduced byte for byte (items, signatures,
   locals, and a type and a region on every expression of every body), all
-  fifteen `tests/parse/err` fixtures and **all fifteen** `tests/sema/err`
+  fifteen `tests/parse/err` fixtures and **all sixteen** `tests/sema/err`
   fixtures give exactly their expected diagnostics (capabilities, `E0900`,
   constants, layouts, scopes, definite assignment, reachability, failures,
   exhaustiveness, read-only places, region escapes, literal types, address
@@ -523,12 +523,314 @@ session, reads four bytes and would otherwise wait on a terminal forever.
 With `io.in`/`io.out` it is the first run fixture that imports a module
 (`std.os`).
 
+## Implemented in back-end stage 7 (2026-09-23): statics and raw access
+
+- **Static places.** A module-level `NAME : T [<- e]` is a place in a
+  second, read+write segment of the image (ABI.md §7): the ones with an
+  initialiser come first and their bytes are in the file (`.data`), the ones
+  without follow as memory past the file (`.bss`), which the kernel zeroes.
+  `addr.of data.k` reaches one; a scalar is loaded and stored at its width,
+  a static array is read as the view of its bytes, so `.len`, `[i]`, `each`
+  and passing it to a view parameter all work as for any view. The ELF
+  writer emits the second program header only when a program has statics, so
+  `hello` is still 284 bytes with one; the lowering and the writer compute
+  the segment's address by one formula — the first attempt computed it two
+  ways and read `.data` from the wrong page, which the fixture caught at its
+  first check.
+- **Raw access.** `[p]` and `[p] <- x` through an `addr T` are a raw load
+  and store at the width of `T`, under `permit memory.raw` as the checker
+  requires.
+- `tests/run/statics.oli` pins twelve checks, `statics.{oir,ssa,opt}` the
+  form, and the harness checks the program-header count of both images.
+
+Not lowered: an array place in a frame (`name : [N]T` inside a procedure —
+it needs frame slots of more than three words, which the fixed stride does
+not give) and a static with an aggregate initialiser (`:= { … }`, a
+constant in `.rodata`).
+
+## Implemented in back-end stage 8 (2026-09-23): arrays in frames — M2 complete
+
+- **The frame is laid out by size.** A local no longer owns a fixed three
+  words: `gen_proc` lays the locals of each procedure out in order — an
+  integer one word, a view two, a zone three, an array `[N]T` as many as its
+  bytes need — and `local_off` gives each its first word; the compiler-made
+  places, the values and the scratch words of the edge copies follow as
+  before. `name : [N]T` in a procedure starts zero (a loop over its words,
+  since a frame is not a fresh mapping) and reads as the writable view of
+  its bytes, so `.len`, `[i]`, `each`, a view argument and `Name.at` all
+  work as for any view; its address is taken, so `mem2reg` keeps its words.
+  `tests/run/frames.oli` pins eleven checks, two procedures with arrays of
+  their own among them, and `frames.{oir,ssa,opt}` the form. With it every
+  construct of M2 runs.
+- **Two front-end defects found by the first program with a local array.**
+  `elem_of` did not know `[N]T`, so `buf[3]` was typed `[16]u8`; and a local
+  array read as a value kept its place type, so `Header.at(buf)` gave a
+  read-only ref. Both are fixed where they were wrong (`elem_of` reads the
+  element of an array; `name_type` gives a local array the `rw view T` a
+  static one already had). No snapshot fixture has a local array, which is
+  why nothing had noticed.
+
+## Implemented in back-end stage 9 (2026-09-23): the arithmetic modes, every zone source, a release on every exit edge
+
+- **`sat(e)` and `checked(e)`, `T.sat(x)` and `T.checked(x)` run.** A 64-bit
+  operation in either mode reads the flag the machine set — `ovf.of %v` in
+  OIR, `seto`/`setc` right after the operation in x86-64 — and a narrower one
+  compares the whole-word result with the range of its type (signed where
+  the raw result can be negative, unsigned where a product of two `u32` can
+  pass 2^63). `sat` clamps through two compares and two selects; `checked`
+  accumulates the flags of every operator inside `e` into one place and
+  fails when any was set, so `else` and `case` resolve it exactly as a
+  fallible call. `tests/run/saturate.oli` pins twenty-one checks, both
+  narrow and whole-word, both ends of both signednesses; the harness pins
+  that a 64-bit mode reads the flag and that exactly the four trapping
+  subtractions written outside any mode carry a check.
+- **Every source of a zone (`spec/OLI_MEMORY_V0.md` §3) runs.** `at ADDR`
+  and a zone over a buffer are `zone.new.raw %t, %size, %addr` — the triple
+  laid over memory that exists, nothing released at `end`; the buffer form
+  first proves with `check.range` that the buffer holds the size, so a short
+  buffer is a `bounds` trap at the zone's line (`trap/zone_buffer.oli`). A
+  zone `from` a parent is `zone.new.from %t, %size, %parent`: the bytes are
+  carved as `zone.alloc` carves them, with the parent's `zone_exhausted`
+  trap (`trap/zone_from.oli`), and `zone.end.from %t, %parent` gives the
+  parent its cursor back — set to the child's base, which every later
+  allocation rounds to the same place the old cursor would have rounded to.
+  A zone inside a zone is whichever of these it says.
+- **A zone is released on every exit edge.** The builder keeps a stack of
+  the zones open in the procedure; `ret`, `fail` and the `else ret` / `else
+  fail` handlers release all of them innermost first after the value is
+  computed and before the procedure is left, `break` and `continue` release
+  those opened inside the loop, and the block's `end` releases its own. So
+  a `zone.new` has as many `zone.end` as the block has ways out, and the
+  E0900 that refused `ret` in a zone of a non-entry procedure, a jump out of
+  a zone and a zone inside a zone is gone. `z.try_bytes(n)` is computed in
+  the stream — cursor and limit read, the cursor rounded and compared, moved
+  only on the ok path — and answers `rw view u8 or none`, the first view
+  payload; `else` joins its two words through two places and `case` binds
+  them. `tests/run/zones.oli` pins twenty checks over all of it.
+- **A defect the first zone in a non-entry procedure found.** A local of
+  several words — a zone's triple, an array, the target of `ref x` — was
+  addressed from its *first* frame word and written upward, into the words of
+  the locals before it and the saved frame pointer. In the entry procedure
+  nothing noticed: its `ret` is `exit_group`. In any other procedure the
+  return crashed. `local_base` now takes the address of the last word, which
+  is where the bytes of a downward-growing frame begin, and every snapshot
+  with a zone, an array or a `ref` of a local changed accordingly.
+
+## Implemented in back-end stage 10 (2026-09-23): common subexpressions and `--explain`
+
+- **Common-subexpression elimination with the `dominance` proof.** Value
+  numbering over the dominator tree (`cse_proc`, `compiler/opt.oli`):
+  blocks are walked in reverse postorder and every operation whose value its
+  operands alone determine — a constant, an arithmetic, bit, shift or
+  compare operation, a truncation, an address of a static or a frame word —
+  is looked up in a table keyed by opcode, operator, operands, width and
+  signedness. An equal instruction in a dominating block computes the same
+  value, so the later one's uses move to it and it goes. A check equal to a
+  dominating check, or an operation whose check a dominating equal operation
+  also carries, is removed with the proof §6 calls dominance by an equal
+  check: on every path here the earlier one ran on the same operands and
+  trapped first if this one would have. What is not merged: loads (memory
+  may have changed), calls, syscalls, allocations, parameters, phis, and an
+  operation whose flag `ovf.of` reads. `tests/run/cse.oli` pins four such
+  removals — a second read of the same element, the same sum twice, a sum
+  in the entry block reused in both arms — and keeps the four checks that
+  stand first; every `.opt` snapshot changed where duplicated constants
+  merged. The hash is reduced with masks, not `%`: oli-core divides signed,
+  and the first program with a constant above 2^63 found the hash negative.
+- **`olic --explain` and `--explain-cost` run** (`compiler/explain.oli`,
+  `bin/olic --explain`). Per procedure, from the OIR after the passes and
+  the frame the lowering laid out: the frame in words and its parts, the
+  checks kept and the ones removed by each proof, zones opened / released /
+  allocated from, calls, syscalls, operations proved to always trap; then
+  every source line that produced an instruction with the count of each
+  cost class of `docs/LANGUAGE_VISION.md` §7 it carries, highest first.
+  Every instruction now records the statement it came from (`ins.node`),
+  which is what the line report reads. `tests/snapshots/cse.explain` and
+  `zones.explain` pin the report byte for byte. What it cannot say yet is
+  a register assignment, because there is no register allocator.
+
+## Implemented in back-end stage 11 (2026-09-23): `choice` as a failure
+
+- **A choice that fits eight bytes runs.** Its value is its memory image
+  (ABI.md §3) in one word: the tag — the variant's number in declaration
+  order, from 0 — in the first byte, each field at the offset
+  `resolve_choice` gave it. `fail VARIANT { f: e }` builds the word with a
+  mask at the field's width and a shift to its offset, a bare `fail VARIANT`
+  is the tag alone, and a choice-typed place or parameter is one word, so
+  `fail e` from a place works too. `case … when fail VARIANT { f }` compares
+  the tag byte arm by arm in the order written and reads each named field
+  back — shifted down and passed through `trunc` at the field's width and
+  signedness, so an `s8` comes back sign-extended — into the local the
+  pattern declared; a bare `when fail` or `else` takes the rest. `else fail`
+  hands the word on unchanged. A choice wider than a word would need memory
+  and is `E0900`, which the harness probes. `tests/run/choice.oli` pins
+  twenty-three checks; no OIR instruction was added — the integer group's
+  `and`, `shl`, `shr`, `or` and `trunc` are all it takes.
+- **Two front-end defects found on the way.** A pattern local was resolved
+  at the `case` statement rather than at the pattern that declared it, so
+  two arms binding the same name stored into the first one's frame word and
+  read the second's — the verifier caught the dangling operand. The builder
+  now resolves pattern names where the front end declared them. And a
+  pattern or literal naming a field the variant does not declare was
+  accepted (`{ by4 }` bound an untyped local silently): `E0208` — missing,
+  unknown or duplicate field in a literal or pattern — is now reported, at
+  the field, once per literal (`tests/sema/err/fields.oli`, the sixteenth
+  negative fixture).
+
+## Implemented in back-end stage 12 (2026-09-23): `machine x64` blocks
+
+- **An x86-64 encoder of the compiler's own** (`compiler/asm.oli`, design
+  0009). The parser had cut every line of a block into an instruction and
+  its operands; the encoder reads that tree — r64 and r32 registers, an
+  immediate, `[base + index*scale + disp]`, `[static + disp]`, `.label`, a
+  procedure's name — and writes the bytes: the whole subset the genesis
+  assembler proves (`mov`, the ALU group, `test`, the one-operand group,
+  `imul`, the shifts, `lea`, `push`/`pop`, `call`/`jmp` direct and
+  indirect, every conditional branch, `ret`, `cqo`, `syscall`) plus the
+  fixed opcodes a kernel needs (`hlt`, `cli`, `sti`, `nop`, `iretq`,
+  `cpuid`, `rdmsr`, `wrmsr`, `rdtsc`, `pause`, `lgdt`, `lidt`, `mov` to and
+  from a control register). Its output is pinned byte for byte:
+  `tests/machine/{registers,memory,conditions,mov32}.oli` carry the lines
+  of the genesis assembler's fixtures and their `.hex` files the bytes those
+  fixtures were derived by hand from; `olic --show-asm` prints every block's
+  bytes after the fixups and the harness compares — 568 bytes, all equal.
+  A line the encoder does not know is `E0900` at that line, found by a dry
+  run into the empty code arena while the OIR is built, so nothing is
+  written.
+- **The block in the stream and in the frame.** `in REG <- e` becomes
+  `machine.in REG, %v` just before the block, `out REG -> place` a `%n =
+  machine.out REG` just after it, and the block `machine x64`; the lowering
+  loads the ins into their registers, assembles the block in place, stores
+  each out's register into its value's word, and — before and after — keeps
+  every callee-saved register the block names (rbx, r12–r15) in words of
+  the frame reserved for it, so a caller that holds a value in rbx across
+  the call gets it back. A `mov r64, name` of a procedure or a static and a
+  `call`/`jmp` to a procedure are fixups the block hands to the ELF
+  writer's table (two new kinds, absolute 64-bit). `tests/run/machine.oli`
+  pins seven checks: `in`/`out` arithmetic, a loop over local labels, a
+  callee-saved register kept across a call into a block that uses it, an
+  r32 `out` zero-extended, a static read by name, and `getpid` written by
+  hand. What remains `E0900` inside a block: 8/16-bit and segment
+  registers, port I/O and `bytes`, which the genesis assembler rejects too.
+- Building this found an oli-core rule the compiler's own source must obey:
+  a constant or a layout is visible to `oli1` only after its declaration,
+  so the encoder's tables and its operand record live with the arenas in
+  `compiler/oir.oli`.
+
+## Implemented in back-end stage 13 (2026-09-23): register allocation
+
+- **Linear scan over the callee-saved registers** (`alloc_proc`,
+  `compiler/x64.oli`; OIR_SPEC §7). The interval of a value runs from its
+  definition to its last use — an instruction reads where it stands, a phi
+  reads its operand at the end of the predecessor, an argument or a machine
+  input by the end of its block, a terminator at the end of its block — and
+  a value live into a loop header is extended to the end of the loop, back
+  edge by back edge, until nothing changes. The scan hands out rbx, r12,
+  r13, r14 and r15: five registers no call, syscall, zone operation or trap
+  check the lowering emits ever touches, because all of those work in rax,
+  rcx, rdx, rsi, rdi and r8–r11. When none is free the value that ends last
+  gives its register up if it ends after the new one. Every value keeps
+  its frame word, so giving a register back costs nothing and nothing
+  changes in the OIR or its snapshots.
+- **One abstraction for where a value is.** Every read and write of a
+  value in the lowering — fifty-four sites — goes through `ld_val`,
+  `st_val` and `push_val`, which read the location map and emit either the
+  frame access or a register move; the lowering itself does not know which.
+  A procedure saves the registers the scan used in words of the frame
+  reserved past the machine-block save words and restores them before every
+  `ret`; the entry procedure exits and saves nothing. A machine block's
+  inputs and outputs stay in the frame (a swap through two `in` lines would
+  otherwise clobber), and `cpuid` counts as naming rbx.
+- `--explain` prints `(registers values=N saved=…)` per procedure;
+  `tests/snapshots/cse.explain` and `zones.explain` pin it. The self-compiled
+  compiler is what verifies the allocation: layer 6 builds `olic` with the
+  allocating compiler and requires every fixture and the compiler itself to
+  come out byte for byte the same.
+
+## Implemented in back-end stage 14 (2026-09-23): the freestanding shape of M3
+
+- **A program that says `-- target: freestanding` compiles and runs.** Its
+  entry is a `-> never` procedure with `calls none`: no prologue, no frame,
+  no saved registers — the machine blocks of its body are the whole
+  procedure, and the OIR builder refuses anything else in it (E0900). A
+  procedure with `section ".text.boot"` is lowered first, so the entry is
+  the first instruction of the image. `cpu.halt()` and `cpu.pause()` are
+  `cpu.halt` / `cpu.pause` in OIR and `hlt` / `pause` in the code. A
+  `-> never` body that falls off its end ends in `ud2`, never in `ret`.
+  Statics honour `align N` (the natural alignment of their size otherwise),
+  in `.data` and in `.bss` alike. `tests/run/freestanding.oli` runs as a
+  plain Linux process — it can, because the image holds nothing but the
+  program's own bytes — installing its stack from a static array, carving
+  a zone `at` an address and one `from` a buffer, and exiting through a
+  system call written in a `machine` block.
+- **Traps reach the `traps` procedure.** Every trap site in a freestanding
+  program loads the kind (as `core.TrapKind`, the variant's number), the
+  address and length of its module's file static and the line, and calls a
+  routine that aligns the stack, pushes the three words of the `core.Site`
+  (SysV MEMORY class, 24 bytes) and calls the procedure declared with
+  `traps`; without one a trap is `ud2`. On the callee's side a layout
+  parameter wider than sixteen bytes is now lowered: its bytes lie above
+  the return address and the parameter's word is their address, the same
+  form a by-value field takes, so `site.line` reads straight through it. A
+  layout of sixteen bytes or less as a parameter, and a layout argument on
+  the caller's side, stay E0900. `tests/freestanding/trap_line.oli` exits
+  with the line of its overflow, delivered this way; the harness runs every
+  program in that directory and requires the status its `-- expect: exit`
+  line names and no output at all.
+- **Two things the first freestanding trap found.** The jump over a trap
+  site skipped a fixed twenty-five bytes — the hosted message-and-call
+  sequence — where the freestanding one is forty-five, so the fall-through
+  path landed inside the site; the length now follows the mode. And the
+  file statics the sites name were dropped by the dead-static pass, which
+  only sees instructions; a live site now keeps its file.
+- Not implemented (FREESTANDING.md §2, §8): the target profile — load
+  address, code model, section order beyond `.text.boot` — the Multiboot
+  header, port I/O, `mem.mmio`, `own`. The image is the same two-segment
+  ELF64 at `0x400000` as a hosted program's.
+
+## Implemented in back-end stage 15 (2026-09-23): M3 closed — load address, read-only and aggregate statics, the kernel image
+
+- **`-- load: ADDR`** near the top of a program is the load address of the
+  image (FREESTANDING.md §2's `load_address`, read from the source since
+  `olic` reads only stdin); default `0x400000`. Every static is named
+  through a 64-bit immediate, so the address can be anything: the fixups
+  for read-only and writable statics now patch all eight bytes of the
+  `movabs` they stand in. A `[static + disp]` operand of a `machine` block
+  is a sign-extended disp32 and the encoder refuses it unless the load
+  address is in the low or the top 2 GiB (two fixup kinds of their own).
+- **Statics with `section ".text…"` or `".rodata…"`** go in the read-only
+  segment, in front of the code, at their alignment — where a boot loader's
+  header must be — and are kept whether or not the program names them.
+  They are read through `addr.of static`; a store to one is E0900.
+- **Aggregate initialisers of statics** run: `{ a, b, … }` for an array,
+  element by element at the element's width (the rest zero), and `Name {
+  f: c, … }` for a layout, field by field at its offset and width; every
+  value a constant expression. A layout held by value as a static reads as
+  its address, as a by-value field does, so `pair.a` and `pair.a <- 6`
+  work. `tests/run/aggregates.oli` pins ten checks.
+- **Design 0023: the narrow forms a block may use** — port I/O through
+  `al`/`ax`/`eax` and `dx` or an `imm8`, `mov SREG, ax`, `mov ax, SREG`,
+  `mov ax, imm16`, `retfq` — exactly those, encoded from the tokens; every
+  other 8/16-bit form stays E0900.
+- **`examples/kernel.oli`**, the M3 target program of FREESTANDING.md §8:
+  a Multiboot2 header as a static layout with an initialiser in
+  `.text.boot`, its own entry and stack, COM1 through `out dx, al`, the VGA
+  text buffer through raw stores, `cpuid` through a block, `hlt` forever.
+  There is no emulator on this machine, so the harness checks the image
+  structurally — an ELF64 loaded at `0x100000`, the entry inside it, the
+  header's magic, length, checksum and end tag at file offset 176, `ee`
+  and `0f a2` in the blocks, `syscalls=0` in every procedure's `--explain`
+  — and `qemu-system-x86_64 -kernel kernel.elf -serial stdio` is the
+  documented way to run it. M3 is closed with that: what FREESTANDING.md
+  still lists as planned is the profile *file*, the section order beyond
+  `.text.boot`, `mem.mmio` and `own`.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 17,589 lines) into
+compiles its own source (`compiler/`, seventeen modules, 23,395 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 829,629 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 869,505 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,
@@ -564,11 +866,9 @@ five defects that no fixture had:
   say `wrap` there; `docs/COMMANDS.md` records that.
 
 What self-hosting does **not** say: stage 2 is the same compiler with the
-same limits, not a better one; every value still owns a frame word (the
-self-compiled binary is 829 KiB where `oli1`'s is 436 KiB, the price of no
-register allocator), and the constructs still refused — `choice`,
-`machine`, statics, `[N]T`, raw `[p]`, `be`/`le` — are refused by stage 2
-exactly as by stage 1. The fixpoint proves the compiler agrees with itself;
+same limits, not a better one; every value still owns a frame word beside
+the register the linear scan may give it, and the constructs still refused — `choice`,
+`machine`, `be`/`le` — are refused by stage 2 exactly as by stage 1. The fixpoint proves the compiler agrees with itself;
 the fixture corpus is what says it agrees with the language.
 
 ## Implemented during the G2 review

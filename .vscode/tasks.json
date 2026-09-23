@@ -45,6 +45,20 @@
             "problemMatcher": []
         },
         {
+            "label": "oli: show the bytes of every machine block (current file)",
+            "type": "shell",
+            "command": "bin/olic --show-asm \"${file}\"",
+            "presentation": { "reveal": "always", "clear": true },
+            "problemMatcher": []
+        },
+        {
+            "label": "oli: explain cost per procedure and line (current file)",
+            "type": "shell",
+            "command": "bin/olic --explain \"${file}\"",
+            "presentation": { "reveal": "always", "clear": true },
+            "problemMatcher": []
+        },
+        {
             "label": "oli: show semantic graph (current file)",
             "type": "shell",
             "command": "bin/olic --show-sema \"${file}\"",

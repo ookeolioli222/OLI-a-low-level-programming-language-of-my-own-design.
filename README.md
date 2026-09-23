@@ -34,7 +34,7 @@ semantic analysis (`compiler/`), written in oli-core and built by `oli1`,
 tokenize every fixture, reproduce every `tests/snapshots/*.ast` **and every
 `tests/snapshots/*.sema` byte for byte** — items, signatures, locals and typed
 bodies with a type and a region on every expression — and report exactly the
-diagnostics of all fifteen negative parse fixtures and all fifteen negative
+diagnostics of all fifteen negative parse fixtures and all sixteen negative
 semantic fixtures (`docs/design/0022`). Genesis step 6f then added explicit
 conversions (`T(x)`, `T.wrap(x)`, `T.bits(x)`) to oli-core and closed the last
 measured gap: `compiler/` is written in oli-core **and** satisfies every V0
@@ -46,9 +46,11 @@ result against `OIR_SPEC` §8, lowers it to x86-64 and writes an ELF64, so
 `olic < examples/hello.oli > hello && ./hello` prints `Hello Oli--` from a
 284-byte static binary with no libc and no linker — **M1**. Arithmetic traps
 on overflow as the language says it does (`trap: overflow at stdin:7`, exit
-134); `wrap(e)` turns the trap off. Anything the back end cannot lower yet —
-`choice`, `machine` blocks, statics, `[N]T` places — is `E0900` and
-writes no file.**
+134); `wrap(e)` turns the trap off. `machine x64` blocks are assembled by
+the compiler's own encoder, byte for byte what the genesis assembler
+produces. Anything the back end cannot lower yet — a `choice` wider than a
+word, a machine line the encoder does not know — is `E0900` and writes no
+file.**
 
 | Phase | Content | Status |
 |-------|---------|--------|
@@ -58,10 +60,10 @@ writes no file.**
 | G1 | `genesis/1-hex2`: labels and relative/absolute addresses | done |
 | G2 | `genesis/2-asm`: assembler for Oli-- `machine x64` blocks | working subset; narrower operands and multi-segment ELF remain |
 | G3 | `genesis/3-oli1`: oli-core compiler written in Oli-- machine blocks | steps 0–6f done: locals, expressions, strings, `if`/`while`, syscalls, procedures, zones, views, raw memory, traps, layouts, refs and fallible results (`T or E`, `fail`, `else`, `case`), module constants, typed places, `rw` field types, `loop` and explicit conversions (`T(x)`, `T.wrap(x)`, `T.bits(x)`) |
-| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all fifteen `tests/sema/err` fixtures exact**), plus a back end that reaches the fixpoint — **`olic` compiles `olic` into 829,629 bytes and that compiler compiles it again to the same bytes** (`genesis/test.sh` layer 6) — built as stages 1-6: the OIR instruction stream, **basic blocks, dominators and the `OIR_SPEC` §8 verifier**, **`mem2reg` with phi nodes placed by iterated dominance frontier**, **the passes of §6 — constant folding, check elision with a proof recorded for every removal, copy propagation and dead code** (`--show-oir`, `--show-ssa` and `--show-oir=opt`, nine snapshots), x86-64 lowering with trapping arithmetic, **zones, views, `each`, layouts, refs and fallible results** with `bounds`, `misaligned` and `zone_exhausted` traps, and the ELF64 writer; **`olic` analyses all seventeen of its own modules without a single diagnostic**; reproduces every AST **and every semantic** snapshot byte for byte; register allocation, common-subexpression elimination, `choice`, `machine` blocks and statics remain | **self-hosting reached** |
+| G4 | `compiler/`: `olic` in oli-core (design 0022) — lexer, parser, §8 diagnostics, module loader, item collection, signatures, local tables, expression typing with regions and conversions, typed bodies and every semantic check that needs no back end (**all sixteen `tests/sema/err` fixtures exact**), plus a back end that reaches the fixpoint — **`olic` compiles `olic` into 869,505 bytes and that compiler compiles it again to the same bytes** (`genesis/test.sh` layer 6) — built as stages 1-6: the OIR instruction stream, **basic blocks, dominators and the `OIR_SPEC` §8 verifier**, **`mem2reg` with phi nodes placed by iterated dominance frontier**, **the passes of §6 — constant folding, check elision with a proof recorded for every removal, copy propagation and dead code** (`--show-oir`, `--show-ssa` and `--show-oir=opt`, nine snapshots), x86-64 lowering with trapping arithmetic, **zones, views, `each`, layouts, refs and fallible results** with `bounds`, `misaligned` and `zone_exhausted` traps, and the ELF64 writer; **`olic` analyses all seventeen of its own modules without a single diagnostic**; reproduces every AST **and every semantic** snapshot byte for byte; then `sat`/`checked`, every zone source with a release on every exit edge, common-subexpression elimination with the `dominance` proof, `--explain`, `choice` as a failure (`fail VARIANT { f }`, `when fail VARIANT { f }`) and `machine x64` blocks with an encoder of its own (`--show-asm`, `tests/machine/*.hex`); a linear-scan register allocator over the callee-saved registers (`OIR_SPEC` §7) closes the list | **self-hosting reached** |
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | **done** (layer 5 of `genesis/test.sh`) |
-| M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | variables, trapping arithmetic, `wrap`, control flow, procedures, zones, views, `each`, layouts and refs run |
-| M3 | Freestanding binary with own entry point and own stack | not started |
+| M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | **done**: all of it runs, plus refs, fallible results, statics, arrays in frames and raw access (`tests/run/`) |
+| M3 | Freestanding binary with own entry point and own stack | **done**: own entry with no frame, own stack, `traps` with `core.Site`, zones `at`/`from`, `cpu.halt()`, `-- load:` address, Multiboot2 header as a static in `.text.boot`, port I/O — `tests/run/freestanding.oli` and `tests/freestanding/` run as processes, `examples/kernel.oli` is checked structurally (no emulator in the harness; `qemu-system-x86_64 -kernel` runs it) |
 | M4 | Minimal kernel written in Oli-- | not started |
 
 ## Try it

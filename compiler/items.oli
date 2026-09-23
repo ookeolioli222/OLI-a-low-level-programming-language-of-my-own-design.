@@ -86,6 +86,7 @@ layout Prog
     cdepth : u64
     zdepth : u64
     fstanding : u64
+    loadaddr : u64
     curhasres : u64
     curnever : u64
     curfallible : u64
@@ -129,6 +130,7 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.cdepth <- 0
     pg.zdepth <- 0
     pg.fstanding <- 0
+    pg.loadaddr <- 4194304
     pg.curhasres <- 0
     pg.curnever <- 0
     pg.curfallible <- 0
@@ -1170,6 +1172,76 @@ proc print_program(pg: ref Prog)
     put(1, ")\n")
 end
 
+proc target_load(src: view u8) -> u64
+    -- `-- load: 0x100000` (or a decimal) near the top of the program: the
+    -- address the image is linked and loaded at (FREESTANDING.md §2, the
+    -- source-side form of the profile's `load_address`). Default 0x400000.
+    mark := "-- load: "
+    i : u64 <- 0
+    while i + mark.len <= src.len
+        if i > 512
+            ret 4194304
+        end
+        if view_eq(src[i..i + mark.len], mark)
+            ret parse_addr(src, i + mark.len)
+        end
+        i <- i + 1
+    end
+    ret 4194304
+end
+
+proc parse_addr(src: view u8, start: u64) -> u64
+    i : u64 <- start
+    v : u64 <- 0
+    hex : u64 <- 0
+    if i + 1 < src.len
+        if src[i] == 48
+            if src[i + 1] == 120
+                hex <- 1
+                i <- i + 2
+            end
+        end
+    end
+    while i < src.len
+        c := src[i]
+        if hex == 1
+            if c >= 48
+                if c <= 57
+                    v <- v * 16 + u64(c) - 48
+                elif c >= 97
+                    if c <= 102
+                        v <- v * 16 + u64(c) - 87
+                    else
+                        ret v
+                    end
+                elif c >= 65
+                    if c <= 70
+                        v <- v * 16 + u64(c) - 55
+                    else
+                        ret v
+                    end
+                else
+                    ret v
+                end
+            else
+                ret v
+            end
+        else
+            if c >= 48
+                if c <= 57
+                    v <- v * 10 + u64(c) - 48
+                else
+                    ret v
+                end
+            else
+                ret v
+            end
+        end
+        i <- i + 1
+    end
+    ret v
+end
+
 proc target_freestanding(src: view u8) -> word
     -- A fixture selects the target with a `-- target: freestanding` line.
     mark := "-- target: freestanding"
@@ -1192,6 +1264,7 @@ end
 proc analyze(pg: rw ref Prog, z: zone, src: view u8)
     -- The root module is stdin; `core` is always available, then its imports.
     pg.fstanding <- target_freestanding(src)
+    pg.loadaddr <- target_load(src)
     root := add_module(pg, z, src, "stdin")
     load_named(pg, z, "core")
     load_imports(pg, z, root)

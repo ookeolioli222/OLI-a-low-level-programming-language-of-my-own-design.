@@ -993,12 +993,16 @@ echo "genesis: layer 3 (oli-core compiler, steps 0-6f) passed"
 OLIC_MODULES="../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli
 ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli
 ../compiler/body.oli ../compiler/check.oli ../compiler/oir.oli ../compiler/cfg.oli
-../compiler/ssa.oli ../compiler/opt.oli ../compiler/x64.oli ../compiler/elf.oli"
+../compiler/ssa.oli ../compiler/opt.oli ../compiler/x64.oli ../compiler/elf.oli
+../compiler/asm.oli"
 OLIC_FRONT="../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli
 ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli
 ../compiler/body.oli ../compiler/check.oli"
-# The back end without the machine: enough for the OIR drivers.
-OLIC_OIR="../compiler/oir.oli ../compiler/cfg.oli ../compiler/ssa.oli ../compiler/opt.oli"
+# The whole back end: the OIR drivers carry the machine too, because a
+# `machine x64` block is assembled once while the OIR is built (a dry run
+# that reports what the encoder does not know).
+OLIC_OIR="../compiler/oir.oli ../compiler/cfg.oli ../compiler/ssa.oli ../compiler/opt.oli
+../compiler/x64.oli ../compiler/elf.oli ../compiler/asm.oli"
 cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/show_tokens.oli > build/show_tokens.oli
 ./build/oli1.bin < build/show_tokens.oli > build/show_tokens || fail "oli1 could not compile compiler/ (show_tokens)"
 chmod +x build/show_tokens
@@ -1118,7 +1122,7 @@ grep -q 'E0900' build/chk.err || fail "checks: kernel_sketch must report the V1 
 for f in ../tests/sema/ok/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli; do
     ( cd .. && genesis/build/show_sema < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
 done
-echo "ok: olic reports exactly the diagnostics of all fifteen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, address spaces and implicit narrowing - and none on any positive fixture"
+echo "ok: olic reports exactly the diagnostics of all sixteen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces and implicit narrowing - and none on any positive fixture"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic front end and semantic analysis) passed"
 
@@ -1130,7 +1134,13 @@ for d in show_oir show_ssa show_opt verify_check; do
     ./build/oli1.bin < build/$d.oli > build/$d.again
     cmp build/$d build/$d.again || fail "$d build is not deterministic"
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli"; do
+# --explain and --show-asm read what the lowering laid out.
+for d in explain show_asm; do
+    cat $OLIC_MODULES ../compiler/$d.oli > build/$d.oli
+    ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
+    chmod +x build/$d
+done
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1139,7 +1149,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1161,7 +1171,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1175,7 +1185,7 @@ grep -q '; check\.div_zero %5 -- removed: proof(divisor)' build/control.opt \
     || fail "opt: the constant divisor of control.oli did not remove the zero check"
 [ "$(grep -c '^      check\.overflow' build/control.opt || true)" = 4 ] \
     || fail "opt: control.opt should keep the four checks whose operands are not constants"
-grep -q '; check\.bounds %9 -- removed: proof(constant)' build/memory.opt \
+grep -q '; check\.bounds %[0-9]* -- removed: proof(constant)' build/memory.opt \
     || fail "opt: a bounds check on two constants was not proved away"
 [ "$(grep -c 'removed: proof(loop-bound)' build/memory.opt || true)" -ge 2 ] \
     || fail "opt: the checks of each and of while-below-len were not proved by the loop bound"
@@ -1194,6 +1204,76 @@ grep -q 'raw\.store\.32' build/layouts.oir || fail "oir: a u32 field must be sto
 # Fallible results: a call answers with (tag, payload), `ret`/`fail` return a
 # pair, and a default joins the ok path through a phi.
 grep -q 'call\.payload' build/fallible.oir || fail "oir: a fallible call must read its payload out"
+# The arithmetic modes beside wrap: a 64-bit sat or checked reads the flag
+# the operation set, a narrow one compares with the type's range.
+( cd .. && genesis/build/show_oir < tests/run/saturate.oli > genesis/build/saturate.oir 2>/dev/null ) || fail "oir: saturate.oli"
+grep -q 'ovf\.of' build/saturate.oir || fail "oir: a 64-bit sat/checked operation must read the overflow flag"
+# The fixture writes four subtractions outside any mode (`0 - 100`,
+# `0 - 127 - 1`, `0 - 300`): those trap, nothing inside sat() or checked() does.
+[ "$(grep -c 'check\.overflow' build/saturate.oir || true)" = 4 ] || fail "oir: exactly the four trapping subtractions outside sat()/checked() carry a check"
+# The other sources of a zone (OIR_SPEC 4) and the release on every exit
+# edge: a zone at an address or over a proved buffer is zone.new.raw, one
+# carved from a parent is zone.new.from and gives the cursor back with
+# zone.end.from, and a ret, fail, break or continue inside a zone releases
+# it on its way out, so a zone.new has as many zone.end as the block has exits.
+( cd .. && genesis/build/show_oir < tests/run/zones.oli > genesis/build/zones.oir 2>/dev/null ) || fail "oir: zones.oli"
+grep -q 'zone\.new\.raw' build/zones.oir || fail "oir: a zone at an address or over a buffer must be zone.new.raw"
+grep -q 'check\.range .*' build/zones.oir || fail "oir: a zone over a buffer must prove the buffer holds it"
+grep -q 'zone\.new\.from' build/zones.oir || fail "oir: a zone carved from a parent must be zone.new.from"
+grep -q 'zone\.end\.from' build/zones.oir || fail "oir: a zone carved from a parent must give the parent its cursor back"
+[ "$(sed -n '/(proc first_word/,/(proc pick/p' build/zones.oir | grep -c 'zone\.end')" = 2 ] \
+    || fail "oir: first_word has a ret inside its zone and an end: two releases for one zone.new"
+[ "$(sed -n '/(proc count_loops/,/(proc start/p' build/zones.oir | grep -c 'zone\.end')" = 3 ] \
+    || fail "oir: count_loops leaves its zone by continue, break and end: three releases"
+grep -q 'raw\.load\.64' build/zones.oir || fail "oir: try_bytes must read the cursor and the limit in the stream"
+# Common-subexpression elimination (OIR_SPEC 6): an operation equal to one
+# that dominates it goes, and a check it carried goes with the proof
+# `dominance` — cse.oli has exactly four such checks, one per duplicated
+# operation, and keeps the six that stand first.
+[ "$(grep -c 'removed: proof(dominance)' build/cse.opt || true)" = 4 ] \
+    || fail "opt: cse.oli must remove exactly four checks by dominance"
+[ "$(grep -c '^      check\.' build/cse.opt || true)" = 6 ] \
+    || fail "opt: cse.oli must keep the 6 checks that stand first on every path"
+# A choice that fits a word is its image: the tag in the first byte, a field
+# masked and shifted to its offset, and read back at its width and sign.
+grep -q 'trunc\.8\.s' build/choice.oir || fail "oir: an s8 field of a variant must be read back sign-extended"
+grep -q ' = shl ' build/choice.oir || fail "oir: a field of a variant must be shifted to its offset"
+# A machine block stands in the stream as its ins, the block and its outs.
+grep -q 'machine\.in rax, %' build/machine.oir || fail "oir: an in of a machine block must be a machine.in"
+grep -q '= machine\.out rax' build/machine.oir || fail "oir: an out of a machine block must be a machine.out"
+grep -q '^      machine x64$' build/machine.oir || fail "oir: the block itself must stand in the stream"
+# The encoder, byte for byte: every block of tests/machine/NAME.oli must come
+# out as NAME.hex, the canonical bytes the genesis assembler's fixtures were
+# derived by hand from (genesis/2-asm/tests).
+for f in ../tests/machine/*.oli; do
+    n=$(basename "$f" .oli)
+    ( cd .. && genesis/build/show_asm < "tests/machine/$n.oli" > genesis/build/m_$n.asm 2> genesis/build/m_$n.err ) || fail "asm: $n.oli: $(head -1 build/m_$n.err)"
+    got=$(grep -E '^    [0-9a-f]{2}' build/m_$n.asm | tr -d ' \r\n)')
+    want=$(tr -d ' \r\n' < "../tests/machine/$n.hex")
+    [ -n "$got" ] || fail "asm: $n produced no bytes"
+    [ "$got" = "$want" ] || fail "asm: the bytes of $n differ from tests/machine/$n.hex"
+done
+echo "ok: olic assembles every machine x64 block of tests/machine/ to the canonical bytes of the genesis assembler - registers, memory operands, conditional branches and r32 forms (--show-asm)"
+# --explain reads the same form plus the frame the lowering laid out: the
+# per-procedure report and the cost of every line are pinned as snapshots.
+for n in cse zones; do
+    ( cd .. && genesis/build/explain < tests/run/$n.oli > genesis/build/$n.explain 2> genesis/build/explain.err ) || fail "explain: $n.oli: $(head -1 build/explain.err)"
+    cmp build/$n.explain ../tests/snapshots/$n.explain || fail "explain: $n differs from tests/snapshots/$n.explain"
+done
+grep -q 'dominance=1' build/cse.explain || fail "explain: cse.oli must report the check removed by dominance"
+grep -q '(registers values=[1-9][0-9]* saved=rbx' build/cse.explain || fail "explain: the linear scan must give values of cse.oli registers, rbx first"
+grep -q 'SYSCALL=' build/zones.explain || fail "explain: a zone from the operating system must be a SYSCALL on its line"
+grep -q '(line [0-9]* .*ZONE=' build/zones.explain || fail "explain: an allocation from a zone must be ZONE on its line"
+echo "ok: --explain reports every procedure's frame, checks with their proofs, zones, calls, syscalls, the values the linear scan put in callee-saved registers, and the cost class of every line that produced an instruction"
+# Statics: an initialised one is bytes in the file, a zero one is memory past
+# it, and the image has the read+write segment ABI.md 7 asks for.
+grep -q '(data 0 size=8 init)' build/statics.oir || fail "oir: the initialised static of statics.oli must be data"
+grep -q '(data 1 size=4 zero)' build/statics.oir || fail "oir: the zero static of statics.oli must be bss"
+grep -q 'addr\.of data\.' build/statics.oir || fail "oir: a static must be reached through its address"
+# An array in a frame keeps its words: its address is taken, so mem2reg
+# leaves the place, and it starts zero.
+[ "$(grep -c 'addr\.of frame\.' build/frames.ssa || true)" -ge 4 ] || fail "ssa: the array places of frames.oli must keep their frame words"
+grep -q 'raw\.store\.64' build/frames.oir || fail "oir: an array place must be zeroed on declaration"
 [ "$(grep -c 'phi \[' build/fallible.ssa || true)" -ge 2 ] || fail "ssa: an else-default must become a phi"
 ( cd .. && genesis/build/show_opt < tests/run/trap/narrow.oli > genesis/build/narrow.opt )
 grep -q '= trap overflow' build/narrow.opt \
@@ -1246,7 +1326,11 @@ for f in ../tests/run/*.oli; do
         [ "$st" = 42 ] || fail "run: $n exited $st, want 42 (the check number that failed)"
     fi
 done
-echo "ok: olic compiles and runs every tests/run fixture - arithmetic, control flow, procedures with register and stack arguments, constants, conversions, zones, views, each, layouts, refs, fallible results with else and case, and stdout"
+echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
+# The image of a program with statics has two loadable segments, the second
+# read+write on the page after the first; hello.elf still has one.
+[ "$(od -An -tu2 -j56 -N2 build/statics.elf | tr -d ' ')" = 2 ] || fail "elf: statics.elf should have two program headers"
+[ "$(od -An -tu2 -j56 -N2 build/hello.elf | tr -d ' ')" = 1 ] || fail "elf: hello.elf should have one program header"
 # The self-test of arith.oli is decided at compile time, and the messages of
 # the checks that were proved away are not in its image.
 [ "$(wc -c < build/arith.elf)" -lt 200 ] || fail "opt: arith.elf still carries the messages of checks that were proved away"
@@ -1264,7 +1348,43 @@ for f in ../tests/run/trap/*.oli; do
     got=$(cat build/t_$n.out)
     [ "$got" = "$want" ] || fail "trap: $n printed [$got], want [$want]"
 done
-echo "ok: overflow, narrow-width overflow, division by zero, MIN/-1, negation, an index or subview outside its view, a short or misaligned Name.at and an exhausted zone trap with the kind and line on fd 2 and exit 134"
+echo "ok: overflow, narrow-width overflow, division by zero, MIN/-1, negation, an index or subview outside its view, a short or misaligned Name.at, an exhausted zone, a child zone its parent cannot hold and a zone over a short buffer trap with the kind and line on fd 2 and exit 134"
+
+# Freestanding (FREESTANDING.md): the entry has no frame, `cpu.halt()` is
+# one instruction, and a trap reaches the `traps` procedure with its
+# `core.Site` — tests/freestanding/NAME.oli exits with the status its
+# `-- expect: exit N` line says and writes nothing, having no message to print.
+grep -q '^      cpu\.halt$' build/freestanding.oir || fail "oir: cpu.halt() must be one instruction of its own"
+grep -q 'zone\.new\.raw' build/freestanding.oir || fail "oir: a freestanding zone is at an address or from a buffer"
+for f in ../tests/freestanding/*.oli; do
+    n=$(basename "$f" .oli)
+    want=$(grep -- '-- expect: exit ' "$f" | sed 's/.*-- expect: exit //')
+    ( cd .. && genesis/build/olic < "tests/freestanding/$n.oli" > genesis/build/fs_$n.elf 2> genesis/build/fs_$n.err ) || fail "freestanding: olic could not compile $f: $(head -1 build/fs_$n.err)"
+    chmod +x build/fs_$n.elf
+    set +e; timeout 10 ./build/fs_$n.elf > build/fs_$n.out 2>&1; st=$?; set -e
+    [ "$st" = "$want" ] || fail "freestanding: $n exited $st, want $want"
+    [ ! -s build/fs_$n.out ] || fail "freestanding: $n wrote output, and it has no OS to write to"
+done
+echo "ok: a freestanding program runs from its own entry with no frame, installs its own stack, and a trap in it reaches the traps procedure with the kind and the core.Site of the line"
+
+# M3 (FREESTANDING.md 8): the kernel image. No emulator runs here, so the
+# image is checked structurally: linked at the address its `-- load:` line
+# names, the Multiboot2 header (a static layout with an initialiser, placed
+# in `.text.boot`) right after the ELF and program headers with the magic,
+# length and checksum the loader will verify, port I/O and cpuid in its
+# blocks, and not one system call in any procedure.
+( cd .. && genesis/build/olic < examples/kernel.oli > genesis/build/kernel.elf 2> genesis/build/kernel.err ) || fail "kernel: olic could not compile examples/kernel.oli: $(head -1 build/kernel.err)"
+readelf -h build/kernel.elf | grep -q 'Entry point address: *0x1001' || fail "kernel: the entry is not in the segment loaded at 0x100000"
+readelf -l build/kernel.elf | grep -q 'LOAD .*0x0000000000100000 0x0000000000100000' || fail "kernel: the first segment is not loaded at 0x100000"
+[ "$(od -An -tx1 -j176 -N24 build/kernel.elf | tr -d ' \n')" = "d65052e800000000180000001200ad17000000000800000000" ] \
+    || [ "$(od -An -tx1 -j176 -N24 build/kernel.elf | tr -d ' \n')" = "d65052e8000000001800000012afad170000000008000000" ] \
+    || fail "kernel: the Multiboot2 header is not at offset 176: $(od -An -tx1 -j176 -N24 build/kernel.elf | tr -d '\n')"
+( cd .. && genesis/build/show_asm < examples/kernel.oli > genesis/build/kernel.asm 2>/dev/null ) || fail "kernel: show_asm"
+grep -q '^    ee)' build/kernel.asm || fail "kernel: the COM1 write must be one out dx, al"
+grep -q '0f a2' build/kernel.asm || fail "kernel: cpuid must be in its block"
+( cd .. && genesis/build/explain < examples/kernel.oli > genesis/build/kernel.explain 2>/dev/null ) || fail "kernel: explain"
+[ "$(grep -c 'syscalls=0' build/kernel.explain)" = "$(grep -c '(proc ' build/kernel.explain)" ] || fail "kernel: a procedure of the kernel makes a system call"
+echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2 header at offset 176, port I/O and cpuid in its machine blocks and no system call anywhere (run it: qemu-system-x86_64 -kernel kernel.elf -serial stdio)"
 
 # A program with no trap site carries no trap routine.
 printf 'module notrap\nproc start -> s32\n    entry\n    ret 0\nend\n' > build/notrap.oli
@@ -1272,9 +1392,9 @@ printf 'module notrap\nproc start -> s32\n    entry\n    ret 0\nend\n' > build/n
 [ "$(wc -c < build/notrap.elf)" -lt 200 ] || fail "notrap.elf is $(wc -c < build/notrap.elf) bytes: the trap routine was emitted anyway"
 echo "ok: the trap routine and its messages are in the binary only when a trap site is"
 
-# Anything the back end cannot lower is E0900, never approximated: here a zone
-# opened inside another one, which needs the parent source of OIR_SPEC 4.
-printf 'module z\nproc start -> s32\n    entry\n    zone q 4096\n        zone r 4096\n            b := r.bytes(16)\n            b[0] <- 1\n        end\n    end\n    ret 0\nend\n' > build/nolower.oli
+# Anything the back end cannot lower is E0900, never approximated: here a
+# `choice` wider than a word, whose image would need memory (ABI.md 3).
+printf 'module z\nchoice Wide\n    one { a : u64, b : u64 }\nend\nproc f(x : u64) -> u64 or Wide\n    if x > 1 then fail one { a: x, b: x }\n    ret x\nend\nproc start -> s32\n    entry\n    v := f(1) else ret 3\n    if v != 1\n        ret 1\n    end\n    ret 0\nend\n' > build/nolower.oli
 set +e
 ( cd .. && genesis/build/olic < genesis/build/nolower.oli > genesis/build/nolower.elf 2> genesis/build/nolower.err )
 st=$?

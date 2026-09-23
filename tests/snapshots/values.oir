@@ -67,8 +67,8 @@
       jump bb9)
     (bb9 preds bb6 bb8
       %35 = const 65
-      store frame.3, %35
-      %37 = load frame.3
+      store frame.1, %35
+      %37 = load frame.1
       %38 = const 65
       %39 = cmp.ne %37, %38
       branch %39, bb10, bb12)
@@ -82,8 +82,8 @@
       %47 = const 97
       %48 = sub %46, %47
       check.overflow %48
-      %49 = load frame.3
-      %50 = load frame.3
+      %49 = load frame.1
+      %50 = load frame.1
       %51 = sub %49, %50
       check.overflow %51
       %52 = const 25
@@ -98,12 +98,12 @@
       jump bb15)
     (bb15 preds bb12 bb14
       %61 = const 1
-      store frame.6, %61
+      store frame.2, %61
       %63 = const 0
-      store frame.9, %63
-      %65 = load frame.9
+      store frame.3, %63
+      %65 = load frame.3
       %66 = not %65
-      %67 = load frame.6
+      %67 = load frame.2
       %68 = cmp.ne %66, %67
       branch %68, bb16, bb18)
     (bb16 preds bb15
@@ -112,15 +112,15 @@
     (bb17
       jump bb18)
     (bb18 preds bb15 bb17
-      %75 = load frame.6
-      store frame.24, %75
+      %75 = load frame.2
+      store frame.8, %75
       branch %75, bb19, bb20)
     (bb19 preds bb18
-      %78 = load frame.9
-      store frame.24, %78
+      %78 = load frame.3
+      store frame.8, %78
       jump bb20)
     (bb20 preds bb18 bb19
-      %81 = load frame.24
+      %81 = load frame.8
       branch %81, bb21, bb23)
     (bb21 preds bb20
       %83 = const 7
@@ -128,16 +128,16 @@
     (bb22
       jump bb23)
     (bb23 preds bb20 bb22
-      %88 = load frame.6
-      store frame.25, %88
+      %88 = load frame.2
+      store frame.9, %88
       %90 = not %88
       branch %90, bb24, bb25)
     (bb24 preds bb23
-      %92 = load frame.9
-      store frame.25, %92
+      %92 = load frame.3
+      store frame.9, %92
       jump bb25)
     (bb25 preds bb23 bb24
-      %95 = load frame.25
+      %95 = load frame.9
       %96 = not %95
       branch %96, bb26, bb28)
     (bb26 preds bb25
@@ -150,8 +150,8 @@
       %104 = const 5
       %105 = sub.s %103, %104
       check.overflow %105
-      store frame.12, %105
-      %107 = load frame.12
+      store frame.4, %105
+      %107 = load frame.4
       %108 = const 0
       %109 = cmp.gt.s %107, %108
       branch %109, bb29, bb31)
@@ -162,7 +162,7 @@
       jump bb31)
     (bb31 preds bb28 bb30
       %116 = const 0
-      %117 = load frame.12
+      %117 = load frame.4
       %118 = sub.s %116, %117
       check.overflow %118
       %119 = const 5
@@ -174,7 +174,7 @@
     (bb33
       jump bb34)
     (bb34 preds bb31 bb33
-      %127 = load frame.12
+      %127 = load frame.4
       %128 = const 3
       %129 = mul.s %127, %128
       check.overflow %129
@@ -191,10 +191,10 @@
       jump bb37)
     (bb37 preds bb34 bb36
       %140 = const 200
-      store frame.15, %140
-      %142 = load frame.15
-      store frame.18, %142
-      %144 = load frame.18
+      store frame.5, %140
+      %142 = load frame.5
+      store frame.6, %142
+      %144 = load frame.6
       %145 = const 200
       %146 = cmp.ne %144, %145
       branch %146, bb38, bb40)
@@ -204,7 +204,7 @@
     (bb39
       jump bb40)
     (bb40 preds bb37 bb39
-      %153 = load frame.15
+      %153 = load frame.5
       %154 = const 100
       %155 = add %153, %154
       check.overflow %155
@@ -218,7 +218,7 @@
     (bb42
       jump bb43)
     (bb43 preds bb40 bb42
-      %165 = load frame.12
+      %165 = load frame.4
       %166 = const 18446744073709551611
       %167 = cmp.ne %165, %166
       branch %167, bb44, bb46)
@@ -228,8 +228,8 @@
     (bb45
       jump bb46)
     (bb46 preds bb43 bb45
-      %174 = load frame.12
-      %175 = load frame.12
+      %174 = load frame.4
+      %175 = load frame.4
       %176 = cmp.ne.s %174, %175
       branch %176, bb47, bb49)
     (bb47 preds bb46
@@ -239,8 +239,8 @@
       jump bb49)
     (bb49 preds bb46 bb48
       %183 = const 65000
-      store frame.21, %183
-      %185 = load frame.21
+      store frame.7, %183
+      %185 = load frame.7
       %186 = const 1000
       %187 = add %185, %186
       check.overflow %187
@@ -253,7 +253,7 @@
     (bb51
       jump bb52)
     (bb52 preds bb49 bb51
-      %196 = load frame.21
+      %196 = load frame.7
       %197 = const 1000
       %198 = add %196, %197
       check.overflow %198

@@ -1,0 +1,39 @@
+(explain
+  (proc twice
+    (frame words=13 locals=3 temps=0 values=10 phi-scratch=0)
+    (checks kept=2 removed=1 constant=0 divisor=0 loop-bound=0 unreachable=0 dominance=1)
+    (zones opened=0 released=0 allocations=0)
+    (calls procedures=0 syscalls=0 always-traps=0)
+    (lines
+      (line 10 CHECK=2 ZERO=3))
+    (registers values=7 saved=rbx,r12,r13))
+  (proc square_sum
+    (frame words=7 locals=2 temps=0 values=5 phi-scratch=0)
+    (checks kept=2 removed=1 constant=0 divisor=0 loop-bound=0 unreachable=0 dominance=1)
+    (zones opened=0 released=0 allocations=0)
+    (calls procedures=0 syscalls=0 always-traps=0)
+    (lines
+      (line 15 CHECK=2))
+    (registers values=4 saved=rbx,r12,r13))
+  (proc pick
+    (frame words=11 locals=4 temps=0 values=7 phi-scratch=0)
+    (checks kept=2 removed=2 constant=0 divisor=0 loop-bound=0 unreachable=0 dominance=2)
+    (zones opened=0 released=0 allocations=0)
+    (calls procedures=0 syscalls=0 always-traps=0)
+    (lines
+      (line 20 CHECK=1)
+      (line 22 CHECK=1))
+    (registers values=5 saved=rbx,r12,r13,r14))
+  (proc start entry
+    (frame words=39 locals=0 temps=0 values=39 phi-scratch=0)
+    (checks kept=0 removed=0 constant=0 divisor=0 loop-bound=0 unreachable=0 dominance=0)
+    (zones opened=0 released=0 allocations=0)
+    (calls procedures=4 syscalls=0 always-traps=0)
+    (lines
+      (line 29 CALL=1 ZERO=8)
+      (line 32 CALL=1 ZERO=6)
+      (line 33 ZERO=1)
+      (line 35 CALL=1 ZERO=7)
+      (line 38 CALL=1 ZERO=6)
+      (line 41 ZERO=1))
+    (registers values=19 saved=rbx,r12,r13,r14,r15)))

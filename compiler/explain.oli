@@ -1,0 +1,394 @@
+module olic.explain
+-- `olic --explain` and `--explain-cost`: what the back end emitted for each
+-- procedure, read off the OIR after the passes of docs/OIR_SPEC.md §6 and
+-- the frame the lowering laid out — so what is printed is what is in the
+-- binary. Per procedure: the frame in words and its parts, the checks that
+-- stayed and the ones that went with the proof that let them, the zones
+-- opened, released and allocated from, the calls, the system calls and the
+-- operations proved to always trap; then the cost of every source line that
+-- produced an instruction, in the classes of docs/LANGUAGE_VISION.md §7
+-- (ZERO, CHECK, STACK, COPY, ZONE, CALL, SYSCALL, TRAP), highest first. A
+-- line that produced nothing is ZERO and is not listed; a line listed with
+-- ZERO alone costs register moves and nothing else.
+
+LINE_MAX := 65536
+NCLASS := 8
+CL_ZERO := 0
+CL_CHECK := 1
+CL_STACK := 2
+CL_COPY := 3
+CL_ZONE := 4
+CL_CALL := 5
+CL_SYSCALL := 6
+CL_TRAP := 7
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 4294967296
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        if pg.nerr > 0
+            ret 1
+        end
+        ob := oir_new(z)
+        build_oir(pg, ob)
+        if pg.nerr > 0
+            ret 1
+        end
+        before := count_checks(ob)
+        build_ssa(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        optimize(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        if pg.entrynode == 0
+            put(2, "olic: no entry procedure\n")
+            ret 1
+        end
+        mc := mach_new(z)
+        lower_all(pg, ob, mc, ob.base + hdr_size(ob))
+        lines := z.bytes(LINE_MAX * NCLASS * Cell.size)
+        print_explain(pg, ob, mc, lines)
+        ret 0
+    end
+end
+
+proc print_explain(pg: ref Prog, ob: rw ref Oir, mc: ref Mach, lines: rw view u8)
+    put(1, "(explain")
+    q : u64 <- 0
+    while q < ob.nproc
+        explain_proc(pg, ob, q, lines)
+        explain_regs(pg, ob, mc, q)
+        q <- q + 1
+    end
+    put(1, ")\n")
+end
+
+proc explain_regs(pg: ref Prog, ob: ref Oir, mc: ref Mach, q: u64)
+    -- The values the linear scan gave a callee-saved register, and which
+    -- registers the procedure therefore saves; the rest live in the frame.
+    op := oproc_at(ob, q)
+    n : u64 <- 0
+    mask : u64 <- 0
+    v : u64 <- op.first
+    while v < op.first + op.n
+        l := cell_get(mc.loc, v)
+        if l > 0
+            n <- n + 1
+            mask <- mask | (1 << (l - 1))
+        end
+        v <- v + 1
+    end
+    put(1, "\n    (registers")
+    put_field(pg, "values", n)
+    put(1, " saved=")
+    k : u64 <- 0
+    sep : u64 <- 0
+    while k < 5
+        r := alloc_reg(k)
+        if mask & (1 << r) != 0
+            if sep == 1
+                put(1, ",")
+            end
+            put(1, reg_name(r, 64))
+            sep <- 1
+        end
+        k <- k + 1
+    end
+    if sep == 0
+        put(1, "none")
+    end
+    put(1, "))")
+end
+
+proc ins_line(pg: ref Prog, mi: u64, node: u64) -> u64
+    -- The source line an instruction came from: that of the statement's
+    -- leftmost token, 0 for the instructions no statement produced (the
+    -- parameters, the phis).
+    if node == 0
+        ret 0
+    end
+    cx := mod_ctx(pg, mi)
+    t := ctok(cx, first_tok(pg, mi, node))
+    ret t.line
+end
+
+proc ins_class(ob: ref Oir, i: u64) -> u64
+    -- The cost class of one instruction (docs/MACHINE_MODEL.md §3): a
+    -- memory access is a move, an address-taken local is frame space, a
+    -- check or an operation carrying one is a compare-and-branch, an
+    -- allocation is the cursor arithmetic and its limit compare, a mapping
+    -- or its release is a kernel entry.
+    ins := ins_at(ob, i)
+    o := ins.op
+    if o == O_TRAP
+        ret CL_TRAP
+    end
+    if o == O_SYSCALL
+        ret CL_SYSCALL
+    end
+    if o == O_ZNEW
+        ret CL_SYSCALL
+    end
+    if o == O_ZEND
+        ret CL_SYSCALL
+    end
+    if o == O_CALL
+        ret CL_CALL
+    end
+    if o == O_ZALLOC
+        ret CL_ZONE
+    end
+    if o == O_ZFROM
+        ret CL_ZONE
+    end
+    if o == O_FADDR
+        ret CL_STACK
+    end
+    if o == O_CHKB
+        ret CL_CHECK
+    end
+    if o == O_CHKR
+        ret CL_CHECK
+    end
+    if o == O_CHKA
+        ret CL_CHECK
+    end
+    if o == O_OVF
+        ret CL_CHECK
+    end
+    if ins.site > 0
+        ret CL_CHECK
+    end
+    if ins.site2 > 0
+        ret CL_CHECK
+    end
+    ret CL_ZERO
+end
+
+proc class_name(c: u64) -> view u8
+    if c == CL_TRAP
+        ret "TRAP"
+    end
+    if c == CL_SYSCALL
+        ret "SYSCALL"
+    end
+    if c == CL_CALL
+        ret "CALL"
+    end
+    if c == CL_ZONE
+        ret "ZONE"
+    end
+    if c == CL_COPY
+        ret "COPY"
+    end
+    if c == CL_STACK
+        ret "STACK"
+    end
+    if c == CL_CHECK
+        ret "CHECK"
+    end
+    ret "ZERO"
+end
+
+proc put_field(pg: ref Prog, name: view u8, n: u64)
+    put(1, " ")
+    put(1, name)
+    put(1, "=")
+    put_uint(1, pg.tmp, n)
+end
+
+proc explain_proc(pg: ref Prog, ob: rw ref Oir, q: u64, lines: rw view u8)
+    tmp := pg.tmp
+    op := oproc_at(ob, q)
+    v := proc_at(pg, op.pi)
+    cx := mod_ctx(pg, v.mod)
+    nd := node_at(cx, v.node)
+    put(1, "\n  (proc ")
+    put(1, tok_text(cx, nd.t0))
+    if op.isentry == 1
+        put(1, " entry")
+    end
+    put(1, "\n    (frame")
+    put_field(pg, "words", op.nwords + op.ntmp + op.n + op.nphi)
+    put_field(pg, "locals", op.nwords)
+    put_field(pg, "temps", op.ntmp)
+    put_field(pg, "values", op.n)
+    put_field(pg, "phi-scratch", op.nphi)
+    put(1, ")")
+    -- The lines this procedure touches start at zero, then count.
+    clear_lines(pg, ob, op, lines)
+    kept : u64 <- 0
+    ncall : u64 <- 0
+    syscalls : u64 <- 0
+    opened : u64 <- 0
+    released : u64 <- 0
+    allocs : u64 <- 0
+    ntrap : u64 <- 0
+    lo : u64 <- LINE_MAX
+    hi : u64 <- 0
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < last
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            i : u64 <- bk.first
+            ilast := bk.first + bk.n
+            while i < ilast
+                ins := ins_at(ob, i)
+                o := ins.op
+                if o != O_DEAD
+                    ln := ins_line(pg, op.mi, ins.node)
+                    if ln < LINE_MAX
+                        c := ins_class(ob, i)
+                        k := ln * NCLASS + c
+                        cell_set(lines, k, cell_get(lines, k) + 1)
+                        if ln > 0
+                            if ln < lo
+                                lo <- ln
+                            end
+                            if ln > hi
+                                hi <- ln
+                            end
+                        end
+                    end
+                    if ins.site > 0
+                        kept <- kept + 1
+                    end
+                    if ins.site2 > 0
+                        kept <- kept + 1
+                    end
+                    if o == O_CALL
+                        ncall <- ncall + 1
+                    end
+                    if o == O_SYSCALL
+                        syscalls <- syscalls + 1
+                    end
+                    if o == O_ZNEW
+                        opened <- opened + 1
+                        syscalls <- syscalls + 1
+                    end
+                    if o == O_ZRAW
+                        opened <- opened + 1
+                    end
+                    if o == O_ZFROM
+                        opened <- opened + 1
+                    end
+                    if o == O_ZEND
+                        released <- released + 1
+                        syscalls <- syscalls + 1
+                    end
+                    if o == O_ZENDF
+                        released <- released + 1
+                    end
+                    if o == O_ZALLOC
+                        allocs <- allocs + 1
+                    end
+                    if o == O_TRAP
+                        ntrap <- ntrap + 1
+                    end
+                end
+                i <- i + 1
+            end
+        end
+        b <- b + 1
+    end
+    -- The checks that went, by the proof that let them.
+    nconst : u64 <- 0
+    ndiv : u64 <- 0
+    nloop : u64 <- 0
+    nunr : u64 <- 0
+    ndom : u64 <- 0
+    k2 : u64 <- 0
+    while k2 < ob.nproof
+        pr := proof_at(ob, k2)
+        if pr.ins >= op.first
+            if pr.ins < op.first + op.n
+                if pr.why == PR_CONST
+                    nconst <- nconst + 1
+                elif pr.why == PR_DIVISOR
+                    ndiv <- ndiv + 1
+                elif pr.why == PR_LOOP
+                    nloop <- nloop + 1
+                elif pr.why == PR_DOM
+                    ndom <- ndom + 1
+                else
+                    nunr <- nunr + 1
+                end
+            end
+        end
+        k2 <- k2 + 1
+    end
+    put(1, "\n    (checks")
+    put_field(pg, "kept", kept)
+    put_field(pg, "removed", nconst + ndiv + nloop + nunr + ndom)
+    put_field(pg, "constant", nconst)
+    put_field(pg, "divisor", ndiv)
+    put_field(pg, "loop-bound", nloop)
+    put_field(pg, "unreachable", nunr)
+    put_field(pg, "dominance", ndom)
+    put(1, ")\n    (zones")
+    put_field(pg, "opened", opened)
+    put_field(pg, "released", released)
+    put_field(pg, "allocations", allocs)
+    put(1, ")\n    (calls")
+    put_field(pg, "procedures", ncall)
+    put_field(pg, "syscalls", syscalls)
+    put_field(pg, "always-traps", ntrap)
+    put(1, ")\n    (lines")
+    ln2 : u64 <- lo
+    while ln2 <= hi
+        if line_used(lines, ln2) == 1
+            put(1, "\n      (line ")
+            put_uint(1, tmp, ln2)
+            c2 : u64 <- NCLASS
+            while c2 > 0
+                c2 <- c2 - 1
+                n := cell_get(lines, ln2 * NCLASS + c2)
+                if n > 0
+                    put_field(pg, class_name(c2), n)
+                end
+            end
+            put(1, ")")
+        end
+        ln2 <- ln2 + 1
+    end
+    put(1, ")")
+end
+
+proc line_used(lines: view u8, ln: u64) -> word
+    c : u64 <- 0
+    while c < NCLASS
+        if cell_get(lines, ln * NCLASS + c) > 0
+            ret 1
+        end
+        c <- c + 1
+    end
+    ret 0
+end
+
+proc clear_lines(pg: ref Prog, ob: ref Oir, op: ref OProc, lines: rw view u8)
+    -- Only the lines this procedure will count are cleared, so a program of
+    -- many procedures does not pay for the whole table each time.
+    i : u64 <- op.first
+    last := op.first + op.n
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op != O_DEAD
+            ln := ins_line(pg, op.mi, ins.node)
+            if ln < LINE_MAX
+                c : u64 <- 0
+                while c < NCLASS
+                    cell_set(lines, ln * NCLASS + c, 0)
+                    c <- c + 1
+                end
+            end
+        end
+        i <- i + 1
+    end
+end

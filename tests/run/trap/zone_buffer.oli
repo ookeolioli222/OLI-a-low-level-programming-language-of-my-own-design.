@@ -1,0 +1,15 @@
+module trap_zone_buffer
+-- A zone over a buffer shorter than its size: the buffer's bounds, at the
+-- line of the zone.
+-- expect: trap: bounds at stdin:8
+small : [1024]u8
+proc start -> s32
+    entry
+    zone h 4096 from small
+        b := h.bytes(16)
+        if b.len == 0
+            ret 1
+        end
+    end
+    ret 0
+end

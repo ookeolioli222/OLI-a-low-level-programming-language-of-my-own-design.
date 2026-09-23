@@ -46,6 +46,35 @@ end
 
 -- Statics nothing names ---------------------------------------------------------
 
+proc mark_rodata_places(ob: rw ref Oir)
+    -- A static place in the read-only segment stays whether or not the
+    -- program names it: a boot loader's header is read by the loader.
+    vi : u64 <- 0
+    while vi < DMAP_MAX
+        m := cell_get(ob.rmap, vi)
+        if m > 0
+            keep_static(ob, m - 1)
+        end
+        vi <- vi + 1
+    end
+end
+
+proc mark_site_files(ob: rw ref Oir)
+    -- Freestanding: a trap site still in the program names its file's
+    -- static through `core.Site` (`TMsg.fstat`), which no instruction does.
+    i : u64 <- 0
+    while i < ob.ntmsg
+        m := tmsg_at(ob, i)
+        if m.fstat > 0
+            ms := stat_at(ob, m.stat)
+            if ms.dead == 0
+                keep_static(ob, m.fstat - 1)
+            end
+        end
+        i <- i + 1
+    end
+end
+
 proc compact_statics(ob: rw ref Oir)
     -- The trap message of a check a pass proved away, or a string in a block
     -- nothing reaches, is a static nothing names any more. It is dropped
@@ -64,6 +93,8 @@ proc compact_statics(ob: rw ref Oir)
         mark_statics(ob, q)
         q <- q + 1
     end
+    mark_site_files(ob)
+    mark_rodata_places(ob)
     cursor : u64 <- 0
     i <- 0
     while i < ob.nstat
@@ -151,6 +182,9 @@ proc opt_proc(ob: rw ref Oir, q: u64)
             again <- 1
         end
         if elide_proc(ob, op) == 1
+            again <- 1
+        end
+        if cse_proc(ob, op) == 1
             again <- 1
         end
         if copyprop_proc(ob, op) == 1
@@ -247,6 +281,9 @@ proc site_kind(ob: ref Oir, i: u64, which: u64) -> u64
         ret TK_ZONE
     end
     if ins.op == O_ZALLOC
+        ret TK_ZONE
+    end
+    if ins.op == O_ZFROM
         ret TK_ZONE
     end
     ret TK_OVF
@@ -392,6 +429,21 @@ proc fold_proc(ob: rw ref Oir, op: ref OProc) -> word
     ret did
 end
 
+proc flag_source(ob: ref Oir, i: u64, ilast: u64) -> word
+    -- An operation whose flag the next instruction reads (`ovf.of`) is not
+    -- folded: the flag is the machine's, and a constant has none.
+    if i + 1 >= ilast
+        ret 0
+    end
+    nx := ins_at(ob, i + 1)
+    if nx.op == O_OVF
+        if nx.a == i
+            ret 1
+        end
+    end
+    ret 0
+end
+
 proc fold_blk(ob: rw ref Oir, b: u64) -> word
     did : word <- 0
     bk := blk_at(ob, b)
@@ -399,6 +451,10 @@ proc fold_blk(ob: rw ref Oir, b: u64) -> word
     ilast := bk.first + bk.n
     while i < ilast
         ins := ins_at(ob, i)
+        if flag_source(ob, i, ilast) == 1
+            i <- i + 1
+            continue
+        end
         if ins.op == O_BIN
             if is_plain_const(ob, ins.a) == 1
                 if is_plain_const(ob, ins.b) == 1
@@ -1020,6 +1076,196 @@ end
 
 
 
+-- Common subexpressions ---------------------------------------------------------
+
+proc cse_proc(ob: rw ref Oir, op: ref OProc) -> word
+    -- Value numbering by dominance (§6). An operation equal to one that
+    -- dominates it — same opcode, operator, operands, width and signedness —
+    -- computes the same value, so its uses move to the earlier one and it
+    -- goes. A check equal to a dominating check, and an operation whose
+    -- check a dominating equal operation also carries, is removed with the
+    -- proof `dominance`: on every path here the earlier one ran on the same
+    -- operands and trapped first if this one would have. Blocks are walked
+    -- in reverse postorder, so the dominating instruction is always in the
+    -- table before the dominated one is met.
+    did : word <- 0
+    h : u64 <- 0
+    while h < CSE_H
+        cell_set(ob.cseh, h, 0)
+        h <- h + 1
+    end
+    last := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    nrpo : u64 <- 0
+    while b < last
+        bk := blk_at(ob, b)
+        if bk.rpo > 0
+            cell_set(ob.work, op.bfirst + bk.rpo - 1, b)
+            if bk.rpo > nrpo
+                nrpo <- bk.rpo
+            end
+        end
+        b <- b + 1
+    end
+    r : u64 <- 0
+    while r < nrpo
+        b2 := cell_get(ob.work, op.bfirst + r)
+        if live_blk(ob, b2) == 1
+            bk2 := blk_at(ob, b2)
+            i : u64 <- bk2.first
+            ilast := bk2.first + bk2.n
+            while i < ilast
+                if cse_able(ob, i, ilast) == 1
+                    j := cse_find(ob, i, b2)
+                    if j >= 0
+                        cse_merge(ob, op, i, u64.bits(j))
+                        did <- 1
+                    else
+                        cse_insert(ob, i)
+                    end
+                end
+                i <- i + 1
+            end
+        end
+        r <- r + 1
+    end
+    ret did
+end
+
+proc cse_able(ob: ref Oir, i: u64, ilast: u64) -> word
+    -- What has a value determined by its operands alone, and the checks. A
+    -- load reads memory something may have written since, a call, a syscall,
+    -- an allocation and a parameter are what they are, a phi is its block's,
+    -- and an operation whose flag `ovf.of` reads must stay where it is.
+    ins := ins_at(ob, i)
+    o := ins.op
+    if o == O_BIN
+        if flag_source(ob, i, ilast) == 1
+            ret 0
+        end
+        ret 1
+    end
+    if o == O_CONST
+        ret 1
+    end
+    if o == O_UN
+        ret 1
+    end
+    if o == O_TRUNC
+        ret 1
+    end
+    if o == O_SADDR
+        ret 1
+    end
+    if o == O_SLEN
+        ret 1
+    end
+    if o == O_FADDR
+        ret 1
+    end
+    if o == O_DADDR
+        ret 1
+    end
+    if o == O_CHKB
+        ret 1
+    end
+    if o == O_CHKR
+        ret 1
+    end
+    if o == O_CHKA
+        ret 1
+    end
+    ret 0
+end
+
+proc cse_hash(ob: ref Oir, i: u64) -> u64
+    -- Reduced with a mask at every step: the compiler traps on overflow like
+    -- any program, and a constant above 2^63 must not meet a signed divide.
+    ins := ins_at(ob, i)
+    h : u64 <- (ins.op * 131 + ins.bop * 977) & CSE_MASK
+    h <- (h + (ins.a & CSE_MASK) * 7919) & CSE_MASK
+    h <- (h + (ins.b & CSE_MASK) * 104729) & CSE_MASK
+    h <- (h + (ins.c & CSE_MASK) * 31) & CSE_MASK
+    h <- (h + (ins.w & CSE_MASK) * 17) & CSE_MASK
+    h <- (h + (ins.val & CSE_MASK) * 8191) & CSE_MASK
+    ret h
+end
+
+proc cse_same(ob: ref Oir, i: u64, j: u64) -> word
+    -- The later `i` equals the earlier `j`, and every check `i` carries `j`
+    -- carries too — otherwise `j` running says nothing about `i`'s trap.
+    x := ins_at(ob, i)
+    y := ins_at(ob, j)
+    if x.op != y.op
+        ret 0
+    end
+    if x.bop != y.bop
+        ret 0
+    end
+    if x.a != y.a
+        ret 0
+    end
+    if x.b != y.b
+        ret 0
+    end
+    if x.c != y.c
+        ret 0
+    end
+    if x.w != y.w
+        ret 0
+    end
+    if x.val != y.val
+        ret 0
+    end
+    if x.site > 0
+        if y.site == 0
+            ret 0
+        end
+    end
+    if x.site2 > 0
+        if y.site2 == 0
+            ret 0
+        end
+    end
+    ret 1
+end
+
+proc cse_find(ob: ref Oir, i: u64, b: u64) -> word
+    h := cse_hash(ob, i)
+    j : u64 <- cell_get(ob.cseh, h)
+    while j > 0
+        cand := j - 1
+        if cse_same(ob, i, cand) == 1
+            if dominates(ob, cell_get(ob.iblk, cand), b) == 1
+                ret word.bits(cand)
+            end
+        end
+        j <- cell_get(ob.csen, cand)
+    end
+    ret -1
+end
+
+proc cse_insert(ob: rw ref Oir, i: u64)
+    h := cse_hash(ob, i)
+    cell_set(ob.csen, i, cell_get(ob.cseh, h))
+    cell_set(ob.cseh, h, i + 1)
+end
+
+proc cse_merge(ob: rw ref Oir, op: ref OProc, i: u64, j: u64)
+    -- `i` goes: its checks with the proof, its uses to `j`.
+    ins := ins_at(ob, i)
+    if ins.site > 0
+        add_proof(ob, i, site_kind(ob, i, 1), site_val(ob, i, 1), PR_DOM)
+    end
+    if ins.site2 > 0
+        add_proof(ob, i, site_kind(ob, i, 2), site_val(ob, i, 2), PR_DOM)
+    end
+    if defines_value(ins.op) == 1
+        replace_uses(ob, op, i, j)
+    end
+    kill_ins(ob, i)
+end
+
 -- Dead code --------------------------------------------------------------------
 
 proc dce_proc(ob: rw ref Oir, op: ref OProc) -> word
@@ -1070,6 +1316,10 @@ proc removable(ob: ref Oir, i: u64) -> word
     end
     if ins.op == O_ZALLOC
         -- The cursor it moved stays moved, whoever reads the answer.
+        ret 0
+    end
+    if ins.op == O_MOUT
+        -- What a machine block left in a register: read right after it.
         ret 0
     end
     if ins.site > 0

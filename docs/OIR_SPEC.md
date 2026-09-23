@@ -31,24 +31,45 @@
 > §2.1 says — `ref x` of a local is the first thing that takes one. A
 > `T or E` travels as the pair (tag, payload) of §2 — `ret`, `fail`, the
 > `else` handlers and `case` all read and write that pair, and a default joins
-> the ok path through a phi. Three
+> the ok path through a phi. A static place is `addr.of data.k` in a second,
+> read+write segment of the image — its initialised bytes in the file, its
+> zero ones past it — and raw `[p]` is `raw.load`/`raw.store` at the width
+> of the address's element. Three
 > proofs remove checks today — `constant`, `divisor` and `loop-bound` (a
 > dominating branch on the same `cmp.lt`, which is the loop of `each` and of
 > `while i < v.len`) — and the dead-code pass also drops the statics nothing
 > names, so a proved-away trap leaves no message in the image.
 >
-> What does **not** exist yet: `zone.new` from a parent zone, a buffer or raw
-> memory (only the `os` source is lowered), `view.load`/`view.store` and
+> Stage 9 added the other sources of a zone — `zone.new.raw %t, %size,
+> %addr` over memory that exists (an address, or a buffer whose length
+> `check.range` proved) and `zone.new.from %t, %size, %parent` /
+> `zone.end.from %t, %parent` carved from an enclosing zone — and the
+> release of every open zone on every exit edge of its block, plus `ovf.of`
+> for the `sat` and `checked` modes of a 64-bit operation.
+>
+> What does **not** exist yet: `view.load`/`view.store` and
 > `ref.field`/`ref.load`/`ref.store` as instructions of their own (a view or
 > field access is its check plus address arithmetic and a raw access), the
-> `own`, choice, machine, hardware and intrinsic groups of §4, virtual
+> `own`, hardware and intrinsic groups of §4 (a choice that fits a word
+> needs no group: it is built and taken apart with the bit operations and
+> `trunc` of the integer group, stage 11; a `machine x64` block is three
+> instructions of its own since stage 12 — `machine.in REG, %v` before it,
+> `machine x64` itself, `%n = machine.out REG` after it — its bytes coming
+> from `compiler/asm.oli`, and `--show-asm` prints them), and since stage 13
+> a linear scan (§7) over rbx, r12-r15 gives values registers — every value
+> keeps its frame word too, so the lowering reads a value from wherever it
+> is through one abstraction, and a procedure saves the registers it uses
+> on entry and restores them at every `ret`; what does not exist is the MIR
+> with virtual
 > registers and the linear-scan allocator of §7, and the `--show-machine-ir`
 > / `--show-asm` flags. The lowering still
 > allocates nothing: each value owns a frame word. Constant folding answers
 > only inside a window of ±2^31 per operand, because oli-core compares and
 > divides signed; outside it the operation and its check both stay. The
-> proof §6 calls dominance by an equal check — two equal checked *operations*
-> — waits for common-subexpression elimination to make two exist. Invariants 3-6 and 8
+> proof §6 calls dominance by an equal check is recorded by
+> common-subexpression elimination (stage 10): an operation equal to one
+> that dominates it goes, its uses move to the earlier one, and its check
+> goes as `proof(dominance)`. Invariants 3-6 and 8
 > of §8 are not checked because no construct that can break them is lowered
 > yet.
 
@@ -73,7 +94,8 @@ source (.oli)
 ```
 
 `--explain` and `--explain-cost` are computed from OIR *after* passes plus the
-register allocation result, so what they print is what was emitted.
+frame the lowering laid out (and the register allocation result, once there
+is one), so what they print is what was emitted.
 
 ## 2. Design rules
 

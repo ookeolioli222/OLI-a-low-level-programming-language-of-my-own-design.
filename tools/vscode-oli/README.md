@@ -33,6 +33,8 @@ olic hello.oli            # writes ./hello, executable
 olic hello.oli -o out/hello
 olic --check hello.oli    # diagnostics only, no file
 olic --show-opt hello.oli # what the compiler made of it, after the passes
+olic --explain hello.oli  # the frame, the checks and their proofs, the cost of every line
+olic --show-asm hello.oli # the bytes of every machine x64 block
 ```
 
 The exit status is the compiler's: 0 built, 1 diagnostics reported (and no

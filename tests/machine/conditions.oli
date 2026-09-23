@@ -1,0 +1,39 @@
+module conditions
+-- The lines of genesis/2-asm/tests/conditions.oli, in a hosted V0 program; the bytes
+-- olic emits for the block must equal conditions.hex, the assembler's hand-derived
+-- canonical encoding. Not executed.
+proc start -> s32
+    entry
+    permit cpu.asm
+    machine x64
+    .a:
+        je .a
+    .b:
+        jz .b
+    .c:
+        jne .c
+    .d:
+        jnz .d
+    .e:
+        jl .e
+    .f:
+        jle .f
+    .g:
+        jg .g
+    .h:
+        jge .h
+    .i:
+        jb .i
+    .j:
+        jbe .j
+    .k:
+        ja .k
+    .l:
+        jae .l
+    .m:
+        js .m
+    .n:
+        jns .n
+    end
+    ret 0
+end

@@ -1,0 +1,459 @@
+(oir
+  (static 0 len=33)
+  (static 1 len=33)
+  (static 2 removed)
+  (static 3 removed)
+  (static 4 len=27)
+  (static 5 len=33)
+  (static 6 len=33)
+  (static 7 len=27)
+  (static 8 len=27)
+  (static 9 len=33)
+  (static 10 len=33)
+  (static 11 removed)
+  (static 12 removed)
+  (static 13 removed)
+  (static 14 len=27)
+  (static 15 len=33)
+  (static 16 len=33)
+  (static 17 len=33)
+  (static 18 len=33)
+  (static 19 removed)
+  (static 20 removed)
+  (static 21 removed)
+  (static 22 len=34)
+  (static 23 len=28)
+  (static 24 len=34)
+  (static 25 removed)
+  (static 26 len=34)
+  (static 27 len=34)
+  (static 28 removed)
+  (static 29 removed)
+  (static 30 removed)
+  (static 31 len=34)
+  (static 32 removed)
+  (static 33 len=34)
+  (static 34 removed)
+  (static 35 removed)
+  (static 36 len=34)
+  (static 37 removed)
+  (static 38 removed)
+  (static 39 removed)
+  (data 0 size=8192 zero)
+  (proc first_word locals=3
+    (bb0
+      %0 = param 0
+      %1 = addr.of frame.3
+      %2 = const 4096
+      zone.new %1, %2
+      %5 = const 64
+      %6 = zone.alloc %1, %5
+      %7 = const 0
+      ; check.bounds %7 -- removed: proof(constant)
+      %9 = add %6, %7
+      %10 = trunc.8 %0
+      raw.store.8 %9, %10
+      %13 = cmp.gt %0, %7
+      branch %13, bb1, bb2)
+    (bb1 preds bb0
+      ; check.bounds %14 -- removed: proof(constant)
+      %17 = raw.load.8 %9
+      %18 = const 100
+      %19 = add %17, %18
+      check.overflow %19
+      zone.end %1
+      ret %19)
+    (bb2 preds bb0
+      zone.end %1
+      ret %7))
+  (proc pick locals=3
+    (bb0
+      %0 = param 0
+      %1 = addr.of frame.3
+      %2 = const 4096
+      zone.new %1, %2
+      %5 = const 16
+      %6 = zone.alloc %1, %5
+      raw.store.64 %6, %0
+      %8 = raw.load.64 %6
+      %9 = const 0
+      %10 = cmp.eq %8, %9
+      branch %10, bb1, bb2)
+    (bb1 preds bb0
+      %11 = const 1
+      zone.end %1
+      ret %11, %9)
+    (bb2 preds bb0
+      %14 = raw.load.64 %6
+      %15 = const 2
+      %16 = mul %14, %15
+      check.overflow %16
+      zone.end %1
+      ret %9, %16))
+  (proc count_loops locals=5
+    (bb0
+      %0 = param 0
+      %1 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb3 bb6
+      %3 = phi [bb0 %1] [bb3 %8] [bb6 %8]
+      %4 = phi [bb0 %1] [bb3 %4] [bb6 %29]
+      %5 = const 100
+      %6 = cmp.lt %3, %5
+      branch %6, bb2, bb7)
+    (bb2 preds bb1
+      %7 = const 1
+      %8 = add %3, %7
+      check.overflow %8
+      %9 = addr.of frame.5
+      %10 = const 4096
+      zone.new %9, %10
+      %13 = const 16
+      %14 = zone.alloc %9, %13
+      ; check.bounds %15 -- removed: proof(constant)
+      %17 = add %14, %1
+      raw.store.8 %17, %7
+      %20 = const 2
+      %21 = rem %8, %20
+      ; check.div_zero %20 -- removed: proof(divisor)
+      %23 = cmp.eq %21, %1
+      branch %23, bb3, bb4)
+    (bb3 preds bb2
+      zone.end %9
+      jump bb1)
+    (bb4 preds bb2
+      ; check.bounds %25 -- removed: proof(constant)
+      %28 = raw.load.8 %17
+      %29 = add %4, %28
+      check.overflow %29
+      %30 = cmp.eq %29, %0
+      branch %30, bb5, bb6)
+    (bb5 preds bb4
+      zone.end %9
+      jump bb7)
+    (bb6 preds bb4
+      zone.end %9
+      jump bb1)
+    (bb7 preds bb1 bb5
+      %33 = phi [bb1 %3] [bb5 %8]
+      ret %33))
+  (proc start locals=20 temps=8 entry
+    (bb0
+      %0 = const 7
+      arg %0
+      %2 = call first_word/1
+      %3 = const 107
+      %4 = cmp.ne %2, %3
+      branch %4, bb1, bb2)
+    (bb1 preds bb0
+      %5 = const 1
+      ret %5)
+    (bb2 preds bb0
+      %6 = const 0
+      arg %6
+      %8 = call first_word/1
+      %10 = cmp.ne %8, %6
+      branch %10, bb3, bb4)
+    (bb3 preds bb2
+      %11 = const 2
+      ret %11)
+    (bb4 preds bb2
+      %12 = const 21
+      arg %12
+      %14 = call pick/1
+      %15 = call.payload
+      %17 = cmp.eq %14, %6
+      branch %17, bb5, bb6)
+    (bb5 preds bb4
+      jump bb7)
+    (bb6 preds bb4
+      jump bb7)
+    (bb7 preds bb5 bb6
+      %19 = phi [bb5 %15] [bb6 %6]
+      %20 = const 42
+      %21 = cmp.ne %19, %20
+      branch %21, bb8, bb9)
+    (bb8 preds bb7
+      %22 = const 3
+      ret %22)
+    (bb9 preds bb7
+      arg %6
+      %25 = call pick/1
+      %26 = call.payload
+      %28 = cmp.eq %25, %6
+      branch %28, bb10, bb11)
+    (bb10 preds bb9
+      jump bb12)
+    (bb11 preds bb9
+      %29 = const 5
+      jump bb12)
+    (bb12 preds bb10 bb11
+      %30 = phi [bb10 %26] [bb11 %29]
+      %31 = const 5
+      %32 = cmp.ne %30, %31
+      branch %32, bb13, bb14)
+    (bb13 preds bb12
+      %33 = const 4
+      ret %33)
+    (bb14 preds bb12
+      %34 = const 3
+      arg %34
+      %36 = call count_loops/1
+      %38 = cmp.ne %36, %31
+      branch %38, bb15, bb16)
+    (bb15 preds bb14
+      ret %31)
+    (bb16 preds bb14
+      %40 = addr.of frame.4
+      %41 = const 65536
+      zone.new %40, %41
+      %44 = const 16
+      %45 = zone.alloc %40, %44
+      %46 = addr.of frame.9
+      %47 = const 4096
+      zone.new %46, %47
+      %51 = zone.alloc %46, %44
+      ; check.bounds %52 -- removed: proof(constant)
+      %54 = add %51, %6
+      %55 = const 9
+      raw.store.8 %54, %55
+      %57 = cmp.eq %51, %45
+      branch %57, bb17, bb18)
+    (bb17 preds bb16
+      %58 = const 6
+      zone.end %46
+      zone.end %40
+      ret %58)
+    (bb18 preds bb16
+      ; check.bounds %61 -- removed: proof(constant)
+      %64 = raw.load.8 %54
+      %66 = cmp.ne %64, %55
+      branch %66, bb19, bb20)
+    (bb19 preds bb18
+      zone.end %46
+      zone.end %40
+      ret %0)
+    (bb20 preds bb18
+      zone.end %46
+      %73 = const 8
+      %75 = add %40, %73
+      %76 = raw.load.64 %75
+      %77 = add %40, %44
+      %78 = raw.load.64 %77
+      %79 = const 15
+      %80 = const 18446744073709551600
+      %81 = add %76, %79
+      %82 = and %81, %80
+      %83 = add %82, %44
+      %84 = cmp.gt %83, %78
+      %85 = cmp.lt %83, %82
+      %86 = or %84, %85
+      %88 = cmp.eq %86, %6
+      branch %88, bb21, bb22)
+    (bb21 preds bb20
+      raw.store.64 %75, %83
+      jump bb22)
+    (bb22 preds bb20 bb21
+      branch %88, bb23, bb24)
+    (bb23 preds bb22
+      jump bb25)
+    (bb24 preds bb22
+      jump bb25)
+    (bb25 preds bb23 bb24
+      %92 = phi [bb23 %82] [bb24 %45]
+      %94 = cmp.eq %92, %45
+      branch %94, bb26, bb27)
+    (bb26 preds bb25
+      zone.end %40
+      ret %73)
+    (bb27 preds bb25
+      jump bb29)
+    (bb29 preds bb27
+      %102 = const 1000000
+      %106 = raw.load.64 %75
+      %108 = raw.load.64 %77
+      %111 = add %106, %79
+      %112 = and %111, %80
+      %113 = add %112, %102
+      %114 = cmp.gt %113, %108
+      %115 = cmp.lt %113, %112
+      %116 = or %114, %115
+      %118 = cmp.eq %116, %6
+      branch %118, bb30, bb31)
+    (bb30 preds bb29
+      raw.store.64 %75, %113
+      jump bb31)
+    (bb31 preds bb29 bb30
+      branch %118, bb32, bb33)
+    (bb32 preds bb31
+      jump bb34)
+    (bb33 preds bb31
+      jump bb34)
+    (bb34 preds bb32 bb33
+      %122 = phi [bb32 %112] [bb33 %45]
+      %124 = cmp.ne %122, %45
+      branch %124, bb35, bb36)
+    (bb35 preds bb34
+      %125 = const 10
+      zone.end %40
+      ret %125)
+    (bb36 preds bb34
+      %129 = const 48
+      %133 = raw.load.64 %75
+      %135 = raw.load.64 %77
+      %138 = add %133, %79
+      %139 = and %138, %80
+      %140 = add %139, %129
+      %141 = cmp.gt %140, %135
+      %142 = cmp.lt %140, %139
+      %143 = or %141, %142
+      %145 = cmp.eq %143, %6
+      branch %145, bb37, bb38)
+    (bb37 preds bb36
+      raw.store.64 %75, %140
+      jump bb38)
+    (bb38 preds bb36 bb37
+      branch %145, bb39, bb40)
+    (bb39 preds bb38
+      jump bb41)
+    (bb40 preds bb38
+      %149 = const 1
+      jump bb41)
+    (bb41 preds bb39 bb40
+      %150 = phi [bb39 %129] [bb40 %149]
+      %152 = cmp.ne %150, %129
+      branch %152, bb42, bb43)
+    (bb42 preds bb41
+      %153 = const 11
+      zone.end %40
+      ret %153)
+    (bb43 preds bb41
+      %160 = raw.load.64 %75
+      %162 = raw.load.64 %77
+      %165 = add %160, %79
+      %166 = and %165, %80
+      %167 = add %166, %102
+      %168 = cmp.gt %167, %162
+      %169 = cmp.lt %167, %166
+      %170 = or %168, %169
+      %172 = cmp.eq %170, %6
+      branch %172, bb44, bb45)
+    (bb44 preds bb43
+      raw.store.64 %75, %167
+      jump bb45)
+    (bb45 preds bb43 bb44
+      branch %172, bb46, bb47)
+    (bb46 preds bb45
+      jump bb48)
+    (bb47 preds bb45
+      %176 = const 2
+      jump bb48)
+    (bb48 preds bb46 bb47
+      %177 = phi [bb46 %102] [bb47 %176]
+      %178 = const 2
+      %179 = cmp.ne %177, %178
+      branch %179, bb49, bb50)
+    (bb49 preds bb48
+      %180 = const 12
+      zone.end %40
+      ret %180)
+    (bb50 preds bb48
+      zone.end %40
+      %183 = addr.of frame.23
+      %185 = addr.of data.0
+      ; check.bounds %187 -- removed: proof(constant)
+      zone.new.raw %183, %47, %185
+      %192 = zone.alloc %183, %44
+      raw.store.64 %192, %31
+      %196 = add %192, %73
+      %197 = const 6
+      raw.store.64 %196, %197
+      %199 = raw.load.64 %192
+      %202 = raw.load.64 %196
+      %203 = add %199, %202
+      check.overflow %203
+      %204 = const 11
+      %205 = cmp.ne %203, %204
+      branch %205, bb51, bb52)
+    (bb51 preds bb50
+      %206 = const 13
+      ret %206)
+    (bb52 preds bb50
+      %209 = zone.alloc %183, %44
+      ; check.bounds %212 -- removed: proof(constant)
+      %214 = add %185, %44
+      %216 = cmp.ne %209, %214
+      branch %216, bb53, bb54)
+    (bb53 preds bb52
+      %217 = const 14
+      ret %217)
+    (bb54 preds bb52
+      %218 = addr.of frame.29
+      %219 = const 1024
+      zone.new.from %218, %219, %183
+      %223 = const 32
+      %224 = zone.alloc %218, %223
+      ; check.bounds %227 -- removed: proof(constant)
+      %229 = add %185, %223
+      %231 = cmp.ne %224, %229
+      branch %231, bb55, bb56)
+    (bb55 preds bb54
+      zone.end.from %218, %183
+      ret %79)
+    (bb56 preds bb54
+      ; check.bounds %234 -- removed: proof(constant)
+      %236 = add %224, %6
+      raw.store.8 %236, %34
+      ; check.bounds %239 -- removed: proof(constant)
+      %242 = raw.load.8 %236
+      %244 = cmp.ne %242, %34
+      branch %244, bb57, bb58)
+    (bb57 preds bb56
+      zone.end.from %218, %183
+      ret %44)
+    (bb58 preds bb56
+      %249 = zone.alloc %218, %223
+      %252 = const 64
+      ; check.bounds %252 -- removed: proof(constant)
+      %254 = add %185, %252
+      %256 = cmp.ne %249, %254
+      branch %256, bb59, bb60)
+    (bb59 preds bb58
+      %257 = const 17
+      zone.end.from %218, %183
+      ret %257)
+    (bb60 preds bb58
+      zone.end.from %218, %183
+      %262 = zone.alloc %183, %44
+      ; check.bounds %265 -- removed: proof(constant)
+      %269 = cmp.ne %262, %229
+      branch %269, bb61, bb62)
+    (bb61 preds bb60
+      %270 = const 18
+      ret %270)
+    (bb62 preds bb60
+      %271 = addr.of frame.38
+      ; check.bounds %275 -- removed: proof(constant)
+      %277 = add %185, %47
+      zone.new.raw %271, %47, %277
+      %282 = zone.alloc %271, %73
+      ; check.bounds %285 -- removed: proof(constant)
+      %289 = cmp.ne %282, %277
+      branch %289, bb63, bb64)
+    (bb63 preds bb62
+      %290 = const 19
+      ret %290)
+    (bb64 preds bb62
+      ; check.bounds %291 -- removed: proof(constant)
+      %293 = add %282, %6
+      %294 = const 77
+      raw.store.8 %293, %294
+      ; check.bounds %298 -- removed: proof(constant)
+      %301 = raw.load.8 %277
+      %303 = cmp.ne %301, %294
+      branch %303, bb65, bb66)
+    (bb65 preds bb64
+      %304 = const 20
+      ret %304)
+    (bb66 preds bb64
+      ret %20)))

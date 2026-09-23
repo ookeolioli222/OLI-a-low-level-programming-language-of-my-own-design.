@@ -1,0 +1,39 @@
+-- target: freestanding
+module trapline
+-- A trap in a freestanding program goes to the `traps` procedure with the
+-- kind and the `core.Site`: here it exits with the line of the overflow.
+-- expect: exit 35
+proc start -> never
+    entry
+    calls none
+    section ".text.boot"
+    permit cpu.asm
+    machine x64
+        lea rsp, [stack + 4096]
+        xor ebp, ebp
+        call trapline.main
+        hlt
+    end
+end
+
+stack : [4096]u8
+
+proc on_trap(_kind : core.TrapKind, site : core.Site) -> never
+    traps
+    permit cpu.asm
+    machine x64
+        in edi <- site.line
+        mov eax, 60
+        syscall
+        hlt
+    end
+end
+
+proc main -> never
+    permit cpu.halt
+    x : u64 <- 18446744073709551615
+    y := x + 1
+    loop
+        cpu.halt()
+    end
+end

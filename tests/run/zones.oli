@@ -1,0 +1,177 @@
+module zones
+-- M2: every source of a zone and every way out of one. A zone from the
+-- operating system, one opened inside another, one carved `from` a parent
+-- whose cursor is back where it was after `end`, one over a static buffer,
+-- one `at` a raw address, `try_bytes` resolved by `else` and by `case`, and
+-- `ret`, `fail`, `break` and `continue` leaving zones, each released on that
+-- edge and not leaked. The exit status is the number of the check that
+-- failed; 42 when every one held.
+
+heap_region : [8192]u8
+
+layout Pair
+    a : u64
+    b : u64
+end
+
+proc first_word(n: u64) -> u64
+    -- `ret` inside a zone of a procedure that is not the entry: the mapping
+    -- is released before the value leaves.
+    permit os.syscall
+    zone z 4096
+        v := z.bytes(64)
+        v[0] <- u8.wrap(n)
+        if n > 0
+            ret u64(v[0]) + 100
+        end
+    end
+    ret 0
+end
+
+proc pick(n: u64) -> u64 or none
+    -- `fail` and `ret` inside a zone of a fallible procedure.
+    permit os.syscall
+    zone z 4096
+        p := z.make(Pair)
+        p.a <- n
+        if p.a == 0
+            fail
+        end
+        ret p.a * 2
+    end
+end
+
+proc count_loops(k: u64) -> u64
+    -- `break` and `continue` out of a zone opened inside the loop body.
+    permit os.syscall
+    i : u64 <- 0
+    hits : u64 <- 0
+    while i < 100
+        i <- i + 1
+        zone z 4096
+            b := z.bytes(16)
+            b[0] <- 1
+            if i % 2 == 0
+                continue
+            end
+            hits <- hits + u64(b[0])
+            if hits == k
+                break
+            end
+        end
+    end
+    ret i
+end
+
+proc start -> s32
+    entry
+    permit os.syscall, memory.raw
+    if first_word(7) != 107
+        ret 1
+    end
+    if first_word(0) != 0
+        ret 2
+    end
+    v := pick(21) else 0
+    if v != 42
+        ret 3
+    end
+    w := pick(0) else 5
+    if w != 5
+        ret 4
+    end
+    -- Odd i count as hits: the third is at i = 5, where the loop breaks.
+    if count_loops(3) != 5
+        ret 5
+    end
+    zone outer 65536
+        a := outer.bytes(16)
+        -- A zone inside a zone, both from the operating system.
+        zone inner 4096
+            c := inner.bytes(16)
+            c[0] <- 9
+            if c.addr == a.addr
+                ret 6
+            end
+            if c[0] != 9
+                ret 7
+            end
+        end
+        -- `try_bytes`: none where `bytes` would trap, the bytes otherwise.
+        e := outer.try_bytes(16) else a
+        if e.addr == a.addr
+            ret 8
+        end
+        if e.len != 16
+            ret 9
+        end
+        f := outer.try_bytes(1000000) else a
+        if f.addr != a.addr
+            ret 10
+        end
+        g : u64 <- 0
+        case outer.try_bytes(48)
+            when ok h
+                g <- h.len
+            when fail
+                g <- 1
+        end
+        if g != 48
+            ret 11
+        end
+        case outer.try_bytes(1000000)
+            when ok h2
+                g <- h2.len
+            when fail
+                g <- 2
+        end
+        if g != 2
+            ret 12
+        end
+    end
+    -- A zone over a static buffer, and a zone carved from it: the bytes of
+    -- the child come from the parent's cursor, and after `end` the parent
+    -- hands out the same bytes again.
+    zone heap 4096 from heap_region
+        p := heap.make(Pair)
+        p.a <- 5
+        p.b <- 6
+        if p.a + p.b != 11
+            ret 13
+        end
+        x := heap.bytes(16)
+        if x.addr != heap_region[16..].addr
+            ret 14
+        end
+        zone sub 1024 from heap
+            s := sub.bytes(32)
+            if s.addr != heap_region[32..].addr
+                ret 15
+            end
+            s[0] <- 3
+            if s[0] != 3
+                ret 16
+            end
+            t := sub.bytes(32)
+            if t.addr != heap_region[64..].addr
+                ret 17
+            end
+        end
+        y := heap.bytes(16)
+        if y.addr != heap_region[32..].addr
+            ret 18
+        end
+    end
+    -- A zone at a raw address: the second half of the same buffer.
+    zone raw 4096 at heap_region[4096..].addr
+        r := raw.bytes(8)
+        if r.addr != heap_region[4096..].addr
+            ret 19
+        end
+        r[0] <- 77
+        if heap_region[4096] != 77
+            ret 20
+        end
+    end
+    ret 42
+end

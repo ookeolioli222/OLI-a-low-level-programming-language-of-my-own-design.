@@ -1,0 +1,488 @@
+(oir
+  (static 0 len=27)
+  (static 1 len=27)
+  (static 2 len=27)
+  (proc start locals=20 temps=33 entry
+    (bb0
+      %0 = const 200
+      %1 = const 100
+      %2 = add %0, %1
+      %3 = const 255
+      %4 = const 0
+      %5 = cmp.gt %2, %3
+      %6 = cmp.lt %2, %4
+      branch %5, bb1, bb2)
+    (bb1 preds bb0
+      jump bb4)
+    (bb2 preds bb0
+      branch %6, bb3, bb4)
+    (bb3 preds bb2
+      jump bb4)
+    (bb4 preds bb1 bb2 bb3
+      %7 = phi [bb1 %3] [bb2 %2] [bb3 %4]
+      %8 = const 255
+      %9 = cmp.ne %7, %8
+      branch %9, bb5, bb6)
+    (bb5 preds bb4
+      %10 = const 1
+      ret %10)
+    (bb6 preds bb4
+      %11 = sub %1, %0
+      %12 = const 255
+      %13 = const 0
+      %14 = cmp.gt.s %11, %12
+      %15 = cmp.lt.s %11, %13
+      branch %14, bb7, bb8)
+    (bb7 preds bb6
+      jump bb10)
+    (bb8 preds bb6
+      branch %15, bb9, bb10)
+    (bb9 preds bb8
+      jump bb10)
+    (bb10 preds bb7 bb8 bb9
+      %16 = phi [bb7 %12] [bb8 %11] [bb9 %13]
+      %17 = const 0
+      %18 = cmp.ne %16, %17
+      branch %18, bb11, bb12)
+    (bb11 preds bb10
+      %19 = const 2
+      ret %19)
+    (bb12 preds bb10
+      %20 = mul %0, %1
+      %21 = const 255
+      %22 = const 0
+      %23 = cmp.gt %20, %21
+      %24 = cmp.lt %20, %22
+      branch %23, bb13, bb14)
+    (bb13 preds bb12
+      jump bb16)
+    (bb14 preds bb12
+      branch %24, bb15, bb16)
+    (bb15 preds bb14
+      jump bb16)
+    (bb16 preds bb13 bb14 bb15
+      %25 = phi [bb13 %21] [bb14 %20] [bb15 %22]
+      %26 = const 255
+      %27 = cmp.ne %25, %26
+      branch %27, bb17, bb18)
+    (bb17 preds bb16
+      %28 = const 3
+      ret %28)
+    (bb18 preds bb16
+      %29 = const 100
+      %30 = const 0
+      %31 = const 100
+      %32 = sub.s %30, %31
+      check.overflow %32
+      %33 = const 0
+      %34 = const 127
+      %35 = sub.s %33, %34
+      check.overflow %35
+      %36 = const 1
+      %37 = sub.s %35, %36
+      check.overflow %37
+      %38 = add.s %29, %29
+      %39 = const 127
+      %40 = const 18446744073709551488
+      %41 = cmp.gt.s %38, %39
+      %42 = cmp.lt.s %38, %40
+      branch %41, bb19, bb20)
+    (bb19 preds bb18
+      jump bb22)
+    (bb20 preds bb18
+      branch %42, bb21, bb22)
+    (bb21 preds bb20
+      jump bb22)
+    (bb22 preds bb19 bb20 bb21
+      %43 = phi [bb19 %39] [bb20 %38] [bb21 %40]
+      %44 = const 127
+      %45 = cmp.ne.s %43, %44
+      branch %45, bb23, bb24)
+    (bb23 preds bb22
+      %46 = const 4
+      ret %46)
+    (bb24 preds bb22
+      %47 = add.s %32, %32
+      %48 = const 127
+      %49 = const 18446744073709551488
+      %50 = cmp.gt.s %47, %48
+      %51 = cmp.lt.s %47, %49
+      branch %50, bb25, bb26)
+    (bb25 preds bb24
+      jump bb28)
+    (bb26 preds bb24
+      branch %51, bb27, bb28)
+    (bb27 preds bb26
+      jump bb28)
+    (bb28 preds bb25 bb26 bb27
+      %52 = phi [bb25 %48] [bb26 %47] [bb27 %49]
+      %53 = cmp.ne.s %52, %37
+      branch %53, bb29, bb30)
+    (bb29 preds bb28
+      %54 = const 5
+      ret %54)
+    (bb30 preds bb28
+      %55 = sub.s %32, %29
+      %56 = const 127
+      %57 = const 18446744073709551488
+      %58 = cmp.gt.s %55, %56
+      %59 = cmp.lt.s %55, %57
+      branch %58, bb31, bb32)
+    (bb31 preds bb30
+      jump bb34)
+    (bb32 preds bb30
+      branch %59, bb33, bb34)
+    (bb33 preds bb32
+      jump bb34)
+    (bb34 preds bb31 bb32 bb33
+      %60 = phi [bb31 %56] [bb32 %55] [bb33 %57]
+      %61 = cmp.ne.s %60, %37
+      branch %61, bb35, bb36)
+    (bb35 preds bb34
+      %62 = const 6
+      ret %62)
+    (bb36 preds bb34
+      %63 = const 18446744073709551615
+      %64 = const 1
+      %65 = add %63, %64
+      %66 = ovf.of %65
+      %67 = const 18446744073709551615
+      branch %66, bb37, bb38)
+    (bb37 preds bb36
+      jump bb38)
+    (bb38 preds bb36 bb37
+      %68 = phi [bb36 %65] [bb37 %67]
+      %69 = const 18446744073709551615
+      %70 = cmp.ne %68, %69
+      branch %70, bb39, bb40)
+    (bb39 preds bb38
+      %71 = const 7
+      ret %71)
+    (bb40 preds bb38
+      %72 = const 0
+      %73 = const 1
+      %74 = sub %72, %73
+      %75 = ovf.of %74
+      %76 = const 0
+      branch %75, bb41, bb42)
+    (bb41 preds bb40
+      jump bb42)
+    (bb42 preds bb40 bb41
+      %77 = phi [bb40 %74] [bb41 %76]
+      %78 = const 0
+      %79 = cmp.ne %77, %78
+      branch %79, bb43, bb44)
+    (bb43 preds bb42
+      %80 = const 8
+      ret %80)
+    (bb44 preds bb42
+      %81 = const 9223372036854775807
+      %82 = const 1
+      %83 = add.s %81, %82
+      %84 = ovf.of %83
+      %85 = const 0
+      %86 = cmp.lt.s %83, %85
+      %87 = const 9223372036854775807
+      %88 = const 9223372036854775808
+      branch %86, bb45, bb46)
+    (bb45 preds bb44
+      jump bb46)
+    (bb46 preds bb44 bb45
+      %89 = phi [bb44 %88] [bb45 %87]
+      branch %84, bb47, bb48)
+    (bb47 preds bb46
+      jump bb48)
+    (bb48 preds bb46 bb47
+      %90 = phi [bb46 %83] [bb47 %89]
+      %91 = const 9223372036854775807
+      %92 = cmp.ne.s %90, %91
+      branch %92, bb49, bb50)
+    (bb49 preds bb48
+      %93 = const 9
+      ret %93)
+    (bb50 preds bb48
+      %94 = const 9223372036854775808
+      %95 = const 1
+      %96 = sub.s %94, %95
+      %97 = ovf.of %96
+      %98 = const 0
+      %99 = cmp.lt.s %96, %98
+      %100 = const 9223372036854775807
+      %101 = const 9223372036854775808
+      branch %99, bb51, bb52)
+    (bb51 preds bb50
+      jump bb52)
+    (bb52 preds bb50 bb51
+      %102 = phi [bb50 %101] [bb51 %100]
+      branch %97, bb53, bb54)
+    (bb53 preds bb52
+      jump bb54)
+    (bb54 preds bb52 bb53
+      %103 = phi [bb52 %96] [bb53 %102]
+      %104 = const 9223372036854775808
+      %105 = cmp.ne.s %103, %104
+      branch %105, bb55, bb56)
+    (bb55 preds bb54
+      %106 = const 10
+      ret %106)
+    (bb56 preds bb54
+      %107 = sub %0, %1
+      %108 = const 255
+      %109 = const 0
+      %110 = cmp.gt.s %107, %108
+      %111 = cmp.lt.s %107, %109
+      branch %110, bb57, bb58)
+    (bb57 preds bb56
+      jump bb60)
+    (bb58 preds bb56
+      branch %111, bb59, bb60)
+    (bb59 preds bb58
+      jump bb60)
+    (bb60 preds bb57 bb58 bb59
+      %112 = phi [bb57 %108] [bb58 %107] [bb59 %109]
+      %113 = const 100
+      %114 = cmp.ne %112, %113
+      branch %114, bb61, bb62)
+    (bb61 preds bb60
+      %115 = const 11
+      ret %115)
+    (bb62 preds bb60
+      %116 = const 0
+      %117 = add %0, %1
+      %118 = const 255
+      %119 = const 0
+      %120 = cmp.gt %117, %118
+      %121 = cmp.lt %117, %119
+      %122 = or %120, %121
+      %123 = or %116, %122
+      %124 = const 0
+      %125 = cmp.eq %123, %124
+      branch %125, bb63, bb64)
+    (bb63 preds bb62
+      jump bb65)
+    (bb64 preds bb62
+      %126 = const 7
+      jump bb65)
+    (bb65 preds bb63 bb64
+      %127 = phi [bb63 %117] [bb64 %126]
+      %128 = const 7
+      %129 = cmp.ne %127, %128
+      branch %129, bb66, bb67)
+    (bb66 preds bb65
+      %130 = const 12
+      ret %130)
+    (bb67 preds bb65
+      %131 = const 0
+      %132 = sub %0, %1
+      %133 = const 255
+      %134 = const 0
+      %135 = cmp.gt.s %132, %133
+      %136 = cmp.lt.s %132, %134
+      %137 = or %135, %136
+      %138 = or %131, %137
+      %139 = const 0
+      %140 = cmp.eq %138, %139
+      branch %140, bb68, bb69)
+    (bb68 preds bb67
+      jump bb70)
+    (bb69 preds bb67
+      %141 = const 7
+      jump bb70)
+    (bb70 preds bb68 bb69
+      %142 = phi [bb68 %132] [bb69 %141]
+      %143 = const 100
+      %144 = cmp.ne %142, %143
+      branch %144, bb71, bb72)
+    (bb71 preds bb70
+      %145 = const 13
+      ret %145)
+    (bb72 preds bb70
+      %146 = const 0
+      %147 = const 1
+      %148 = add %63, %147
+      %149 = ovf.of %148
+      %150 = or %146, %149
+      %151 = const 0
+      %152 = cmp.eq %150, %151
+      branch %152, bb73, bb74)
+    (bb73 preds bb72
+      jump bb75)
+    (bb74 preds bb72
+      %153 = const 3
+      jump bb75)
+    (bb75 preds bb73 bb74
+      %154 = phi [bb73 %148] [bb74 %153]
+      %155 = const 3
+      %156 = cmp.ne %154, %155
+      branch %156, bb76, bb77)
+    (bb76 preds bb75
+      %157 = const 14
+      ret %157)
+    (bb77 preds bb75
+      %158 = const 0
+      %159 = add %0, %1
+      %160 = const 255
+      %161 = const 0
+      %162 = cmp.gt %159, %160
+      %163 = cmp.lt %159, %161
+      %164 = or %162, %163
+      %165 = or %158, %164
+      %166 = sub %159, %1
+      %167 = const 255
+      %168 = const 0
+      %169 = cmp.gt.s %166, %167
+      %170 = cmp.lt.s %166, %168
+      %171 = or %169, %170
+      %172 = or %165, %171
+      %173 = const 0
+      %174 = cmp.eq %172, %173
+      branch %174, bb78, bb79)
+    (bb78 preds bb77
+      jump bb80)
+    (bb79 preds bb77
+      %175 = const 1
+      jump bb80)
+    (bb80 preds bb78 bb79
+      %176 = phi [bb78 %166] [bb79 %175]
+      %177 = const 1
+      %178 = cmp.ne %176, %177
+      branch %178, bb81, bb82)
+    (bb81 preds bb80
+      %179 = const 15
+      ret %179)
+    (bb82 preds bb80
+      %180 = const 0
+      %181 = const 0
+      %182 = add.s %81, %81
+      %183 = ovf.of %182
+      %184 = or %181, %183
+      %185 = const 0
+      %186 = cmp.eq %184, %185
+      branch %186, bb83, bb84)
+    (bb83 preds bb82
+      %187 = const 1
+      jump bb85)
+    (bb84 preds bb82
+      %188 = const 2
+      jump bb85)
+    (bb85 preds bb83 bb84
+      %189 = phi [bb83 %187] [bb84 %188]
+      %190 = const 2
+      %191 = cmp.ne %189, %190
+      branch %191, bb86, bb87)
+    (bb86 preds bb85
+      %192 = const 16
+      ret %192)
+    (bb87 preds bb85
+      %193 = const 300
+      %194 = const 255
+      %195 = const 0
+      %196 = cmp.gt %193, %194
+      %197 = cmp.lt %193, %195
+      branch %196, bb88, bb89)
+    (bb88 preds bb87
+      jump bb91)
+    (bb89 preds bb87
+      branch %197, bb90, bb91)
+    (bb90 preds bb89
+      jump bb91)
+    (bb91 preds bb88 bb89 bb90
+      %198 = phi [bb88 %194] [bb89 %193] [bb90 %195]
+      %199 = const 255
+      %200 = cmp.ne %198, %199
+      branch %200, bb92, bb93)
+    (bb92 preds bb91
+      %201 = const 17
+      ret %201)
+    (bb93 preds bb91
+      %202 = const 127
+      %203 = const 18446744073709551488
+      %204 = cmp.gt %193, %202
+      %205 = cmp.lt %193, %203
+      branch %204, bb94, bb95)
+    (bb94 preds bb93
+      jump bb97)
+    (bb95 preds bb93
+      branch %205, bb96, bb97)
+    (bb96 preds bb95
+      jump bb97)
+    (bb97 preds bb94 bb95 bb96
+      %206 = phi [bb94 %202] [bb95 %193] [bb96 %203]
+      %207 = const 127
+      %208 = cmp.ne.s %206, %207
+      branch %208, bb98, bb99)
+    (bb98 preds bb97
+      %209 = const 18
+      ret %209)
+    (bb99 preds bb97
+      %210 = const 0
+      %211 = const 300
+      %212 = sub.s %210, %211
+      check.overflow %212
+      %213 = const 255
+      %214 = const 0
+      %215 = cmp.gt.s %212, %213
+      %216 = cmp.lt.s %212, %214
+      branch %215, bb100, bb101)
+    (bb100 preds bb99
+      jump bb103)
+    (bb101 preds bb99
+      branch %216, bb102, bb103)
+    (bb102 preds bb101
+      jump bb103)
+    (bb103 preds bb100 bb101 bb102
+      %217 = phi [bb100 %213] [bb101 %212] [bb102 %214]
+      %218 = const 0
+      %219 = cmp.ne %217, %218
+      branch %219, bb104, bb105)
+    (bb104 preds bb103
+      %220 = const 19
+      ret %220)
+    (bb105 preds bb103
+      %221 = const 255
+      %222 = const 0
+      %223 = cmp.gt %193, %221
+      %224 = cmp.lt %193, %222
+      %225 = or %223, %224
+      %226 = const 0
+      %227 = cmp.eq %225, %226
+      branch %227, bb106, bb107)
+    (bb106 preds bb105
+      jump bb108)
+    (bb107 preds bb105
+      %228 = const 9
+      jump bb108)
+    (bb108 preds bb106 bb107
+      %229 = phi [bb106 %193] [bb107 %228]
+      %230 = const 9
+      %231 = cmp.ne %229, %230
+      branch %231, bb109, bb110)
+    (bb109 preds bb108
+      %232 = const 20
+      ret %232)
+    (bb110 preds bb108
+      %233 = const 42
+      %234 = const 255
+      %235 = const 0
+      %236 = cmp.gt %233, %234
+      %237 = cmp.lt %233, %235
+      %238 = or %236, %237
+      %239 = const 0
+      %240 = cmp.eq %238, %239
+      branch %240, bb111, bb112)
+    (bb111 preds bb110
+      jump bb113)
+    (bb112 preds bb110
+      %241 = const 9
+      jump bb113)
+    (bb113 preds bb111 bb112
+      %242 = phi [bb111 %233] [bb112 %241]
+      %243 = const 42
+      %244 = cmp.ne %242, %243
+      branch %244, bb114, bb115)
+    (bb114 preds bb113
+      %245 = const 21
+      ret %245)
+    (bb115 preds bb113
+      %246 = const 42
+      ret %246)))

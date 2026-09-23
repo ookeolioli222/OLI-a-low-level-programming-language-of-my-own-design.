@@ -1,0 +1,107 @@
+module saturate
+-- M2: the arithmetic modes of design 0006 beside `wrap` — `sat(e)` clamps
+-- to the type's range, `checked(e)` answers with a failure that `else` and
+-- `case` resolve, and the conversions `T.sat(x)` and `T.checked(x)` do the
+-- same for a value. Narrow and 64-bit types, signed and unsigned, and a
+-- division whose divisor is zero. The exit status is the number of the check
+-- that failed, or 42.
+
+proc start -> s32
+    entry
+    -- sat on a narrow unsigned type: above the top, below zero.
+    a : u8 <- 200
+    b : u8 <- 100
+    if sat(a + b) != 255
+        ret 1
+    end
+    if sat(b - a) != 0
+        ret 2
+    end
+    if sat(a * b) != 255
+        ret 3
+    end
+    -- sat on a narrow signed type, both ends.
+    c : s8 <- 100
+    d : s8 <- 0 - 100
+    lo : s8 <- 0 - 127 - 1
+    if sat(c + c) != 127
+        ret 4
+    end
+    if sat(d + d) != lo
+        ret 5
+    end
+    if sat(d - c) != lo
+        ret 6
+    end
+    -- sat on the whole word: unsigned add and sub, signed add and sub.
+    big : u64 <- 18446744073709551615
+    if sat(big + 1) != 18446744073709551615
+        ret 7
+    end
+    z : u64 <- 0
+    if sat(z - 1) != 0
+        ret 8
+    end
+    sb : word <- 9223372036854775807
+    if sat(sb + 1) != 9223372036854775807
+        ret 9
+    end
+    sm : word <- word.bits(9223372036854775808)
+    if sat(sm - 1) != word.bits(9223372036854775808)
+        ret 10
+    end
+    -- No overflow: sat is the plain answer.
+    if sat(a - b) != 100
+        ret 11
+    end
+    -- checked: a default on the fail path, the value on the ok path.
+    e := checked(a + b) else 7
+    if e != 7
+        ret 12
+    end
+    f := checked(a - b) else 7
+    if f != 100
+        ret 13
+    end
+    g := checked(big + 1) else 3
+    if g != 3
+        ret 14
+    end
+    -- checked over a whole expression: any overflow inside fails it.
+    h := checked(a + b - b) else 1
+    if h != 1
+        ret 15
+    end
+    k : u64 <- 0
+    case checked(sb + sb)
+    when ok v
+        k <- 1
+    when fail
+        k <- 2
+    end
+    if k != 2
+        ret 16
+    end
+    -- The conversions: clamp, and test.
+    w : u64 <- 300
+    if u8.sat(w) != 255
+        ret 17
+    end
+    if s8.sat(w) != 127
+        ret 18
+    end
+    neg : word <- 0 - 300
+    if u8.sat(neg) != 0
+        ret 19
+    end
+    m := u8.checked(w) else 9
+    if m != 9
+        ret 20
+    end
+    small : u64 <- 42
+    n := u8.checked(small) else 9
+    if n != 42
+        ret 21
+    end
+    ret 42
+end

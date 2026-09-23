@@ -20,11 +20,11 @@ module olic.x64
 -- it (OIR_SPEC §7), and an edge that needs copies but is the taken side of a
 -- branch is given the landing pad it needs.
 --
--- Frame of a procedure: local k owns the three words at `slot 3k`, `3k+1`
--- and `3k+2` (an integer uses the first, a view the first two, a zone all
--- three); the `ntmp` compiler-made places follow; value `%v` owns the word at
--- `slot 3*nloc + ntmp + (v - first)`; and the `nphi` scratch words of the
--- edge copies are last. Slot s is at `[rbp - 8*(s+1)]`, and the frame is
+-- Frame of a procedure: the locals first, each at the word `compiler/oir.oli`
+-- laid it out at (an integer one word, a view two, a zone three, an array
+-- as many as its bytes need), `nwords` in all; the `ntmp` compiler-made
+-- places follow; value `%v` owns the word at `slot nwords + ntmp + (v -
+-- first)`; and the `nphi` scratch words of the edge copies are last. Slot s is at `[rbp - 8*(s+1)]`, and the frame is
 -- rounded up to 16 bytes so that the stack is aligned at every `call`
 -- (ABI.md §1).
 
@@ -74,6 +74,20 @@ layout Mach
     npad : u64
     ntrap : u64
     trappos : u64
+    dbase : u64
+    curnphi : u64
+    curend : u64
+    curq : u64
+    loc : rw view u8
+    iend : rw view u8
+    noreg : rw view u8
+    active : rw view u8
+    usedmask : u64
+    nalloc : u64
+    fstand : u64
+    trapproc : u64
+    curnone : u64
+    curnever : u64
 end
 
 proc mach_new(z: zone) -> rw ref Mach
@@ -89,8 +103,22 @@ proc mach_new(z: zone) -> rw ref Mach
     mc.curentry <- 0
     mc.curlast <- 0
     mc.npad <- 0
+    mc.dbase <- 0
     mc.ntrap <- 0
     mc.trappos <- 0
+    mc.curnphi <- 0
+    mc.curend <- 0
+    mc.curq <- 0
+    mc.loc <- z.bytes(INS_MAX * Cell.size)
+    mc.iend <- z.bytes(INS_MAX * Cell.size)
+    mc.noreg <- z.bytes(INS_MAX * Cell.size)
+    mc.active <- z.bytes(8 * Cell.size)
+    mc.usedmask <- 0
+    mc.nalloc <- 0
+    mc.fstand <- 0
+    mc.trapproc <- 0
+    mc.curnone <- 0
+    mc.curnever <- 0
     ret mc
 end
 
@@ -143,6 +171,11 @@ end
 proc c64(ob: rw ref Oir, v: u64)
     c32(ob, v)
     c32(ob, v >> 32)
+end
+
+proc patch64(ob: rw ref Oir, pos: u64, v: u64)
+    patch32(ob, pos, v)
+    patch32(ob, pos + 4, v >> 32)
 end
 
 proc patch32(ob: rw ref Oir, pos: u64, v: u64)
@@ -204,12 +237,300 @@ end
 -- Slot arithmetic ---------------------------------------------------------------
 
 proc val_slot(mc: ref Mach, v: u64) -> u64
-    ret mc.curloc * LOC_WORDS + mc.curtmp + (v - mc.curfirst)
+    ret mc.curloc + mc.curtmp + (v - mc.curfirst)
+end
+
+-- Where a value lives: its frame word, or the callee-saved register the
+-- linear scan of OIR_SPEC §7 gave it (`alloc_proc`). Every read and write
+-- of a value in this file goes through these three, so the lowering itself
+-- does not know which.
+
+proc val_reg(mc: ref Mach, v: u64) -> word
+    l := cell_get(mc.loc, v)
+    if l == 0
+        ret -1
+    end
+    ret word.bits(l - 1)
+end
+
+proc mov_rr(ob: rw ref Oir, dst: u64, src: u64)
+    if dst == src
+        ret
+    end
+    rex(ob, 64, src, NOREG, dst)
+    cb(ob, 137)
+    modrm_reg(ob, src, dst)
+end
+
+proc ld_val(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
+    l := val_reg(mc, v)
+    if l < 0
+        ld_slot(ob, r, val_slot(mc, v))
+    else
+        mov_rr(ob, r, u64.bits(l))
+    end
+end
+
+proc st_val(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
+    l := val_reg(mc, v)
+    if l < 0
+        st_slot(ob, r, val_slot(mc, v))
+    else
+        mov_rr(ob, u64.bits(l), r)
+    end
+end
+
+proc push_val(ob: rw ref Oir, mc: ref Mach, v: u64)
+    l := val_reg(mc, v)
+    if l < 0
+        push_slot(ob, val_slot(mc, v))
+    else
+        rex(ob, 0, NOREG, NOREG, u64.bits(l))
+        cb(ob, 80 + u64.bits(l) % 8)
+    end
+end
+
+-- Register allocation ---------------------------------------------------------
+-- Linear scan (OIR_SPEC §7) over the five callee-saved registers rbx, r12,
+-- r13, r14 and r15: they survive every call, syscall, zone operation and
+-- trap check the lowering emits, which all work in rax, rcx, rdx, rsi, rdi
+-- and r8-r11. A value keeps its frame word whether or not it also gets a
+-- register, so giving a register back is free; the procedure saves the
+-- registers it uses on entry and restores them before every `ret`.
+
+proc alloc_reg(k: u64) -> u64
+    if k == 0
+        ret 3
+    end
+    ret 11 + k
+end
+
+proc alloc_proc(ob: rw ref Oir, mc: rw ref Mach, op: rw ref OProc)
+    first := op.first
+    last := op.first + op.n
+    v : u64 <- first
+    while v < last
+        cell_set(mc.loc, v, 0)
+        cell_set(mc.iend, v, v)
+        cell_set(mc.noreg, v, 0)
+        v <- v + 1
+    end
+    mc.usedmask <- 0
+    -- Every use, at the position the lowering reads it: an instruction
+    -- reads its operands where it stands, a phi reads its operand at the
+    -- end of the predecessor, an argument or a machine input is read at the
+    -- call or the block, which is by the end of the block at the latest,
+    -- and a terminator reads at the end of its block.
+    bl := op.bfirst + op.nblk
+    b : u64 <- op.bfirst
+    while b < bl
+        if live_blk(ob, b) == 1
+            bk := blk_at(ob, b)
+            bend := bk.first + bk.n
+            i : u64 <- bk.first
+            while i < bend
+                ins := ins_at(ob, i)
+                o := ins.op
+                if o == O_PHI
+                    k : u64 <- 0
+                    while k < ins.b
+                        pa := phiarg_at(ob, ins.a + k)
+                        pb := blk_at(ob, pa.blk)
+                        note_use(mc, op, pa.val, pb.first + pb.n)
+                        k <- k + 1
+                    end
+                elif o != O_DEAD
+                    upos : u64 <- i
+                    if o == O_ARG
+                        upos <- bend
+                    end
+                    if o == O_MIN
+                        upos <- bend
+                        cell_set(mc.noreg, ins.a, 1)
+                    end
+                    if o == O_MOUT
+                        cell_set(mc.noreg, i, 1)
+                    end
+                    if op_uses_a(o) == 1
+                        note_use(mc, op, ins.a, upos)
+                    end
+                    if op_uses_b(o) == 1
+                        note_use(mc, op, ins.b, upos)
+                    end
+                    if op_uses_val(o) == 1
+                        note_use(mc, op, ins.val, upos)
+                    end
+                end
+                i <- i + 1
+            end
+            if bk.top == O_BRANCH
+                note_use(mc, op, bk.ta, bend)
+            end
+            if bk.top == O_RET
+                if bk.tc > 0
+                    note_use(mc, op, bk.ta, bend)
+                end
+                if bk.tc == 2
+                    note_use(mc, op, bk.tb, bend)
+                end
+            end
+        end
+        b <- b + 1
+    end
+    -- A value live into a loop header is live to the end of the loop: the
+    -- back edge carries it round. Blocks stand in reverse postorder, so a
+    -- back edge is one to a block that comes first.
+    again : u64 <- 1
+    while again == 1
+        again <- 0
+        b2 : u64 <- op.bfirst
+        while b2 < bl
+            if live_blk(ob, b2) == 1
+                k2 : u64 <- 0
+                while k2 < 2
+                    sx := blk_succ(ob, b2, k2)
+                    if sx >= 0
+                        if extend_loop(ob, mc, op, b2, u64.bits(sx)) == 1
+                            again <- 1
+                        end
+                    end
+                    k2 <- k2 + 1
+                end
+            end
+            b2 <- b2 + 1
+        end
+    end
+    -- The scan: values in the order they are defined, which is their index.
+    a : u64 <- 0
+    while a < 5
+        cell_set(mc.active, a, 0)
+        a <- a + 1
+    end
+    v2 : u64 <- first
+    while v2 < last
+        ins2 := ins_at(ob, v2)
+        if defines_value(ins2.op) == 1
+            if ins2.op != O_DEAD
+                if cell_get(mc.iend, v2) > v2
+                    if cell_get(mc.noreg, v2) == 0
+                        scan_one(mc, v2)
+                    end
+                end
+            end
+        end
+        v2 <- v2 + 1
+    end
+    if mc.usedmask != 0
+        op.nsave <- 10
+    end
+end
+
+proc note_use(mc: rw ref Mach, op: ref OProc, v: u64, pos: u64)
+    if v < op.first
+        ret
+    end
+    if v >= op.first + op.n
+        ret
+    end
+    if pos > cell_get(mc.iend, v)
+        cell_set(mc.iend, v, pos)
+    end
+end
+
+proc extend_loop(ob: ref Oir, mc: rw ref Mach, op: ref OProc, b: u64, s: u64) -> word
+    bk := blk_at(ob, b)
+    sb := blk_at(ob, s)
+    if sb.first > bk.first
+        ret 0
+    end
+    bend := bk.first + bk.n
+    did : word <- 0
+    v : u64 <- op.first
+    while v < sb.first
+        e := cell_get(mc.iend, v)
+        if e >= sb.first
+            if e < bend
+                cell_set(mc.iend, v, bend)
+                did <- 1
+            end
+        end
+        v <- v + 1
+    end
+    ret did
+end
+
+proc scan_one(mc: rw ref Mach, v: u64)
+    -- Expire what ended before `v` starts, take a free register, or take
+    -- the register of the value that ends last when it ends after `v`.
+    k : u64 <- 0
+    free : word <- -1
+    far : word <- -1
+    farend : u64 <- 0
+    while k < 5
+        a : u64 <- cell_get(mc.active, k)
+        if a > 0
+            if cell_get(mc.iend, a - 1) < v
+                cell_set(mc.active, k, 0)
+                a <- 0
+            end
+        end
+        if a == 0
+            if free < 0
+                free <- word.bits(k)
+            end
+        elif cell_get(mc.iend, a - 1) > farend
+            farend <- cell_get(mc.iend, a - 1)
+            far <- word.bits(k)
+        end
+        k <- k + 1
+    end
+    if free < 0
+        if far < 0
+            ret
+        end
+        if farend <= cell_get(mc.iend, v)
+            ret
+        end
+        old := cell_get(mc.active, u64.bits(far)) - 1
+        cell_set(mc.loc, old, 0)
+        free <- far
+    end
+    r := alloc_reg(u64.bits(free))
+    cell_set(mc.loc, v, r + 1)
+    cell_set(mc.active, u64.bits(free), v + 1)
+    mc.usedmask <- mc.usedmask | (1 << r)
+    mc.nalloc <- mc.nalloc + 1
+end
+
+proc save_regs(ob: rw ref Oir, mc: ref Mach)
+    -- The callee-saved registers the allocation uses, into the words past
+    -- the five a machine block saves into.
+    base := mc.curloc + mc.curtmp + mc.curnval + mc.curnphi + 5
+    k : u64 <- 0
+    while k < 5
+        r := alloc_reg(k)
+        if mc.usedmask & (1 << r) != 0
+            st_slot(ob, r, base + k)
+        end
+        k <- k + 1
+    end
+end
+
+proc restore_regs(ob: rw ref Oir, mc: ref Mach)
+    base := mc.curloc + mc.curtmp + mc.curnval + mc.curnphi + 5
+    k : u64 <- 0
+    while k < 5
+        r := alloc_reg(k)
+        if mc.usedmask & (1 << r) != 0
+            ld_slot(ob, r, base + k)
+        end
+        k <- k + 1
+    end
 end
 
 proc scratch_slot(mc: ref Mach, k: u64) -> u64
     -- The words the copies on an edge pass through.
-    ret mc.curloc * LOC_WORDS + mc.curtmp + mc.curnval + k
+    ret mc.curloc + mc.curtmp + mc.curnval + k
 end
 
 proc frame_bytes(mc: ref Mach, op: ref OProc) -> u64
@@ -218,7 +539,7 @@ proc frame_bytes(mc: ref Mach, op: ref OProc) -> u64
     -- the return address already pushed and the entry procedure does not —
     -- the kernel hands `_start` an aligned rsp — so the entry procedure needs
     -- one more word to reach the same alignment.
-    w : u64 <- mc.curloc * LOC_WORDS + op.ntmp + op.n + op.nphi
+    w : u64 <- mc.curloc + op.ntmp + op.n + op.nphi + op.nsave
     if w % 2 == 1
         w <- w + 1
     end
@@ -294,11 +615,11 @@ proc load_args(ob: rw ref Oir, mc: ref Mach, upto: u64, nargs: u64, issys: u64)
             else
                 k <- k - 1
                 if issys == 1
-                    ld_slot(ob, sys_reg(k), val_slot(mc, ins.a))
+                    ld_val(ob, mc, sys_reg(k), ins.a)
                 elif ins.b < 6
-                    ld_slot(ob, call_reg(ins.b), val_slot(mc, ins.a))
+                    ld_val(ob, mc, call_reg(ins.b), ins.a)
                 else
-                    push_slot(ob, val_slot(mc, ins.a))
+                    push_val(ob, mc, ins.a)
                 end
             end
         end
@@ -317,6 +638,29 @@ end
 -- and jumps over the sequence, so a check that holds costs one branch.
 
 proc trap_call(ob: rw ref Oir, mc: rw ref Mach, si: u64)
+    if mc.fstand == 1
+        -- Freestanding (FREESTANDING.md §5): without a `traps` procedure a
+        -- trap is `ud2`; with one, the kind and the site go to the routine
+        -- that calls it — the kind as `core.TrapKind` (its number, from 0),
+        -- the file's static, its length and the line for the `core.Site`.
+        if mc.trapproc == 0
+            cb(ob, 15)
+            cb(ob, 11)
+            ret
+        end
+        m := tmsg_of(ob, si - 1)
+        fs := stat_at(ob, m.fstat - 1)
+        mov_imm(ob, R_DI, m.kind - 1)
+        mov_imm(ob, R_SI, 0)
+        add_fix(mc, ob.ncode - 8, 2, fs.off)
+        mov_imm(ob, R_DX, fs.len)
+        mov_imm(ob, R_CX, m.line)
+        cb(ob, 232)
+        add_fix(mc, ob.ncode, 3, 0)
+        c32(ob, 0)
+        mc.ntrap <- mc.ntrap + 1
+        ret
+    end
     st := stat_at(ob, si - 1)
     mov_imm(ob, R_DI, 0)
     add_fix(mc, ob.ncode - 8, 2, st.off)
@@ -327,17 +671,65 @@ proc trap_call(ob: rw ref Oir, mc: rw ref Mach, si: u64)
     mc.ntrap <- mc.ntrap + 1
 end
 
+proc tmsg_of(ob: ref Oir, stat: u64) -> rw ref TMsg
+    i : u64 <- 0
+    while i < ob.ntmsg
+        m := tmsg_at(ob, i)
+        if m.stat == stat
+            ret m
+        end
+        i <- i + 1
+    end
+    ret tmsg_at(ob, 0)
+end
+
 proc trap_if(ob: rw ref Oir, mc: rw ref Mach, skipcc: u64, si: u64)
     -- `skipcc` is the rel8 opcode of the condition under which nothing traps.
     cb(ob, skipcc)
-    cb(ob, TRAP_SEQ)
+    cb(ob, trap_len(mc))
     trap_call(ob, mc, si)
+end
+
+proc trap_len(mc: ref Mach) -> u64
+    -- The bytes a trap site takes, jumped over when nothing traps: the
+    -- hosted message and call, the freestanding kind, file, length, line
+    -- and call, or a bare `ud2`.
+    if mc.fstand == 1
+        if mc.trapproc == 0
+            ret 2
+        end
+        ret 45
+    end
+    ret TRAP_SEQ
 end
 
 proc lower_trap_routine(ob: rw ref Oir, mc: rw ref Mach)
     -- `core.trap` (MACHINE_MODEL.md §4): write the message on fd 2 and
     -- `exit_group(134)`. Emitted only when the program has a trap site.
     mc.trappos <- ob.ncode
+    if mc.fstand == 1
+        -- Freestanding: the `core.Site` (file address, file length, line —
+        -- 24 bytes, SysV MEMORY class) goes on the stack, aligned for the
+        -- call, and the `traps` procedure gets the kind in rdi. It never
+        -- returns; `ud2` stands after it all the same.
+        cb(ob, 72)
+        cb(ob, 131)
+        cb(ob, 228)
+        cb(ob, 240)
+        cb(ob, 72)
+        cb(ob, 131)
+        cb(ob, 236)
+        cb(ob, 8)
+        cb(ob, 81)
+        cb(ob, 82)
+        cb(ob, 86)
+        cb(ob, 232)
+        add_fix(mc, ob.ncode, 0, mc.trapproc - 1)
+        c32(ob, 0)
+        cb(ob, 15)
+        cb(ob, 11)
+        ret
+    end
     cb(ob, 72)
     cb(ob, 137)
     cb(ob, 242)
@@ -409,7 +801,7 @@ proc lower_rload(ob: rw ref Oir, mc: ref Mach, i: u64)
     -- `raw.load.T %a`: the element, extended to the canonical image of its
     -- type, which is what every slot is required to hold.
     ins := ins_at(ob, i)
-    ld_slot(ob, R_AX, val_slot(mc, ins.a))
+    ld_val(ob, mc, R_AX, ins.a)
     sz := ins.b
     if sz == 1
         if ins.c == 1
@@ -444,13 +836,13 @@ proc lower_rload(ob: rw ref Oir, mc: ref Mach, i: u64)
         cb(ob, 139)
         cb(ob, 0)
     end
-    st_slot(ob, R_AX, val_slot(mc, i))
+    st_val(ob, mc, R_AX, i)
 end
 
 proc lower_rstore(ob: rw ref Oir, mc: ref Mach, i: u64)
     ins := ins_at(ob, i)
-    ld_slot(ob, R_AX, val_slot(mc, ins.a))
-    ld_slot(ob, R_CX, val_slot(mc, ins.b))
+    ld_val(ob, mc, R_AX, ins.a)
+    ld_val(ob, mc, R_CX, ins.b)
     sz := ins.c
     if sz == 1
         cb(ob, 136)
@@ -470,8 +862,8 @@ proc lower_chkb(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     -- `check.bounds %i, %len`: an index is inside a view when it is below the
     -- length, read as the unsigned numbers both of them are.
     ins := ins_at(ob, i)
-    ld_slot(ob, R_AX, val_slot(mc, ins.a))
-    ld_slot(ob, R_CX, val_slot(mc, ins.b))
+    ld_val(ob, mc, R_AX, ins.a)
+    ld_val(ob, mc, R_CX, ins.b)
     cb(ob, 72)
     cb(ob, 57)
     cb(ob, 200)
@@ -482,14 +874,14 @@ proc lower_chkr(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     -- `check.range %a, %b, %len`: a subview is inside its view when
     -- `a <= b <= len`, which is two comparisons and the same trap.
     ins := ins_at(ob, i)
-    ld_slot(ob, R_AX, val_slot(mc, ins.a))
-    ld_slot(ob, R_CX, val_slot(mc, ins.b))
+    ld_val(ob, mc, R_AX, ins.a)
+    ld_val(ob, mc, R_CX, ins.b)
     cb(ob, 72)
     cb(ob, 57)
     cb(ob, 200)
     trap_if(ob, mc, 118, ins.site)
-    ld_slot(ob, R_AX, val_slot(mc, ins.b))
-    ld_slot(ob, R_CX, val_slot(mc, ins.val))
+    ld_val(ob, mc, R_AX, ins.b)
+    ld_val(ob, mc, R_CX, ins.val)
     cb(ob, 72)
     cb(ob, 57)
     cb(ob, 200)
@@ -499,7 +891,7 @@ end
 proc lower_chka(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     -- `check.align %addr, N`: the low bits of the address must be clear.
     ins := ins_at(ob, i)
-    ld_slot(ob, R_AX, val_slot(mc, ins.a))
+    ld_val(ob, mc, R_AX, ins.a)
     cb(ob, 72)
     cb(ob, 37)
     c32(ob, ins.b - 1)
@@ -511,7 +903,7 @@ proc lower_znew(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     -- and the triple (base, cursor, limit) written into the place that holds
     -- it. A mapping the kernel refuses is a zone that could not be had.
     ins := ins_at(ob, i)
-    ld_slot(ob, R_AX, val_slot(mc, ins.b))
+    ld_val(ob, mc, R_AX, ins.b)
     cb(ob, 72)
     cb(ob, 5)
     c32(ob, 4095)
@@ -533,7 +925,7 @@ proc lower_znew(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     cb(ob, 61)
     c32(ob, 4294967296 - 4096)
     trap_if(ob, mc, 114, ins.site)
-    ld_slot(ob, R_CX, val_slot(mc, ins.a))
+    ld_val(ob, mc, R_CX, ins.a)
     st_at(ob, R_AX, R_CX, 0)
     st_at(ob, R_AX, R_CX, 8)
     cb(ob, 72)
@@ -546,7 +938,7 @@ end
 proc lower_zend(ob: rw ref Oir, mc: ref Mach, i: u64)
     permit os.syscall
     ins := ins_at(ob, i)
-    ld_slot(ob, R_CX, val_slot(mc, ins.a))
+    ld_val(ob, mc, R_CX, ins.a)
     ld_at(ob, R_DI, R_CX, 0)
     ld_at(ob, R_SI, R_CX, 16)
     cb(ob, 72)
@@ -555,6 +947,49 @@ proc lower_zend(ob: rw ref Oir, mc: ref Mach, i: u64)
     mov_imm(ob, R_AX, 11)
     cb(ob, 15)
     cb(ob, 5)
+end
+
+proc lower_zraw(ob: rw ref Oir, mc: rw ref Mach, i: u64)
+    -- `zone.new.raw %triple, %size, %addr`: the triple (addr, addr,
+    -- addr + size) over memory that is already there. Nothing is asked of
+    -- the operating system and nothing is released at the end.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_AX, ins.val)
+    ld_val(ob, mc, R_DX, ins.b)
+    ld_val(ob, mc, R_CX, ins.a)
+    st_at(ob, R_AX, R_CX, 0)
+    st_at(ob, R_AX, R_CX, 8)
+    cb(ob, 72)
+    cb(ob, 1)
+    cb(ob, 194)
+    st_at(ob, R_DX, R_CX, 16)
+end
+
+proc lower_zfrom(ob: rw ref Oir, mc: rw ref Mach, i: u64)
+    -- `zone.new.from %triple, %size, %parent`: `size` bytes carved from the
+    -- parent exactly as `zone.alloc` carves them — the same rounding, the
+    -- same `zone_exhausted` — and the child's triple laid over them.
+    ins := ins_at(ob, i)
+    alloc_core(ob, mc, ins.val, ins.b, 16, ins.site)
+    ld_val(ob, mc, R_CX, ins.a)
+    st_at(ob, R_AX, R_CX, 0)
+    st_at(ob, R_AX, R_CX, 8)
+    cb(ob, 72)
+    cb(ob, 1)
+    cb(ob, 208)
+    st_at(ob, R_AX, R_CX, 16)
+end
+
+proc lower_zendf(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `zone.end.from %triple, %parent`: the parent's cursor goes back to the
+    -- child's base. Every allocation rounds the cursor up to sixteen or more
+    -- before it reads it, and the base is the cursor so rounded, so the two
+    -- answer every later allocation alike.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_CX, ins.a)
+    ld_at(ob, R_AX, R_CX, 0)
+    ld_val(ob, mc, R_CX, ins.b)
+    st_at(ob, R_AX, R_CX, 8)
 end
 
 proc lower_zalloc(ob: rw ref Oir, mc: rw ref Mach, i: u64)
@@ -567,7 +1002,14 @@ proc lower_zalloc(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     if ins.c > 16
         al <- ins.c
     end
-    ld_slot(ob, R_CX, val_slot(mc, ins.a))
+    alloc_core(ob, mc, ins.a, ins.b, al, ins.site)
+    st_val(ob, mc, R_AX, i)
+end
+
+proc alloc_core(ob: rw ref Oir, mc: rw ref Mach, zv: u64, szv: u64, al: u64, site: u64)
+    -- The allocation itself: rax the rounded cursor (the answer), rsi the
+    -- cursor past the bytes, written back to the triple in rcx.
+    ld_val(ob, mc, R_CX, zv)
     ld_at(ob, R_AX, R_CX, 8)
     cb(ob, 72)
     cb(ob, 5)
@@ -575,21 +1017,20 @@ proc lower_zalloc(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     cb(ob, 72)
     cb(ob, 37)
     c32(ob, 4294967296 - al)
-    ld_slot(ob, R_DX, val_slot(mc, ins.b))
+    ld_val(ob, mc, R_DX, szv)
     cb(ob, 72)
     cb(ob, 137)
     cb(ob, 198)
     cb(ob, 72)
     cb(ob, 1)
     cb(ob, 214)
-    trap_if(ob, mc, 115, ins.site)
+    trap_if(ob, mc, 115, site)
     ld_at(ob, R_DI, R_CX, 16)
     cb(ob, 72)
     cb(ob, 57)
     cb(ob, 254)
-    trap_if(ob, mc, 118, ins.site)
+    trap_if(ob, mc, 118, site)
     st_at(ob, R_SI, R_CX, 8)
-    st_slot(ob, R_AX, val_slot(mc, i))
 end
 
 -- Instruction selection ------------------------------------------------------------
@@ -693,8 +1134,8 @@ proc lower_bin(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     -- operation set even after the result has been stored.
     ins := ins_at(ob, i)
     bop := ins.bop
-    ld_slot(ob, R_AX, val_slot(mc, ins.a))
-    ld_slot(ob, R_CX, val_slot(mc, ins.b))
+    ld_val(ob, mc, R_AX, ins.a)
+    ld_val(ob, mc, R_CX, ins.b)
     if bop == B_ADD
         cb(ob, 72)
         cb(ob, 1)
@@ -765,7 +1206,7 @@ proc lower_bin(ob: rw ref Oir, mc: rw ref Mach, i: u64)
         cb(ob, 182)
         cb(ob, 192)
     end
-    st_slot(ob, R_AX, val_slot(mc, i))
+    st_val(ob, mc, R_AX, i)
 end
 
 proc flag_check(ob: rw ref Oir, mc: rw ref Mach, signd: u64, si: u64)
@@ -878,7 +1319,7 @@ end
 
 proc lower_un(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     ins := ins_at(ob, i)
-    ld_slot(ob, R_AX, val_slot(mc, ins.a))
+    ld_val(ob, mc, R_AX, ins.a)
     if ins.bop == U1_NEG
         cb(ob, 72)
         cb(ob, 247)
@@ -901,15 +1342,15 @@ proc lower_un(ob: rw ref Oir, mc: rw ref Mach, i: u64)
         cb(ob, 182)
         cb(ob, 192)
     end
-    st_slot(ob, R_AX, val_slot(mc, i))
+    st_val(ob, mc, R_AX, i)
 end
 
 proc lower_trunc(ob: rw ref Oir, mc: ref Mach, i: u64)
     -- The same re-extension oli1 emits for `T.wrap(x)` (genesis step 6f).
     ins := ins_at(ob, i)
-    ld_slot(ob, R_AX, val_slot(mc, ins.a))
+    ld_val(ob, mc, R_AX, ins.a)
     emit_extend(ob, ins.b, ins.c)
-    st_slot(ob, R_AX, val_slot(mc, i))
+    st_val(ob, mc, R_AX, i)
 end
 
 proc lower_exit(ob: rw ref Oir)
@@ -926,9 +1367,21 @@ end
 
 proc lower_ret(ob: rw ref Oir, mc: ref Mach, b: u64)
     bk := blk_at(ob, b)
+    if mc.curnone == 1
+        -- The end of a `calls none` body, or of one that never returns: the
+        -- front end proved it is not reached, so it is `ud2`.
+        cb(ob, 15)
+        cb(ob, 11)
+        ret
+    end
+    if mc.curnever == 1
+        cb(ob, 15)
+        cb(ob, 11)
+        ret
+    end
     if mc.curentry == 1
         if bk.tc > 0
-            ld_slot(ob, R_DI, val_slot(mc, bk.ta))
+            ld_val(ob, mc, R_DI, bk.ta)
         else
             mov_imm(ob, R_DI, 0)
         end
@@ -936,14 +1389,15 @@ proc lower_ret(ob: rw ref Oir, mc: ref Mach, b: u64)
         ret
     end
     if bk.tc > 0
-        ld_slot(ob, R_AX, val_slot(mc, bk.ta))
+        ld_val(ob, mc, R_AX, bk.ta)
     else
         mov_imm(ob, R_AX, 0)
     end
     if bk.tc == 2
         -- A view is the pair (address, length) in rax and rdx (ABI.md §2).
-        ld_slot(ob, R_DX, val_slot(mc, bk.tb))
+        ld_val(ob, mc, R_DX, bk.tb)
     end
+    restore_regs(ob, mc)
     lower_leave(ob)
 end
 
@@ -952,29 +1406,29 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     op := ins.op
     if op == O_CONST
         mov_imm(ob, R_AX, ins.val)
-        st_slot(ob, R_AX, val_slot(mc, i))
+        st_val(ob, mc, R_AX, i)
         ret
     end
     if op == O_SADDR
         st := stat_at(ob, ins.a)
         mov_imm(ob, R_AX, 0)
         add_fix(mc, ob.ncode - 8, 2, st.off)
-        st_slot(ob, R_AX, val_slot(mc, i))
+        st_val(ob, mc, R_AX, i)
         ret
     end
     if op == O_SLEN
         st2 := stat_at(ob, ins.a)
         mov_imm(ob, R_AX, st2.len)
-        st_slot(ob, R_AX, val_slot(mc, i))
+        st_val(ob, mc, R_AX, i)
         ret
     end
     if op == O_LOAD
         ld_slot(ob, R_AX, ins.a)
-        st_slot(ob, R_AX, val_slot(mc, i))
+        st_val(ob, mc, R_AX, i)
         ret
     end
     if op == O_STORE
-        ld_slot(ob, R_AX, val_slot(mc, ins.b))
+        ld_val(ob, mc, R_AX, ins.b)
         st_slot(ob, R_AX, ins.a)
         ret
     end
@@ -1014,25 +1468,44 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
             cb(ob, 196)
             c32(ob, (ins.c + pad) * 8)
         end
-        st_slot(ob, R_AX, val_slot(mc, i))
+        st_val(ob, mc, R_AX, i)
         ret
     end
     if op == O_SYSCALL
         load_args(ob, mc, i, ins.b, 1)
         cb(ob, 15)
         cb(ob, 5)
-        st_slot(ob, R_AX, val_slot(mc, i))
+        st_val(ob, mc, R_AX, i)
         ret
     end
     if op == O_PARAM
         -- A parameter is a value that arrives in a register, or, past the
         -- six, in a word above the return address (ABI.md §1).
+        if ins.c == 1
+            -- A layout by value: its bytes above the return address, and
+            -- the parameter is their address.
+            rex_w(ob, R_AX)
+            cb(ob, 141)
+            modrm_bp(ob, R_AX)
+            c32(ob, 16 + (ins.a - 6) * 8)
+            st_val(ob, mc, R_AX, i)
+            ret
+        end
         if ins.a < 6
-            st_slot(ob, call_reg(ins.a), val_slot(mc, i))
+            st_val(ob, mc, call_reg(ins.a), i)
             ret
         end
         ld_bp(ob, R_AX, 16 + (ins.a - 6) * 8)
-        st_slot(ob, R_AX, val_slot(mc, i))
+        st_val(ob, mc, R_AX, i)
+        ret
+    end
+    if op == O_CPU
+        if ins.val == 0
+            cb(ob, 244)
+        else
+            cb(ob, 243)
+            cb(ob, 144)
+        end
         ret
     end
     if op == O_TRAP
@@ -1043,13 +1516,40 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_FADDR
         lea_slot(ob, R_AX, ins.a)
-        st_slot(ob, R_AX, val_slot(mc, i))
+        st_val(ob, mc, R_AX, i)
+        ret
+    end
+    if op == O_DADDR
+        -- The address of a static place: the writable segment's base, known
+        -- only once the code is complete, plus the place's offset.
+        d := dat_at(ob, ins.a)
+        mov_imm(ob, R_AX, 0)
+        add_fix(mc, ob.ncode - 8, 4, d.off)
+        st_val(ob, mc, R_AX, i)
+        ret
+    end
+    if op == O_OVF
+        -- The flag the operation just before set — `seto` for a signed one,
+        -- `setc` for an unsigned one — read before anything else sets one:
+        -- the store that ended the operation was a `mov`, which leaves the
+        -- flags alone, and this is the first instruction after it.
+        cb(ob, 15)
+        if ins.c == 1
+            cb(ob, 144)
+        else
+            cb(ob, 146)
+        end
+        cb(ob, 192)
+        cb(ob, 15)
+        cb(ob, 182)
+        cb(ob, 192)
+        st_val(ob, mc, R_AX, i)
         ret
     end
     if op == O_RDX
         -- The second register of the pair a view-returning call answers with
         -- (ABI.md §2); nothing has touched it since the call.
-        st_slot(ob, R_DX, val_slot(mc, i))
+        st_val(ob, mc, R_DX, i)
         ret
     end
     if op == O_RLOAD
@@ -1080,9 +1580,97 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         lower_zend(ob, mc, i)
         ret
     end
+    if op == O_ZRAW
+        lower_zraw(ob, mc, i)
+        ret
+    end
+    if op == O_ZFROM
+        lower_zfrom(ob, mc, i)
+        ret
+    end
+    if op == O_ZENDF
+        lower_zendf(ob, mc, i)
+        ret
+    end
     if op == O_ZALLOC
         lower_zalloc(ob, mc, i)
         ret
+    end
+    if op == O_MACHINE
+        lower_machine(pg, ob, mc, i)
+        ret
+    end
+end
+
+proc lower_machine(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
+    -- A `machine x64` block: the callee-saved registers it names go to the
+    -- frame, the `machine.in` values just before it are loaded into their
+    -- registers, the block's bytes come from compiler/asm.oli with its
+    -- fixups handed to the table, each `machine.out` just after it stores
+    -- its register into the value's word, and the saved registers come back.
+    ins := ins_at(ob, i)
+    base := mc.curloc + mc.curtmp + mc.curnval + mc.curnphi
+    mask := ins.w
+    k : u64 <- 0
+    r : u64 <- 0
+    while r < 16
+        if mask & (1 << r) != 0
+            st_slot(ob, r, base + k)
+            k <- k + 1
+        end
+        r <- r + 1
+    end
+    j : u64 <- i
+    while j > mc.curfirst
+        j <- j - 1
+        pj := ins_at(ob, j)
+        if pj.op != O_MIN
+            j <- mc.curfirst
+        else
+            ld_val(ob, mc, pj.w, pj.a)
+        end
+    end
+    start := ob.ncode
+    asm_block(pg, ob, ins.c, ins.val, 0)
+    f : u64 <- 0
+    while f < ob.nmfix
+        add_fix(mc, cell_get(ob.mfix, f * 3), cell_get(ob.mfix, f * 3 + 1), cell_get(ob.mfix, f * 3 + 2))
+        f <- f + 1
+    end
+    ob.nmfix <- 0
+    if ob.nmblk < MBLK_MAX
+        b := ob.nmblk
+        cell_set(ob.mblk, b * 5, ins.val)
+        cell_set(ob.mblk, b * 5 + 1, ins.c)
+        cell_set(ob.mblk, b * 5 + 2, start)
+        cell_set(ob.mblk, b * 5 + 3, ob.ncode)
+        cell_set(ob.mblk, b * 5 + 4, mc.curq)
+        ob.nmblk <- b + 1
+    end
+    j2 : u64 <- i + 1
+    while j2 < mc.curend
+        oj := ins_at(ob, j2)
+        if oj.op != O_MOUT
+            j2 <- mc.curend
+        else
+            if oj.c == 32
+                -- `mov r32, r32` of itself: the low half, zero-extended.
+                rex(ob, 32, oj.w, NOREG, oj.w)
+                cb(ob, 137)
+                modrm_reg(ob, oj.w, oj.w)
+            end
+            st_val(ob, mc, oj.w, j2)
+            j2 <- j2 + 1
+        end
+    end
+    k2 : u64 <- 0
+    r2 : u64 <- 0
+    while r2 < 16
+        if mask & (1 << r2) != 0
+            ld_slot(ob, r2, base + k2)
+            k2 <- k2 + 1
+        end
+        r2 <- r2 + 1
     end
 end
 
@@ -1151,7 +1739,7 @@ proc edge_copies(ob: rw ref Oir, mc: ref Mach, b: u64, s: u64)
             i <- last
         else
             pa := phiarg_at(ob, ins.a + j)
-            ld_slot(ob, R_AX, val_slot(mc, pa.val))
+            ld_val(ob, mc, R_AX, pa.val)
             st_slot(ob, R_AX, scratch_slot(mc, k))
             k <- k + 1
             i <- i + 1
@@ -1169,7 +1757,7 @@ proc edge_copies(ob: rw ref Oir, mc: ref Mach, b: u64, s: u64)
             i <- last
         else
             ld_slot(ob, R_AX, scratch_slot(mc, k))
-            st_slot(ob, R_AX, val_slot(mc, i))
+            st_val(ob, mc, R_AX, i)
             k <- k + 1
             i <- i + 1
         end
@@ -1194,7 +1782,7 @@ proc lower_term(ob: rw ref Oir, mc: rw ref Mach, b: u64)
     -- the `jz`, so when it carries copies it needs a landing pad of its own;
     -- when it does not, the jump goes straight to the block and the true edge
     -- keeps the fall-through it would have had anyway.
-    ld_slot(ob, R_AX, val_slot(mc, bk.ta))
+    ld_val(ob, mc, R_AX, bk.ta)
     cb(ob, 72)
     cb(ob, 133)
     cb(ob, 192)
@@ -1229,15 +1817,32 @@ end
 
 proc lower_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
     op := oproc_at(ob, q)
-    mc.curloc <- op.nloc
+    mc.curloc <- op.nwords
     mc.curtmp <- op.ntmp
     mc.curnval <- op.n
     mc.curfirst <- op.first
     mc.curentry <- op.isentry
     mc.curlast <- op.bfirst + op.nblk
+    mc.curnphi <- op.nphi
+    mc.curend <- op.first + op.n
+    mc.curq <- q
+    mc.curnone <- op.nocalls
+    mc.curnever <- op.isnever
     op.codepos <- ob.ncode
     if op.isentry == 1
         mc.entrypos <- ob.ncode
+    end
+    if op.nocalls == 1
+        -- `calls none`: no prologue, no frame, no saved registers — the
+        -- machine blocks of the body are the whole procedure.
+        b0 : u64 <- op.bfirst
+        while b0 < mc.curlast
+            if live_blk(ob, b0) == 1
+                lower_blk(pg, ob, mc, b0)
+            end
+            b0 <- b0 + 1
+        end
+        ret
     end
     cb(ob, 85)
     cb(ob, 72)
@@ -1248,6 +1853,10 @@ proc lower_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
     cb(ob, 236)
     fpos := ob.ncode
     c32(ob, 0)
+    alloc_proc(ob, mc, op)
+    if op.isentry == 0
+        save_regs(ob, mc)
+    end
     b : u64 <- op.bfirst
     while b < mc.curlast
         if live_blk(ob, b) == 1
@@ -1296,7 +1905,24 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
     while i < mc.nfix
         f := fix_at(mc, i)
         if f.kind == 2
+            -- The absolute address of a read-only static, in an imm64.
+            patch64(ob, f.pos, database + f.target)
+        elif f.kind == 4
+            patch64(ob, f.pos, mc.dbase + f.target)
+        elif f.kind == 7
+            -- A `[static + disp]` operand of a machine block: a disp32 the
+            -- machine sign-extends, which reaches the low 2 GiB and the top
+            -- 2 GiB — the encoder refuses it for any other load address.
+            patch32(ob, f.pos, mc.dbase + f.target)
+        elif f.kind == 8
             patch32(ob, f.pos, database + f.target)
+        elif f.kind == 5
+            -- The absolute address of a procedure, in a machine block's
+            -- `mov r64, name`: the code follows the read-only data.
+            op5 := oproc_at(ob, f.target)
+            patch64(ob, f.pos, database + ob.ndata + op5.codepos)
+        elif f.kind == 6
+            patch64(ob, f.pos, mc.dbase + f.target)
         else
             target : u64 <- 0
             if f.kind == 0
@@ -1324,13 +1950,35 @@ proc lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
         l.pos <- 0
         i <- i + 1
     end
-    q : u64 <- 0
-    while q < ob.nproc
-        lower_proc(pg, ob, mc, q)
-        q <- q + 1
+    mc.fstand <- pg.fstanding
+    mc.trapproc <- 0
+    tp := proc_traps(pg)
+    if tp >= 0
+        mc.trapproc <- u64.bits(tp) + 1
+    end
+    -- `section ".text.boot"` first: a freestanding image starts with it.
+    pass : u64 <- 0
+    while pass < 2
+        q : u64 <- 0
+        while q < ob.nproc
+            opq := oproc_at(ob, q)
+            if opq.boot == 1 - pass
+                lower_proc(pg, ob, mc, q)
+            end
+            q <- q + 1
+        end
+        pass <- pass + 1
     end
     if mc.ntrap > 0
         lower_trap_routine(ob, mc)
     end
+    -- The writable segment starts on the page after the code (ABI.md §7):
+    -- the same offset `compiler/elf.oli` writes it at, measured from the
+    -- start of the file, which `database` is `BASE_ADDR` plus the header of.
+    mc.dbase <- ob.base + page_up(database - ob.base + ob.ndata + ob.ncode)
     apply_fixes(ob, mc, database)
+end
+
+proc page_up(n: u64) -> u64
+    ret (n + 4095) / 4096 * 4096
 end

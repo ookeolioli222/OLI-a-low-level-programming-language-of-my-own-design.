@@ -166,7 +166,11 @@ characters, `true`/`false`, module constants, string literals, locals,
 conversions, `if`/`elif`/`else`, `while`, `loop`, `break`, `continue`, calls
 and `os.syscall`. Everything else — zones, views beyond a string's two words,
 layouts, refs, raw memory, fallible results, `each`, `case`, `sat(e)`,
-`checked(e)` and `machine` blocks — is `E0900`: refused, never approximated.
+`checked(e)` and `machine` blocks — was `E0900` at that stage. Stages 4–9
+lowered all of it, then a `choice` that fits a word and `machine x64`
+blocks; a choice wider than eight bytes, a layout literal by value and a
+machine line the encoder does not know remain `E0900`: refused, never
+approximated.
 
 ### 3.5 Assemble a `machine x64` program **[runs]**
 
@@ -186,11 +190,12 @@ command line yet.
 |-----------------|---------|
 | `olic file.oli` | compile to a native ELF — own encoder, own ELF writer, no linker |
 | `olic --show-tokens/--show-ast/--show-sema/--show-oir/--show-ssa/--show-oir=opt` | the six dumps (all six exist as drivers, one per stage, reading stdin) |
-| `olic --show-machine-ir/--show-asm/--show-bytes` | the remaining back-end dumps |
+| `olic --show-asm` | the bytes of every `machine x64` block, after fixups — **runs** (`tests/machine/`) |
+| `olic --show-machine-ir/--show-bytes` | the remaining back-end dumps |
 | `olic --check` / `--check-syntax` | analyse / parse only |
-| `olic --freestanding` | no OS: own entry point, own stack |
+| `olic --freestanding` | no OS: own entry point, own stack — selected by `-- target: freestanding` in the source; **runs** (`tests/run/freestanding.oli`) |
 | `olic --lib DIR` | where to find imported modules (today: always `lib/`) |
-| `olic --explain` / `--explain-cost` | per procedure: frame, registers, checks, syscalls, capabilities / the cost class of every line |
+| `olic --explain` / `--explain-cost` | per procedure: frame, checks with their proofs, zones, calls, syscalls / the cost class of every line — **runs** (`tests/snapshots/cse.explain`) |
 | `oli new/build/run/test/fmt/check/bench/doc/package/fuzz` | the project tool |
 
 ---
@@ -288,7 +293,7 @@ left at the end of a line is `E0032`.
 | `ref T` / `rw ref T` | 8 bytes, a reference to a place of type `T` | **[runs]** |
 | `[N]T` | `N × T`, a place type only — pass a `view` or `ref` | **[parses]** |
 | `layout` names | a record with fixed field offsets | **[runs]** |
-| `choice` names | a tagged union: one-byte tag then the payload | **[parses]** |
+| `choice` names | a tagged union: one-byte tag then the payload; one that fits eight bytes is a word | **[runs]** (≤ 8 bytes) |
 | `T or E` | fallible: tag in `rax`, payload in `rdx` | **[runs]** |
 | `none` | the empty type; `T or none` is the optional `T` | **[runs]** |
 | `never` | the bottom type: the procedure does not return | **[parses]** |
@@ -338,17 +343,19 @@ Explicit forms:
 u32(x)          -- lossless, verified statically           [runs]
 u8.wrap(x)      -- wrapping                                [runs]
 u64.bits(x)     -- reinterpret the bits                    [runs]
-u8.sat(x)       -- saturating                              [parses]
-u8.checked(x)   -- fallible: u8 or Overflow                [parses]
+u8.sat(x)       -- saturating                              [runs]
+u8.checked(x)   -- fallible: u8 or Overflow                [runs]
 addr u8 (n)     -- integer to address; permit memory.raw   [parses]
 ```
 
 `T(x)`, `T.wrap(x)` and `T.bits(x)` are compiled by `oli1` (genesis step 6f)
 and checked by `olic`: `T(x)` emits nothing, `.wrap`/`.bits` truncate to the
-width of `T` and extend again with its signedness. `.sat` and `.checked` parse
-and type-check but have no lowering yet, and `checked` is still typed as a
-plain `T` rather than `T or Overflow`, because the spec has not named the
-`Overflow` type (`compiler/SPEC.md`).
+width of `T` and extend again with its signedness. `olic` lowers `.sat` as a
+clamp to the range of `T` (two compares and two selects) and `.checked` as the
+fallible pair the `else` / `case` handlers of a call already resolve — the
+payload is the value when it fits, the failure otherwise
+(`tests/run/saturate.oli`). `oli1` compiles neither, which is why
+`compiler/` does not use them.
 
 ---
 
@@ -398,7 +405,7 @@ layout GdtPointer packed
 end
 ```
 
-### 6.4 `choice` **[parses]**
+### 6.4 `choice` **[runs]** (when it fits eight bytes)
 
 ```oli
 choice ParseError
@@ -407,7 +414,15 @@ choice ParseError
 end
 ```
 
-A variant may carry named fields; `case` binds them by name.
+A variant may carry named fields; `case` binds them by name. `olic` lowers
+a choice whose image fits eight bytes as one word — the tag (the variant's
+number, from 0, in declaration order) in the first byte, each field at its
+offset — so `fail VARIANT { f: e }` builds the word with masks and shifts,
+`case … when fail VARIANT { f }` compares the tag byte and reads each field
+back at its width and sign, and `else fail` hands the word on
+(`tests/run/choice.oli`). A wider choice would need memory and is `E0900`.
+A field a literal or pattern names that the variant does not declare, one
+named twice, or one a literal leaves out is `E0208`.
 
 ### 6.5 `proc` and its clauses **[runs]**
 
@@ -428,7 +443,7 @@ end
 | `align N` | align the procedure (a power of two) | **[parses]** |
 | `entry` | the program starts here — exactly one per program | **[runs]** |
 | `export ["sym"]` | export the symbol | **[parses]** |
-| `traps` | the freestanding trap handler: `(kind : core.TrapKind, site : core.Site) -> never` | **[parses]** |
+| `traps` | the freestanding trap handler: `(kind : core.TrapKind, site : core.Site) -> never` — called from every trap site with the kind and the site | **[runs]** |
 
 A duplicate, malformed or misplaced clause is `E0018`.
 
@@ -457,7 +472,7 @@ parameters. The name `main` has no special meaning.
 | `break` / `continue` | innermost loop only | **[runs]** |
 | `case` | `case e` … `when p` … `else` … `end`, exhaustive | **[runs]** for `ok`/`fail` |
 | `zone` | `zone z SIZE [at a] [from s]` … `end` | **[runs]** |
-| `machine` | `machine x64` … `end`, needs `permit cpu.asm` | **[runs]** in genesis |
+| `machine` | `machine x64` … `end`, needs `permit cpu.asm`; `in REG <- e`, `out REG -> place`, `clobber`, `.label:`; assembled by `olic`'s own encoder, byte for byte the genesis assembler's subset | **[runs]** |
 
 Control may not fall off the end of a procedure with a result (`E0230`); a
 statement after `ret`, `fail`, `break`, `continue` or a `never` call is
@@ -521,8 +536,12 @@ Members: `v.addr`, `v.len` on a view; `r.field` on a ref or a layout place;
 `Name.size`, `Name.align`, `Name.at(v)` on a layout; `z.bytes(n)`,
 `z.try_bytes(n)`, `z.make(T)` on a zone.
 
-Arithmetic modes: `wrap(e)` **[runs]**, `sat(e)` **[parses]**, `checked(e)`
-**[parses]** — `checked` yields a fallible value that must be resolved.
+Arithmetic modes: `wrap(e)` **[runs]**, `sat(e)` **[runs]**, `checked(e)`
+**[runs]** — `checked` yields a fallible value that must be resolved with
+`else` or `case`. A 64-bit operation in either mode reads the overflow flag
+the machine set (`ovf.of` in OIR); a narrower one compares the whole-word
+result with the range of its type. `sat` clamps to that range, `checked`
+accumulates the flags of every operator inside `e` and fails when any was set.
 Overflow is otherwise a trap (`docs/design/0006-overflow-and-bounds.md`): a
 program built by `olic` writes `trap: overflow at <module>:<line>` on fd 2 and
 exits 134. `wrap(e)` clears that trap for every operator inside `e` and keeps
@@ -590,6 +609,15 @@ zone kheap 4M from heap_region       -- backed by a static array
 A zone is a bump allocator with a base, a cursor and a limit. Exhaustion traps
 (`z.bytes`) or fails (`z.try_bytes`). Nothing allocated in a zone may escape
 its block.
+
+All of it runs under `olic` (`tests/run/zones.oli`): the operating-system
+zone is `mmap`/`munmap`; `at ADDR` and a zone over a buffer are the triple
+laid over memory that exists (`zone.new.raw`, with a bounds check that the
+buffer holds the size); `from` a parent zone carves the bytes from the
+parent's cursor with the parent's `zone_exhausted` trap and gives the cursor
+back at `end` (`zone.end.from`); a zone inside a zone is either. A `ret`,
+`fail`, `break` or `continue` inside a zone releases every zone it leaves on
+that edge — the compiler emits the release before the jump, innermost first.
 
 ### 10.3 Views
 
@@ -661,7 +689,7 @@ rejected rather than silently ignored (`E0019` in the front end, exit 1 in
 
 ---
 
-## 13. Freestanding and kernel mode **[parses]**
+## 13. Freestanding and kernel mode **[runs]** (the M3 shape; the loader profile is planned)
 
 The capability rules of §11 are enforced today: a raw load or store, a raw
 address conversion and `zone … at` need `permit memory.raw`, and a `machine`
@@ -670,14 +698,26 @@ construct. Constructs the V0 front end accepts but does not implement — `own`,
 `f32`/`f64`, `<~`, `port T (…)`, `mem.mmio`, `calls interrupt` — report `E0900`
 rather than compiling to something approximate.
 
-With `--freestanding` there is no operating system: the program supplies its
-own entry point (`entry` with `-> never`), its own stack, and a `traps`
-procedure. `zone … at` and `zone … from` give memory without an allocator,
-`machine` blocks give control registers and interrupt setup, and `section`
-clauses place code and data where a boot loader expects them. See
-`docs/FREESTANDING.md` and `docs/KERNEL_PROGRAMMING.md`;
-`tests/sema/ok/freestanding.oli` and `tests/parse/ok/kernel_sketch.oli` are
-the reference shapes.
+With `-- target: freestanding` at the top of the program there is no
+operating system: the program supplies its own entry point (`entry` with
+`-> never` and `calls none`: no frame, the first instruction of the image),
+its own stack, and a `traps` procedure that receives every trap with the
+kind and the `core.Site` of the line. `zone … at` and `zone … from` give
+memory without an allocator, `cpu.halt()` is `hlt`, `machine` blocks give
+control registers and interrupt setup, `align N` on a static is honoured
+and `section ".text.boot"` puts a procedure first. `olic` compiles all of
+it today: `tests/run/freestanding.oli` runs as a plain process (exiting
+through a system call written in a block, since nothing else is in the
+image) and `tests/freestanding/trap_line.oli` exits with the line of its
+overflow, delivered to `traps`. `-- load: 0x100000` sets the load address,
+a static with `section ".text.boot"` goes in front of the code, so a
+Multiboot2 header is a static layout with an initialiser (`examples/kernel.oli`
+— a kernel that writes COM1 through `out dx, al`, the VGA text buffer through
+raw stores and reads `cpuid`; the harness checks the image structurally,
+QEMU runs it). Still planned: the TOML profile file, the section order beyond
+`.text.boot`, `mem.mmio`. See `docs/FREESTANDING.md` and
+`docs/KERNEL_PROGRAMMING.md`; `tests/sema/ok/freestanding.oli` and
+`tests/parse/ok/kernel_sketch.oli` are the reference shapes.
 
 ---
 
@@ -725,6 +765,7 @@ Implemented today **[runs]**:
 | E0200 | type mismatch |
 | E0201 | integer literal needs a type |
 | E0202 | lossy conversion needs `wrap`, `sat` or `checked` |
+| E0208 | missing, unknown or duplicate field in a literal or pattern |
 | E0203 | mixed address spaces |
 | E0204 | layout contains itself by value |
 | E0212 | value does not fit its type |
@@ -822,9 +863,9 @@ for byte; every negative fixture reports exactly its expected diagnostics;
 every construct marked **runs** in `docs/COMMANDS.md` is pinned by a program
 that `olic` compiles and runs; and the self-compiled compiler compiles every
 one of those programs to the same bytes as the genesis-built one. What
-remains for V0 completeness: `choice`, `machine` blocks, statics, `[N]T`
-places, raw `[p]` access and `be`/`le` fields in the back end, then
-register allocation and common-subexpression elimination.
+remains for V0 completeness: a `choice` wider than a word and `be`/`le`
+fields in the back end; a linear-scan register allocator over the
+callee-saved registers is in (`--explain` shows its assignment).
 
 ---
 

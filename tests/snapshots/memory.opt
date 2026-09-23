@@ -28,11 +28,10 @@
       %0 = param 0
       %1 = param 1
       %2 = const 0
-      %3 = const 0
       jump bb1)
     (bb1 preds bb0 bb3
       %4 = phi [bb0 %2] [bb3 %10]
-      %5 = phi [bb0 %3] [bb3 %12]
+      %5 = phi [bb0 %2] [bb3 %12]
       %6 = cmp.lt %5, %1
       branch %6, bb2, bb4)
     (bb2 preds bb1
@@ -80,179 +79,162 @@
       ret))
   (proc start locals=6 entry
     (bb0
-      %0 = addr.of frame.0
+      %0 = addr.of frame.2
       %1 = const 65536
       zone.new %0, %1
-      %3 = addr.of frame.0
       %4 = const 16
-      %5 = zone.alloc %3, %4
+      %5 = zone.alloc %0, %4
+      %7 = const 0
       jump bb2)
     (bb2 preds bb0
-      %9 = const 0
-      ; check.bounds %9 -- removed: proof(constant)
-      %11 = add %5, %9
-      %12 = raw.load.8 %11
-      %13 = const 0
-      %14 = cmp.ne %12, %13
-      branch %14, bb3, bb4)
+      ; check.bounds %10 -- removed: proof(constant)
+      %12 = add %5, %7
+      %13 = raw.load.8 %12
+      %15 = cmp.ne %13, %7
+      branch %15, bb3, bb4)
     (bb3 preds bb2
-      %15 = const 2
-      ret %15)
+      %16 = const 2
+      zone.end %0
+      ret %16)
     (bb4 preds bb2
-      %16 = addr.of frame.0
-      %17 = const 16
-      %18 = zone.alloc %16, %17
-      %19 = cmp.eq %18, %5
-      branch %19, bb5, bb6)
+      %20 = zone.alloc %0, %4
+      %21 = cmp.eq %20, %5
+      branch %21, bb5, bb6)
     (bb5 preds bb4
-      %20 = const 3
-      ret %20)
+      %22 = const 3
+      zone.end %0
+      ret %22)
     (bb6 preds bb4
       arg %5
       arg %4
-      %23 = const 65
-      arg %23
-      %25 = call fill/3
-      %26 = const 0
-      ; check.bounds %26 -- removed: proof(constant)
-      %28 = add %5, %26
-      %29 = raw.load.8 %28
-      %30 = const 65
-      %31 = cmp.ne %29, %30
-      branch %31, bb7, bb8)
+      %26 = const 65
+      arg %26
+      %28 = call fill/3
+      ; check.bounds %29 -- removed: proof(constant)
+      %32 = raw.load.8 %12
+      %34 = cmp.ne %32, %26
+      branch %34, bb7, bb8)
     (bb7 preds bb6
-      %32 = const 4
-      ret %32)
+      %35 = const 4
+      zone.end %0
+      ret %35)
     (bb8 preds bb6
-      %33 = const 15
-      ; check.bounds %33 -- removed: proof(constant)
-      %35 = add %5, %33
-      %36 = raw.load.8 %35
-      %37 = const 65
-      %38 = cmp.ne %36, %37
-      branch %38, bb9, bb10)
+      %37 = const 15
+      ; check.bounds %37 -- removed: proof(constant)
+      %39 = add %5, %37
+      %40 = raw.load.8 %39
+      %42 = cmp.ne %40, %26
+      branch %42, bb9, bb10)
     (bb9 preds bb8
-      %39 = const 5
-      ret %39)
+      %43 = const 5
+      zone.end %0
+      ret %43)
     (bb10 preds bb8
       arg %5
       arg %4
-      %42 = call sum/2
-      %43 = const 1040
-      %44 = cmp.ne %42, %43
-      branch %44, bb11, bb12)
+      %47 = call sum/2
+      %48 = const 1040
+      %49 = cmp.ne %47, %48
+      branch %49, bb11, bb12)
     (bb11 preds bb10
-      %45 = const 6
-      ret %45)
+      %50 = const 6
+      zone.end %0
+      ret %50)
     (bb12 preds bb10
-      %46 = const 0
-      ; check.bounds %46 -- removed: proof(constant)
-      %49 = add %5, %46
+      %53 = const 3
+      ; check.bounds %52 -- removed: proof(constant)
       jump bb14)
     (bb14 preds bb12
-      ; check.bounds %54 -- removed: proof(constant)
+      ; check.bounds %61 -- removed: proof(constant)
       jump bb16)
     (bb16 preds bb14
-      ; check.bounds %62 -- removed: proof(constant)
+      %70 = const 12
+      ; check.bounds %70 -- removed: proof(constant)
       jump bb18)
     (bb18 preds bb16
-      ; check.bounds %69 -- removed: proof(constant)
+      ; check.bounds %78 -- removed: proof(constant)
       jump bb20)
     (bb20 preds bb18
-      %77 = addr.of static.15
-      %78 = len.of static.15
-      arg %77
-      arg %78
-      %81 = const 3
-      arg %81
-      %83 = call tail/3
-      %84 = call.len
-      %85 = const 2
-      %86 = cmp.ne %84, %85
-      branch %86, bb21, bb22)
+      %87 = addr.of static.15
+      %88 = len.of static.15
+      arg %87
+      arg %88
+      arg %53
+      %93 = call tail/3
+      %94 = call.len
+      %95 = const 2
+      %96 = cmp.ne %94, %95
+      branch %96, bb21, bb22)
     (bb21 preds bb20
-      %87 = const 11
-      ret %87)
+      %97 = const 11
+      zone.end %0
+      ret %97)
     (bb22 preds bb20
-      %88 = const 0
-      check.bounds %88, %84
-      %90 = add %83, %88
-      %91 = raw.load.8 %90
-      %92 = const 108
-      %93 = cmp.ne %91, %92
-      branch %93, bb23, bb24)
+      check.bounds %7, %94
+      %101 = add %93, %7
+      %102 = raw.load.8 %101
+      %103 = const 108
+      %104 = cmp.ne %102, %103
+      branch %104, bb23, bb24)
     (bb23 preds bb22
-      %94 = const 12
-      ret %94)
+      zone.end %0
+      ret %70)
     (bb24 preds bb22
-      arg %83
-      arg %84
-      %97 = call sum/2
-      %98 = const 219
-      %99 = cmp.ne %97, %98
-      branch %99, bb25, bb26)
-    (bb25 preds bb24
-      %100 = const 13
-      ret %100)
-    (bb26 preds bb24
-      %101 = const 1
-      ; check.bounds %101 -- removed: proof(constant)
-      %103 = add %49, %101
-      %104 = const 66
-      raw.store.8 %103, %104
-      %106 = const 1
-      ; check.bounds %106 -- removed: proof(constant)
-      %108 = add %5, %106
-      %109 = raw.load.8 %108
-      %110 = const 66
+      arg %93
+      arg %94
+      %109 = call sum/2
+      %110 = const 219
       %111 = cmp.ne %109, %110
-      branch %111, bb27, bb28)
-    (bb27 preds bb26
-      %112 = const 14
+      branch %111, bb25, bb26)
+    (bb25 preds bb24
+      %112 = const 13
+      zone.end %0
       ret %112)
+    (bb26 preds bb24
+      %114 = const 1
+      ; check.bounds %114 -- removed: proof(constant)
+      %116 = add %12, %114
+      %117 = const 66
+      raw.store.8 %116, %117
+      ; check.bounds %119 -- removed: proof(constant)
+      %121 = add %5, %114
+      %122 = raw.load.8 %121
+      %124 = cmp.ne %122, %117
+      branch %124, bb27, bb28)
+    (bb27 preds bb26
+      %125 = const 14
+      zone.end %0
+      ret %125)
     (bb28 preds bb26
-      %113 = addr.of frame.0
-      %114 = const 16
-      %115 = zone.alloc %113, %114
-      %116 = const 0
-      ; check.bounds %116 -- removed: proof(constant)
-      %118 = add %115, %116
-      %119 = const 7
-      raw.store.8 %118, %119
-      %121 = const 1
-      ; check.bounds %121 -- removed: proof(constant)
-      %123 = add %115, %121
-      %124 = const 9
-      raw.store.8 %123, %124
-      %126 = const 0
-      ; check.bounds %126 -- removed: proof(constant)
-      %128 = add %115, %126
-      %129 = raw.load.8 %128
-      %130 = const 7
-      %131 = cmp.ne %129, %130
-      branch %131, bb29, bb30)
+      %129 = zone.alloc %0, %4
+      ; check.bounds %130 -- removed: proof(constant)
+      %132 = add %129, %7
+      %133 = const 7
+      raw.store.8 %132, %133
+      ; check.bounds %135 -- removed: proof(constant)
+      %137 = add %129, %114
+      %138 = const 9
+      raw.store.8 %137, %138
+      ; check.bounds %140 -- removed: proof(constant)
+      %143 = raw.load.8 %132
+      %145 = cmp.ne %143, %133
+      branch %145, bb29, bb30)
     (bb29 preds bb28
-      %132 = const 15
-      ret %132)
+      zone.end %0
+      ret %37)
     (bb30 preds bb28
-      %133 = const 1
-      ; check.bounds %133 -- removed: proof(constant)
-      %135 = add %115, %133
-      %136 = raw.load.8 %135
-      %137 = const 9
-      %138 = cmp.ne %136, %137
-      branch %138, bb31, bb32)
+      ; check.bounds %148 -- removed: proof(constant)
+      %151 = raw.load.8 %137
+      %153 = cmp.ne %151, %138
+      branch %153, bb31, bb32)
     (bb31 preds bb30
-      %139 = const 16
-      ret %139)
+      zone.end %0
+      ret %4)
     (bb32 preds bb30
-      %140 = const 1
-      arg %140
-      %142 = const 1
-      arg %142
+      arg %114
+      arg %114
       arg %5
-      %145 = const 2
-      arg %145
-      %147 = syscall/4
-      %148 = const 0
-      ret %148)))
+      arg %95
+      %163 = syscall/4
+      zone.end %0
+      ret %7)))

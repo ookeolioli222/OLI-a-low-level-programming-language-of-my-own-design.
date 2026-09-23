@@ -57,13 +57,13 @@ deterministic and runs the acceptance tests below.
 | `olic.ssa` | `ssa.oli` | `mem2reg`: places become values, phis placed by the iterated dominance frontier, the procedure rebuilt without its unreachable blocks | done |
 | `olic.opt` | `opt.oli` | the passes of `OIR_SPEC` §6 to a fixpoint: constant folding (arithmetic, comparisons, conversions, a branch on a constant, and a constant overflow folded to `trap`), check elision with a proof recorded for every removal (`constant`, `divisor`, `loop-bound`), copy propagation over phis, dead code, and the statics nothing names dropped from the image | done |
 | `olic.x64` | `x64.oli` | machine lowering stage 2: the blocks, every value in a frame slot, a phi as parallel copies on its edges, SysV calls, the overflow/division checks and `core.trap`, `mmap`/`munmap` zones with a bump cursor, bounds-checked view access and view results in rax:rdx | done |
-| `olic.elf` | `elf.oli` | the ELF64 writer: one loadable segment, no section headers and no symbol table | done |
+| `olic.elf` | `elf.oli` | the ELF64 writer: a read+execute segment (header, statics, code) and, for a program with static places, a read+write one on the next page (`.data` in the file, `.bss` past it); no section headers and no symbol table | done |
 | `olic.show_oir` | `show_oir.oli` | driver for `--show-oir`: stdin → the blocks before any pass | done |
 | `olic.show_ssa` | `show_ssa.oli` | driver for `--show-ssa`: stdin → the blocks after `mem2reg` | done |
 | `olic.show_opt` | `show_opt.oli` | driver for `--show-oir=opt`: stdin → the blocks after the passes, removed checks and their proofs included | done |
 | `olic.verify_check` | `verify_check.oli` | the verifier's negative test: ten corruptions of a real program, each rejected with the invariant it breaks | done |
 | `olic.main` | `olic.oli` | driver: source on stdin, a native ELF64 on stdout | done |
-| — | — | raw word access, `choice`, `machine` lowering, statics, `[N]T` places, common-subexpression elimination and register allocation | planned |
+| — | — | `choice`, `machine` lowering, common-subexpression elimination and register allocation | planned |
 
 ## Conventions imposed by oli-core
 
@@ -205,7 +205,8 @@ widening, `(bits x)` for an explicit same-width reinterpretation, `(inttoaddr
 x)` / `(inttophys x)` for an address, nothing at all when only `rw` is
 dropped or the representation is identical. `wrap(e)` / `sat(e)` /
 `checked(e)` set the mode of the arithmetic inside `e`, which prints as
-`(add/wrap …)`. Known gap: `checked(e)` and `T.checked(x)` are typed as plain
+`(add/wrap …)`; the back end lowers all three (`tests/run/saturate.oli`).
+Known gap: `checked(e)` and `T.checked(x)` are typed as plain
 `T`, not as `T or Overflow` — `spec/OLI_SEMANTICS_V0.md` defers naming the
 `Overflow` type, so there is no failure type for the checker to build, and
 `tests/sema/ok/flow.oli` resolves one with `else` today. It is recorded here

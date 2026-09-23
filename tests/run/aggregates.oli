@@ -1,0 +1,35 @@
+module aggregates
+-- Static places with aggregate initialisers — an array element by element,
+-- a layout field by field — and statics in the read-only segment
+-- (`section ".rodata"`), read through their address. The exit status is
+-- the number of the check that failed; 42 when every one held.
+
+layout Pair
+    a : u32
+    b : u64
+end
+
+table : [4]u64 <- { 10, 20, 30, 40 }
+pair : Pair <- Pair { a: 5, b: 37 }
+bytes : [3]u8 <- { 79, 75, 10 }
+ro : [4]u16 <- { 1, 2, 3, 4 }
+    section ".rodata"
+greeting : [2]u8 <- { 72, 105 }
+    section ".rodata"
+
+proc start -> s32
+    entry
+    if table[2] != 30 then ret 1
+    if table.len != 4 then ret 2
+    if pair.a != 5 then ret 3
+    if pair.b != 37 then ret 4
+    if bytes[0] != 79 then ret 5
+    if ro[3] != 4 then ret 6
+    if ro.len != 4 then ret 7
+    if greeting[1] != 105 then ret 8
+    table[2] <- 31
+    if table[2] != 31 then ret 9
+    pair.a <- 6
+    if pair.a != 6 then ret 10
+    ret 42
+end

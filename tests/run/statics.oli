@@ -1,0 +1,87 @@
+module statics
+-- M2: static places at module level — a scalar with an initialiser in the
+-- file (`.data`), a scalar and arrays without one as zero memory (`.bss`) —
+-- read and written from the entry procedure and from a called one, an array
+-- passed as a view, `each` over it, and raw `[p]` access through an address
+-- under `permit memory.raw`. The exit status is the number of the check
+-- that failed, or 42.
+
+ticks : u64 <- 7
+total : u32
+buf : [16]u8
+table : [4]u64
+
+proc bump
+    ticks <- ticks + 1
+    total <- total + u32.wrap(ticks)
+end
+
+proc fill(v: rw view u8, c: u8)
+    i : uword <- 0
+    while i < v.len
+        v[i] <- c
+        i <- i + 1
+    end
+end
+
+proc sum(v: view u8) -> u64
+    t : u64 <- 0
+    each b in v
+        t <- t + u64(b)
+    end
+    ret t
+end
+
+proc start -> s32
+    entry
+    permit memory.raw
+    -- .data: the initialiser is in the file.
+    if ticks != 7
+        ret 1
+    end
+    -- .bss: zero from the kernel.
+    if total != 0
+        ret 2
+    end
+    if buf[3] != 0
+        ret 3
+    end
+    -- Written and read from another procedure.
+    bump()
+    bump()
+    if ticks != 9
+        ret 4
+    end
+    if total != 17
+        ret 5
+    end
+    -- An array is a view of its bytes: length, elements, a call, each.
+    if buf.len != 16
+        ret 6
+    end
+    fill(buf, 3)
+    if buf[0] != 3
+        ret 7
+    end
+    if buf[15] != 3
+        ret 8
+    end
+    if sum(buf) != 48
+        ret 9
+    end
+    table[2] <- 40
+    table[3] <- 2
+    if table[2] + table[3] != 42
+        ret 10
+    end
+    -- Raw access: the address of an element, read and written through it.
+    p := buf.addr
+    if [p] != 3
+        ret 11
+    end
+    [p] <- 9
+    if buf[0] != 9
+        ret 12
+    end
+    ret 42
+end

@@ -1,0 +1,17 @@
+module trap_zone_from
+-- A zone carved from a parent that has less: the parent's exhaustion, at the
+-- line of the child.
+-- expect: trap: zone_exhausted at stdin:9
+proc start -> s32
+    entry
+    permit os.syscall
+    zone p 4096
+        zone c 8192 from p
+            b := c.bytes(16)
+            if b.len == 0
+                ret 1
+            end
+        end
+    end
+    ret 0
+end

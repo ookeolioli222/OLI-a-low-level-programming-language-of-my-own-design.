@@ -15,8 +15,7 @@
       %2 = cmp.gt %0, %1
       branch %2, bb1, bb2)
     (bb1 preds bb0
-      %3 = const 100
-      ret %3)
+      ret %1)
     (bb2 preds bb0
       ret %0))
   (proc start locals=8 temps=2 entry
@@ -24,8 +23,7 @@
       %0 = const 30
       arg %0
       %2 = call clamp/1
-      %3 = const 30
-      %4 = cmp.ne %2, %3
+      %4 = cmp.ne %2, %0
       branch %4, bb1, bb2)
     (bb1 preds bb0
       %5 = const 1

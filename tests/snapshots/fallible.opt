@@ -26,8 +26,7 @@
       branch %2, bb1, bb2)
     (bb1 preds bb0
       %3 = const 1
-      %4 = const 1
-      ret %3, %4)
+      ret %3, %3)
     (bb2 preds bb0
       %5 = const 57
       %6 = cmp.gt %0, %5
@@ -37,8 +36,7 @@
       %8 = const 2
       ret %7, %8)
     (bb4 preds bb2
-      %9 = const 48
-      %10 = sub.s %0, %9
+      %10 = sub.s %0, %1
       check.overflow %10
       %11 = const 0
       ret %11, %10))
@@ -51,8 +49,7 @@
       branch %3, bb1, bb2)
     (bb1 preds bb0
       %4 = const 1
-      %5 = const 1
-      ret %4, %5)
+      ret %4, %4)
     (bb2 preds bb0
       %6 = const 0
       check.bounds %6, %1
@@ -61,8 +58,7 @@
       arg %9
       %11 = call digit/1
       %12 = call.payload
-      %13 = const 0
-      %14 = cmp.eq %11, %13
+      %14 = cmp.eq %11, %6
       branch %14, bb3, bb8)
     (bb3 preds bb2
       jump bb4)
@@ -74,8 +70,7 @@
       arg %18
       %20 = call digit/1
       %21 = call.payload
-      %22 = const 0
-      %23 = cmp.eq %20, %22
+      %23 = cmp.eq %20, %6
       branch %23, bb5, bb7)
     (bb5 preds bb4
       jump bb6)
@@ -85,15 +80,13 @@
       check.overflow %25
       %26 = add.s %25, %21
       check.overflow %26
-      %27 = const 0
-      ret %27, %26)
+      ret %6, %26)
     (bb7 preds bb4
-      %28 = const 1
-      ret %28, %21)
+      ret %15, %21)
     (bb8 preds bb2
       %29 = const 1
       ret %29, %12))
-  (proc value_or locals=2 temps=1
+  (proc value_or locals=2 temps=2
     (bb0
       %0 = param 0
       %1 = param 1
@@ -130,8 +123,7 @@
       %9 = cmp.eq %8, %2
       branch %9, bb3, bb4)
     (bb3 preds bb2
-      %10 = const 0
-      ret %10, %4)
+      ret %3, %4)
     (bb4 preds bb2
       %11 = const 1
       %12 = add %4, %11
@@ -139,8 +131,7 @@
       jump bb1)
     (bb5 preds bb1
       %13 = const 1
-      %14 = const 0
-      ret %13, %14))
+      ret %13, %3))
   (proc make locals=3
     (bb0
       %0 = param 0
@@ -150,8 +141,7 @@
       branch %3, bb1, bb2)
     (bb1 preds bb0
       %4 = const 1
-      %5 = const 0
-      ret %4, %5)
+      ret %4, %2)
     (bb2 preds bb0
       %6 = const 8
       %7 = zone.alloc %0, %6
@@ -164,8 +154,7 @@
       check.overflow %13
       %14 = trunc.32 %13
       raw.store.32 %11, %14
-      %16 = const 0
-      ret %16, %7))
+      ret %2, %7))
   (proc sum locals=3
     (bb0
       %0 = param 0
@@ -188,8 +177,7 @@
       check.overflow %12
       ret %12)
     (bb3 preds bb0
-      %13 = const 0
-      ret %13))
+      ret %6))
   (proc code_of locals=2
     (bb0
       %0 = param 0
@@ -207,7 +195,7 @@
       %10 = const 18446744073709551615
       ; check.overflow %10 -- removed: proof(constant)
       ret %10))
-  (proc start locals=15 temps=4 entry
+  (proc start locals=15 temps=8 entry
     (bb0
       %0 = const 55
       arg %0
@@ -234,8 +222,7 @@
       arg %11
       %13 = call digit/1
       %14 = call.payload
-      %15 = const 0
-      %16 = cmp.eq %13, %15
+      %16 = cmp.eq %13, %4
       branch %16, bb6, bb7)
     (bb6 preds bb5
       jump bb8)
@@ -255,8 +242,7 @@
       arg %23
       %25 = call digit/1
       %26 = call.payload
-      %27 = const 0
-      %28 = cmp.eq %25, %27
+      %28 = cmp.eq %25, %4
       branch %28, bb11, bb12)
     (bb11 preds bb10
       %29 = const 2
@@ -278,8 +264,7 @@
       %37 = const 32
       arg %37
       %39 = call digit/1
-      %41 = const 0
-      %42 = cmp.eq %39, %41
+      %42 = cmp.eq %39, %4
       branch %42, bb16, bb17)
     (bb16 preds bb15
       %43 = const 1
@@ -307,18 +292,15 @@
       %57 = cmp.ne.s %55, %56
       branch %57, bb21, bb22)
     (bb21 preds bb20
-      %58 = const 5
-      ret %58)
+      ret %46)
     (bb22 preds bb20
       %59 = addr.of static.12
       %60 = len.of static.12
       arg %59
       arg %60
-      %63 = const 9
-      arg %63
+      arg %53
       %65 = call value_or/3
-      %66 = const 9
-      %67 = cmp.ne.s %65, %66
+      %67 = cmp.ne.s %65, %53
       branch %67, bb23, bb24)
     (bb23 preds bb22
       %68 = const 6
@@ -328,23 +310,19 @@
       %70 = len.of static.13
       arg %69
       arg %70
-      %73 = const 9
-      arg %73
+      arg %53
       %75 = call value_or/3
-      %76 = const 9
-      %77 = cmp.ne.s %75, %76
+      %77 = cmp.ne.s %75, %53
       branch %77, bb25, bb26)
     (bb25 preds bb24
-      %78 = const 7
-      ret %78)
+      ret %8)
     (bb26 preds bb24
       %79 = addr.of static.14
       %80 = len.of static.14
       arg %79
       arg %80
       %83 = call code_of/2
-      %84 = const 42
-      %85 = cmp.ne.s %83, %84
+      %85 = cmp.ne.s %83, %56
       branch %85, bb27, bb28)
     (bb27 preds bb26
       %86 = const 8
@@ -355,13 +333,13 @@
       arg %87
       arg %88
       %91 = call code_of/2
+      %93 = const 1
       %94 = const 18446744073709551615
       ; check.overflow %94 -- removed: proof(constant)
       %95 = cmp.ne.s %91, %94
       branch %95, bb29, bb30)
     (bb29 preds bb28
-      %96 = const 9
-      ret %96)
+      ret %53)
     (bb30 preds bb28
       %97 = addr.of static.17
       %98 = len.of static.17
@@ -371,8 +349,7 @@
       arg %101
       %103 = call find/3
       %104 = call.payload
-      %105 = const 0
-      %106 = cmp.eq %103, %105
+      %106 = cmp.eq %103, %4
       branch %106, bb31, bb32)
     (bb31 preds bb30
       jump bb33)
@@ -394,8 +371,7 @@
       arg %114
       %116 = call find/3
       %117 = call.payload
-      %118 = const 0
-      %119 = cmp.eq %116, %118
+      %119 = cmp.eq %116, %4
       branch %119, bb36, bb37)
     (bb36 preds bb35
       jump bb38)
@@ -417,8 +393,7 @@
       arg %128
       %130 = call find/3
       %131 = call.payload
-      %132 = const 0
-      %133 = cmp.eq %130, %132
+      %133 = cmp.eq %130, %4
       branch %133, bb41, bb42)
     (bb41 preds bb40
       jump bb43)
@@ -439,17 +414,15 @@
       %142 = const 113
       arg %142
       %144 = call find/3
-      %146 = const 0
-      %147 = cmp.eq %144, %146
+      %147 = cmp.eq %144, %4
       branch %147, bb46, bb47)
     (bb46 preds bb45
-      %148 = const 1
       jump bb48)
     (bb47 preds bb45
       %149 = const 20
       jump bb48)
     (bb48 preds bb46 bb47
-      %150 = phi [bb46 %148] [bb47 %149]
+      %150 = phi [bb46 %93] [bb47 %149]
       %151 = const 20
       %152 = cmp.ne %150, %151
       branch %152, bb49, bb50)
@@ -457,55 +430,48 @@
       %153 = const 13
       ret %153)
     (bb50 preds bb48
-      %154 = addr.of frame.39
+      %154 = addr.of frame.16
       %155 = const 4096
       zone.new %154, %155
-      %157 = addr.of frame.39
-      arg %157
-      %159 = const 5
-      arg %159
+      arg %154
+      arg %46
       %161 = call sum/2
       %162 = const 15
       %163 = cmp.ne %161, %162
       branch %163, bb51, bb52)
     (bb51 preds bb50
       %164 = const 14
+      zone.end %154
       ret %164)
     (bb52 preds bb50
-      %165 = addr.of frame.39
-      arg %165
-      %167 = const 0
-      arg %167
-      %169 = call sum/2
-      %170 = const 0
-      %171 = cmp.ne %169, %170
-      branch %171, bb53, bb54)
+      arg %154
+      arg %4
+      %170 = call sum/2
+      %172 = cmp.ne %170, %4
+      branch %172, bb53, bb54)
     (bb53 preds bb52
-      %172 = const 15
-      ret %172)
+      zone.end %154
+      ret %162)
     (bb54 preds bb52
       zone.end %154
       arg %97
       arg %98
-      %176 = const 104
-      arg %176
-      %178 = call find/3
-      %179 = call.payload
-      %180 = const 0
-      %181 = cmp.eq %178, %180
-      branch %181, bb55, bb59)
+      %178 = const 104
+      arg %178
+      %180 = call find/3
+      %181 = call.payload
+      %183 = cmp.eq %180, %4
+      branch %183, bb55, bb59)
     (bb55 preds bb54
       jump bb56)
     (bb56 preds bb55
-      %182 = const 0
-      %183 = cmp.ne %179, %182
-      branch %183, bb57, bb58)
+      %185 = cmp.ne %181, %4
+      branch %185, bb57, bb58)
     (bb57 preds bb56
-      %184 = const 17
-      ret %184)
+      %186 = const 17
+      ret %186)
     (bb58 preds bb56
-      %185 = const 42
-      ret %185)
+      ret %56)
     (bb59 preds bb54
-      %186 = const 16
-      ret %186)))
+      %188 = const 16
+      ret %188)))

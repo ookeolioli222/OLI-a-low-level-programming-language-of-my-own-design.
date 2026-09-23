@@ -1,0 +1,99 @@
+(oir
+  (static 0 len=25)
+  (static 1 len=27)
+  (static 2 len=27)
+  (static 3 len=27)
+  (static 4 len=27)
+  (static 5 removed)
+  (static 6 len=3)
+  (proc twice locals=2
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = param 2
+      check.bounds %2, %1
+      %4 = add %0, %2
+      %5 = raw.load.8 %4
+      ; check.bounds %6 -- removed: proof(dominance)
+      %8 = raw.load.8 %4
+      %9 = add %5, %8
+      check.overflow %9
+      ret %9))
+  (proc square_sum locals=2
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = add %0, %1
+      check.overflow %2
+      ; check.overflow %3 -- removed: proof(dominance)
+      %4 = mul %2, %2
+      check.overflow %4
+      ret %4))
+  (proc pick locals=4
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = param 2
+      %3 = add %0, %1
+      check.overflow %3
+      branch %2, bb1, bb2)
+    (bb1 preds bb0
+      ; check.overflow %4 -- removed: proof(dominance)
+      %5 = add %3, %3
+      check.overflow %5
+      ret %5)
+    (bb2 preds bb0
+      ; check.overflow %6 -- removed: proof(dominance)
+      ret %3))
+  (proc start locals=0 entry
+    (bb0
+      %0 = addr.of static.6
+      %1 = len.of static.6
+      arg %0
+      arg %1
+      %4 = const 1
+      arg %4
+      %6 = call twice/3
+      %7 = const 196
+      %8 = cmp.ne %6, %7
+      branch %8, bb1, bb2)
+    (bb1 preds bb0
+      ret %4)
+    (bb2 preds bb0
+      %10 = const 3
+      arg %10
+      %12 = const 4
+      arg %12
+      %14 = call square_sum/2
+      %15 = const 49
+      %16 = cmp.ne %14, %15
+      branch %16, bb3, bb4)
+    (bb3 preds bb2
+      %17 = const 2
+      ret %17)
+    (bb4 preds bb2
+      %18 = const 5
+      arg %18
+      %20 = const 6
+      arg %20
+      arg %4
+      %24 = call pick/3
+      %25 = const 22
+      %26 = cmp.ne %24, %25
+      branch %26, bb5, bb6)
+    (bb5 preds bb4
+      ret %10)
+    (bb6 preds bb4
+      arg %18
+      arg %20
+      %32 = const 0
+      arg %32
+      %34 = call pick/3
+      %35 = const 11
+      %36 = cmp.ne %34, %35
+      branch %36, bb7, bb8)
+    (bb7 preds bb6
+      ret %12)
+    (bb8 preds bb6
+      %38 = const 42
+      ret %38)))

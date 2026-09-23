@@ -1,0 +1,125 @@
+module machine
+-- `machine x64` blocks (design 0009) in a hosted program: values in through
+-- `in`, results out through `out`, local labels, a system call written by
+-- hand, a callee-saved register kept across a call into a block that uses
+-- it, and a static read through its name. The exit status is the number
+-- of the check that failed; 42 when every one held.
+
+counter : u64 <- 5
+
+proc add3(a : u64, b : u64, c : u64) -> u64
+    permit cpu.asm
+    r : u64 <- 0
+    machine x64
+        in rax <- a
+        in rcx <- b
+        in rdx <- c
+        add rax, rcx
+        add rax, rdx
+        out rax -> r
+        clobber rcx, rdx
+    end
+    ret r
+end
+
+proc sum_to(n : u64) -> u64
+    -- A loop with local labels: rax = n + (n-1) + … + 1.
+    permit cpu.asm
+    r : u64 <- 0
+    machine x64
+        in rcx <- n
+        xor eax, eax
+    .top:
+        test rcx, rcx
+        jz .done
+        add rax, rcx
+        dec rcx
+        jmp .top
+    .done:
+        out rax -> r
+        clobber rcx
+    end
+    ret r
+end
+
+proc uses_rbx(x : u64) -> u64
+    -- rbx is callee-saved: the block names it, so the lowering keeps it.
+    permit cpu.asm
+    r : u64 <- 0
+    machine x64
+        in rbx <- x
+        mov rax, rbx
+        shl rax, 2
+        out rax -> r
+        clobber rbx
+    end
+    ret r
+end
+
+proc low_half(x : u64) -> u32
+    permit cpu.asm
+    r : u32 <- 0
+    machine x64
+        in rax <- x
+        out eax -> r
+    end
+    ret r
+end
+
+proc start -> s32
+    entry
+    permit os.syscall, cpu.asm
+    if add3(1, 2, 3) != 6
+        ret 1
+    end
+    if sum_to(10) != 55
+        ret 2
+    end
+    if sum_to(0) != 0
+        ret 3
+    end
+    -- A value kept in rbx across a call whose block uses rbx.
+    kept : u64 <- 0
+    machine x64
+        mov rbx, 7
+        mov rdi, 3
+        call uses_rbx
+        cmp rax, 12
+        jne .bad
+        out rbx -> kept
+        jmp .ok
+    .bad:
+        mov rbx, 0
+        out rbx -> kept
+    .ok:
+        clobber rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11
+    end
+    if kept != 7
+        ret 4
+    end
+    if low_half(4294967296 + 9) != 9
+        ret 5
+    end
+    -- A static through its address, and a write of two bytes by hand.
+    c : u64 <- 0
+    machine x64
+        mov rax, [counter]
+        add rax, 37
+        out rax -> c
+    end
+    if c != 42
+        ret 6
+    end
+    -- A system call written by hand: getpid answers a positive number.
+    pid : u64 <- 0
+    machine x64
+        mov eax, 39
+        syscall
+        out rax -> pid
+        clobber rcx, r11
+    end
+    if pid == 0
+        ret 7
+    end
+    ret 42
+end

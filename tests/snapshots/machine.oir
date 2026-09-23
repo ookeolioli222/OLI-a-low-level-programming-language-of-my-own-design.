@@ -1,0 +1,169 @@
+(oir
+  (static 0 len=28)
+  (data 0 size=8 init)
+  (proc add3 locals=4
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = param 2
+      store frame.2, %4
+      %6 = const 0
+      store frame.3, %6
+      %8 = load frame.0
+      %9 = load frame.1
+      %10 = load frame.2
+      machine.in rax, %8
+      machine.in rcx, %9
+      machine.in rdx, %10
+      machine x64
+      %15 = machine.out rax
+      store frame.3, %15
+      %17 = load frame.3
+      ret %17))
+  (proc sum_to locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = const 0
+      store frame.1, %2
+      %4 = load frame.0
+      machine.in rcx, %4
+      machine x64
+      %7 = machine.out rax
+      store frame.1, %7
+      %9 = load frame.1
+      ret %9))
+  (proc uses_rbx locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = const 0
+      store frame.1, %2
+      %4 = load frame.0
+      machine.in rbx, %4
+      machine x64
+      %7 = machine.out rax
+      store frame.1, %7
+      %9 = load frame.1
+      ret %9))
+  (proc low_half locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = const 0
+      store frame.1, %2
+      %4 = load frame.0
+      machine.in rax, %4
+      machine x64
+      %7 = machine.out eax
+      store frame.1, %7
+      %9 = load frame.1
+      ret %9))
+  (proc start locals=3 entry
+    (bb0
+      %0 = const 1
+      arg %0
+      %2 = const 2
+      arg %2
+      %4 = const 3
+      arg %4
+      %6 = call add3/3
+      %7 = const 6
+      %8 = cmp.ne %6, %7
+      branch %8, bb1, bb3)
+    (bb1 preds bb0
+      %10 = const 1
+      ret %10)
+    (bb2
+      jump bb3)
+    (bb3 preds bb0 bb2
+      %15 = const 10
+      arg %15
+      %17 = call sum_to/1
+      %18 = const 55
+      %19 = cmp.ne %17, %18
+      branch %19, bb4, bb6)
+    (bb4 preds bb3
+      %21 = const 2
+      ret %21)
+    (bb5
+      jump bb6)
+    (bb6 preds bb3 bb5
+      %26 = const 0
+      arg %26
+      %28 = call sum_to/1
+      %29 = const 0
+      %30 = cmp.ne %28, %29
+      branch %30, bb7, bb9)
+    (bb7 preds bb6
+      %32 = const 3
+      ret %32)
+    (bb8
+      jump bb9)
+    (bb9 preds bb6 bb8
+      %37 = const 0
+      store frame.0, %37
+      machine x64
+      %40 = machine.out rbx
+      %41 = machine.out rbx
+      store frame.0, %40
+      store frame.0, %41
+      %44 = load frame.0
+      %45 = const 7
+      %46 = cmp.ne %44, %45
+      branch %46, bb10, bb12)
+    (bb10 preds bb9
+      %48 = const 4
+      ret %48)
+    (bb11
+      jump bb12)
+    (bb12 preds bb9 bb11
+      %53 = const 4294967296
+      %54 = const 9
+      %55 = add %53, %54
+      check.overflow %55
+      arg %55
+      %57 = call low_half/1
+      %58 = const 9
+      %59 = cmp.ne %57, %58
+      branch %59, bb13, bb15)
+    (bb13 preds bb12
+      %61 = const 5
+      ret %61)
+    (bb14
+      jump bb15)
+    (bb15 preds bb12 bb14
+      %66 = const 0
+      store frame.1, %66
+      machine x64
+      %69 = machine.out rax
+      store frame.1, %69
+      %71 = load frame.1
+      %72 = const 42
+      %73 = cmp.ne %71, %72
+      branch %73, bb16, bb18)
+    (bb16 preds bb15
+      %75 = const 6
+      ret %75)
+    (bb17
+      jump bb18)
+    (bb18 preds bb15 bb17
+      %80 = const 0
+      store frame.2, %80
+      machine x64
+      %83 = machine.out rax
+      store frame.2, %83
+      %85 = load frame.2
+      %86 = const 0
+      %87 = cmp.eq %85, %86
+      branch %87, bb19, bb21)
+    (bb19 preds bb18
+      %89 = const 7
+      ret %89)
+    (bb20
+      jump bb21)
+    (bb21 preds bb18 bb20
+      %94 = const 42
+      ret %94)))

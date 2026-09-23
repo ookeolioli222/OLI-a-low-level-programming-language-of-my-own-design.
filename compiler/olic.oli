@@ -43,7 +43,7 @@ proc start -> s32
             ret 1
         end
         mc := mach_new(z)
-        lower_all(pg, ob, mc, BASE_ADDR + HDR_SIZE)
+        lower_all(pg, ob, mc, ob.base + hdr_size(ob))
         write_elf(ob, mc, z)
         ret 0
     end

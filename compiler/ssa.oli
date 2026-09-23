@@ -42,7 +42,7 @@ end
 proc ssa_slots(ob: rw ref Oir, q: u64) -> u64
     permit os.syscall
     op := oproc_at(ob, q)
-    n := op.nloc * LOC_WORDS + op.ntmp
+    n := op.nwords + op.ntmp
     if n > SLOT_MAX
         put(2, "olic: procedure has more places than SSA construction holds\n")
         os.syscall(60, 4)

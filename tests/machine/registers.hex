@@ -1,0 +1,23 @@
+48 b8 ff ff ff ff ff ff ff ff
+48 b9 00 00 00 00 00 00 00 80
+48 ba ff ff ff ff ff ff ff ff
+48 89 c3 48 89 cc 48 89 d5 48 89 de 48 89 e7
+49 89 e8 49 89 f1 49 89 fa 4d 89 c3 4d 89 cc
+4d 89 d5 4d 89 de 4d 89 e7 4c 89 e8 4c 89 f1 4c 89 fa
+4d 01 c8 4d 09 da 4d 21 ec 4d 29 fe 4c 31 c0 49 39 d9 49 85 ca
+49 81 c0 00 00 00 80
+49 81 c9 ff ff ff 7f
+49 81 e2 ff ff ff ff
+49 81 eb 00 00 00 00
+49 81 f4 2a 00 00 00
+49 81 fd d6 ff ff ff
+49 f7 c6 01 00 00 00
+48 ff c0 49 ff c8 49 f7 d9 49 f7 d2
+49 f7 e3 49 f7 ec 49 f7 f5 49 f7 fe
+4d 0f af c1
+4d 69 d3 d6 ff ff ff
+49 c1 e4 01 49 c1 ed ff 49 c1 fe 00
+49 d3 e7 48 d3 e8 49 d3 f8
+50 41 57 41 5e 5b 68 d6 ff ff ff
+ff d0 41 ff d0 ff e3 41 ff e7
+48 99 0f 05 c3

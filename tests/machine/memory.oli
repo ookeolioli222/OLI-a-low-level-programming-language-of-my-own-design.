@@ -1,0 +1,42 @@
+module memory
+-- The lines of genesis/2-asm/tests/memory.oli, in a hosted V0 program; the bytes
+-- olic emits for the block must equal memory.hex, the assembler's hand-derived
+-- canonical encoding. Not executed.
+proc start -> s32
+    entry
+    permit cpu.asm
+    machine x64
+        mov rax, [rbx]
+        mov rax, [rsp]
+        mov rax, [r12]
+        mov rax, [rbp]
+        mov rax, [r13]
+        mov rax, [rbp+0]
+        mov rax, [r13-16]
+        mov r8, [r9+r10*2]
+        mov r9, [r12+r13*4+16]
+        mov r10, [r13+r12*8-16]
+        mov [r15+rax*1+2147483647], r11
+        mov [r8-2147483648], -1
+        add r9, [rbp]
+        add [r12], r10
+        sub [r13+r14*4], 42
+        test rax, [rsp]
+        test [r15], -1
+        xor rax, rax
+        inc [r12]
+        neg [rbp-8]
+        shl [r13+rcx*8], cl
+        sar [rsp], 1
+        lea r15, [r12+r13*4-8]
+        imul [rbp]
+        call [r12]
+        jmp [r13+r14*8]
+        imul r8, [r9+r10*2]
+        imul r11, [r12+r13*4-8], -42
+        push [r13]
+        pop [r12]
+        ret
+    end
+    ret 0
+end

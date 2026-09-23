@@ -1,0 +1,463 @@
+(oir
+  (static 0 len=27)
+  (static 1 len=27)
+  (static 2 len=27)
+  (static 3 len=27)
+  (static 4 len=27)
+  (proc clamp locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 10
+      %4 = cmp.lt %2, %3
+      branch %4, bb1, bb2)
+    (bb1 preds bb0
+      %6 = const 1
+      %7 = const 0
+      ret %6, %7)
+    (bb2 preds bb0
+      %10 = load frame.0
+      %11 = const 100
+      %12 = cmp.gt %10, %11
+      branch %12, bb3, bb4)
+    (bb3 preds bb2
+      %14 = const 1
+      %15 = const 1
+      %16 = load frame.0
+      %17 = const 100
+      %18 = sub %16, %17
+      check.overflow %18
+      %19 = const 4294967295
+      %20 = and %18, %19
+      %21 = const 32
+      %22 = shl %20, %21
+      %23 = or %15, %22
+      ret %14, %23)
+    (bb4 preds bb2
+      %26 = load frame.0
+      %27 = const 0
+      ret %27, %26))
+  (proc parity locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 2
+      %4 = rem.s %2, %3
+      check.div_zero %3
+      %5 = const 0
+      %6 = cmp.ne.s %4, %5
+      branch %6, bb1, bb3)
+    (bb1 preds bb0
+      %8 = const 1
+      %9 = const 2
+      %10 = load frame.0
+      %11 = trunc.8.s %10
+      %12 = const 255
+      %13 = and %11, %12
+      %14 = const 32
+      %15 = shl %13, %14
+      %16 = or %9, %15
+      %17 = const 7
+      %18 = const 65535
+      %19 = and %17, %18
+      %20 = const 48
+      %21 = shl %19, %20
+      %22 = or %16, %21
+      ret %8, %22)
+    (bb2
+      jump bb3)
+    (bb3 preds bb0 bb2
+      %27 = load frame.0
+      %28 = trunc.32 %27
+      %29 = const 0
+      ret %29, %28))
+  (proc twice locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      arg %2
+      %4 = call clamp/1
+      %5 = call.payload
+      %6 = const 0
+      %7 = cmp.eq %4, %6
+      branch %7, bb1, bb2)
+    (bb1 preds bb0
+      jump bb3)
+    (bb2 preds bb0
+      %11 = const 1
+      ret %11, %5)
+    (bb3 preds bb1
+      store frame.1, %5
+      %15 = load frame.1
+      %16 = const 2
+      %17 = mul %15, %16
+      check.overflow %17
+      %18 = const 0
+      ret %18, %17))
+  (proc fail_with locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = const 1
+      %3 = load frame.0
+      ret %2, %3))
+  (proc start locals=20 temps=6 entry
+    (bb0
+      %0 = const 50
+      arg %0
+      %2 = call clamp/1
+      %3 = call.payload
+      %4 = const 0
+      %5 = cmp.eq %2, %4
+      store frame.20, %3
+      branch %5, bb1, bb2)
+    (bb1 preds bb0
+      jump bb3)
+    (bb2 preds bb0
+      %10 = const 0
+      store frame.20, %10
+      jump bb3)
+    (bb3 preds bb1 bb2
+      %13 = load frame.20
+      store frame.0, %13
+      %15 = load frame.0
+      %16 = const 50
+      %17 = cmp.ne %15, %16
+      branch %17, bb4, bb5)
+    (bb4 preds bb3
+      %19 = const 1
+      ret %19)
+    (bb5 preds bb3
+      %22 = const 5
+      arg %22
+      %24 = call clamp/1
+      %25 = call.payload
+      %26 = const 0
+      %27 = cmp.eq %24, %26
+      store frame.22, %25
+      branch %27, bb6, bb7)
+    (bb6 preds bb5
+      jump bb8)
+    (bb7 preds bb5
+      %32 = const 7
+      store frame.22, %32
+      jump bb8)
+    (bb8 preds bb6 bb7
+      %35 = load frame.22
+      store frame.1, %35
+      %37 = load frame.1
+      %38 = const 7
+      %39 = cmp.ne %37, %38
+      branch %39, bb9, bb10)
+    (bb9 preds bb8
+      %41 = const 2
+      ret %41)
+    (bb10 preds bb8
+      %44 = const 500
+      arg %44
+      %46 = call clamp/1
+      %47 = call.payload
+      %48 = const 0
+      %49 = cmp.eq %46, %48
+      branch %49, bb11, bb13)
+    (bb11 preds bb10
+      store frame.2, %47
+      %52 = const 3
+      ret %52)
+    (bb12
+      jump bb23)
+    (bb13 preds bb10
+      %56 = const 255
+      %57 = and %47, %56
+      %58 = const 0
+      %59 = cmp.eq %57, %58
+      branch %59, bb14, bb16)
+    (bb14 preds bb13
+      %61 = const 4
+      ret %61)
+    (bb15
+      jump bb23)
+    (bb16 preds bb13
+      %65 = const 1
+      %66 = cmp.eq %57, %65
+      branch %66, bb17, bb20)
+    (bb17 preds bb16
+      %68 = const 32
+      %69 = shr %47, %68
+      %70 = trunc.32 %69
+      store frame.3, %70
+      %72 = load frame.3
+      %73 = const 400
+      %74 = cmp.ne %72, %73
+      branch %74, bb18, bb19)
+    (bb18 preds bb17
+      %76 = const 5
+      ret %76)
+    (bb19 preds bb17
+      jump bb23)
+    (bb20 preds bb16
+      %81 = const 2
+      %82 = cmp.eq %57, %81
+      branch %82, bb21, bb23)
+    (bb21 preds bb20
+      %84 = const 32
+      %85 = shr %47, %84
+      %86 = trunc.8.s %85
+      store frame.4, %86
+      %88 = const 48
+      %89 = shr %47, %88
+      %90 = trunc.16 %89
+      store frame.5, %90
+      %92 = const 22
+      ret %92)
+    (bb22
+      jump bb23)
+    (bb23 preds bb12 bb15 bb19 bb20 bb22
+      %97 = const 5
+      arg %97
+      %99 = call clamp/1
+      %100 = call.payload
+      %101 = const 0
+      %102 = cmp.eq %99, %101
+      branch %102, bb24, bb26)
+    (bb24 preds bb23
+      store frame.6, %100
+      %105 = const 6
+      ret %105)
+    (bb25
+      jump bb32)
+    (bb26 preds bb23
+      %109 = const 255
+      %110 = and %100, %109
+      %111 = const 1
+      %112 = cmp.eq %110, %111
+      branch %112, bb27, bb29)
+    (bb27 preds bb26
+      %114 = const 32
+      %115 = shr %100, %114
+      %116 = trunc.32 %115
+      store frame.7, %116
+      %118 = const 7
+      ret %118)
+    (bb28
+      jump bb32)
+    (bb29 preds bb26
+      %122 = const 0
+      %123 = cmp.eq %110, %122
+      branch %123, bb30, bb31)
+    (bb30 preds bb29
+      jump bb32)
+    (bb31 preds bb29
+      %127 = const 23
+      ret %127)
+    (bb32 preds bb25 bb28 bb30
+      %130 = const 0
+      %131 = const 3
+      %132 = sub.s %130, %131
+      check.overflow %132
+      store frame.8, %132
+      %134 = load frame.8
+      arg %134
+      %136 = call parity/1
+      %137 = call.payload
+      %138 = const 0
+      %139 = cmp.eq %136, %138
+      branch %139, bb33, bb35)
+    (bb33 preds bb32
+      store frame.9, %137
+      %142 = const 8
+      ret %142)
+    (bb34
+      jump bb47)
+    (bb35 preds bb32
+      %146 = const 255
+      %147 = and %137, %146
+      %148 = const 2
+      %149 = cmp.eq %147, %148
+      branch %149, bb36, bb41)
+    (bb36 preds bb35
+      %151 = const 32
+      %152 = shr %137, %151
+      %153 = trunc.8.s %152
+      store frame.10, %153
+      %155 = const 48
+      %156 = shr %137, %155
+      %157 = trunc.16 %156
+      store frame.11, %157
+      %159 = load frame.10
+      %160 = const 0
+      %161 = const 3
+      %162 = sub.s %160, %161
+      check.overflow %162
+      %163 = cmp.ne.s %159, %162
+      branch %163, bb37, bb38)
+    (bb37 preds bb36
+      %165 = const 9
+      ret %165)
+    (bb38 preds bb36
+      %168 = load frame.11
+      %169 = const 7
+      %170 = cmp.ne %168, %169
+      branch %170, bb39, bb40)
+    (bb39 preds bb38
+      %172 = const 10
+      ret %172)
+    (bb40 preds bb38
+      jump bb47)
+    (bb41 preds bb35
+      %177 = const 0
+      %178 = cmp.eq %147, %177
+      branch %178, bb42, bb44)
+    (bb42 preds bb41
+      %180 = const 11
+      ret %180)
+    (bb43
+      jump bb47)
+    (bb44 preds bb41
+      %184 = const 1
+      %185 = cmp.eq %147, %184
+      branch %185, bb45, bb47)
+    (bb45 preds bb44
+      %187 = const 32
+      %188 = shr %137, %187
+      %189 = trunc.32 %188
+      store frame.12, %189
+      %191 = const 12
+      ret %191)
+    (bb46
+      jump bb47)
+    (bb47 preds bb34 bb40 bb43 bb44 bb46
+      %196 = const 8
+      arg %196
+      %198 = call parity/1
+      %199 = call.payload
+      %200 = const 0
+      %201 = cmp.eq %198, %200
+      branch %201, bb48, bb51)
+    (bb48 preds bb47
+      store frame.13, %199
+      %204 = load frame.13
+      %205 = const 8
+      %206 = cmp.ne %204, %205
+      branch %206, bb49, bb50)
+    (bb49 preds bb48
+      %208 = const 13
+      ret %208)
+    (bb50 preds bb48
+      jump bb52)
+    (bb51 preds bb47
+      %213 = const 14
+      ret %213)
+    (bb52 preds bb50
+      %216 = const 500
+      arg %216
+      %218 = call twice/1
+      %219 = call.payload
+      %220 = const 0
+      %221 = cmp.eq %218, %220
+      branch %221, bb53, bb55)
+    (bb53 preds bb52
+      store frame.14, %219
+      %224 = const 15
+      ret %224)
+    (bb54
+      jump bb60)
+    (bb55 preds bb52
+      %228 = const 255
+      %229 = and %219, %228
+      %230 = const 1
+      %231 = cmp.eq %229, %230
+      branch %231, bb56, bb59)
+    (bb56 preds bb55
+      %233 = const 32
+      %234 = shr %219, %233
+      %235 = trunc.32 %234
+      store frame.15, %235
+      %237 = load frame.15
+      %238 = const 400
+      %239 = cmp.ne %237, %238
+      branch %239, bb57, bb58)
+    (bb57 preds bb56
+      %241 = const 16
+      ret %241)
+    (bb58 preds bb56
+      jump bb60)
+    (bb59 preds bb55
+      %246 = const 17
+      ret %246)
+    (bb60 preds bb54 bb58
+      %249 = const 30
+      arg %249
+      %251 = call twice/1
+      %252 = call.payload
+      %253 = const 0
+      %254 = cmp.eq %251, %253
+      store frame.24, %252
+      branch %254, bb61, bb62)
+    (bb61 preds bb60
+      jump bb63)
+    (bb62 preds bb60
+      %259 = const 0
+      store frame.24, %259
+      jump bb63)
+    (bb63 preds bb61 bb62
+      %262 = load frame.24
+      store frame.16, %262
+      %264 = load frame.16
+      %265 = const 60
+      %266 = cmp.ne %264, %265
+      branch %266, bb64, bb65)
+    (bb64 preds bb63
+      %268 = const 18
+      ret %268)
+    (bb65 preds bb63
+      %271 = const 1
+      %272 = const 9
+      %273 = const 4294967295
+      %274 = and %272, %273
+      %275 = const 32
+      %276 = shl %274, %275
+      %277 = or %271, %276
+      store frame.17, %277
+      %279 = load frame.17
+      arg %279
+      %281 = call fail_with/1
+      %282 = call.payload
+      %283 = const 0
+      %284 = cmp.eq %281, %283
+      branch %284, bb66, bb68)
+    (bb66 preds bb65
+      store frame.19, %282
+      %287 = const 21
+      ret %287)
+    (bb67
+      jump bb73)
+    (bb68 preds bb65
+      %291 = const 255
+      %292 = and %282, %291
+      %293 = const 1
+      %294 = cmp.eq %292, %293
+      branch %294, bb69, bb72)
+    (bb69 preds bb68
+      %296 = const 32
+      %297 = shr %282, %296
+      %298 = trunc.32 %297
+      store frame.18, %298
+      %300 = load frame.18
+      %301 = const 9
+      %302 = cmp.ne %300, %301
+      branch %302, bb70, bb71)
+    (bb70 preds bb69
+      %304 = const 19
+      ret %304)
+    (bb71 preds bb69
+      jump bb73)
+    (bb72 preds bb68
+      %309 = const 20
+      ret %309)
+    (bb73 preds bb67 bb71
+      %312 = const 42
+      ret %312)))

@@ -44,8 +44,7 @@
     (bb2 preds bb1
       %6 = add %3, %4
       check.overflow %6
-      %7 = const 1
-      %8 = add %4, %7
+      %8 = add %4, %2
       check.overflow %8
       jump bb1)
     (bb3 preds bb1
@@ -63,8 +62,7 @@
       %5 = const 3
       %6 = rem %4, %5
       ; check.div_zero %5 -- removed: proof(divisor)
-      %7 = const 0
-      %8 = cmp.eq %6, %7
+      %8 = cmp.eq %6, %1
       branch %8, bb2, bb3)
     (bb2 preds bb1
       jump bb1)
@@ -88,8 +86,7 @@
       %4 = cmp.ne %2, %3
       branch %4, bb1, bb2)
     (bb1 preds bb0
-      %5 = const 1
-      ret %5)
+      ret %3)
     (bb2 preds bb0
       %6 = const 55
       arg %6
@@ -98,8 +95,7 @@
       %10 = cmp.ne %8, %9
       branch %10, bb3, bb4)
     (bb3 preds bb2
-      %11 = const 2
-      ret %11)
+      ret %9)
     (bb4 preds bb2
       %12 = const 555
       arg %12
@@ -108,8 +104,7 @@
       %16 = cmp.ne %14, %15
       branch %16, bb5, bb6)
     (bb5 preds bb4
-      %17 = const 3
-      ret %17)
+      ret %15)
     (bb6 preds bb4
       %18 = const 5555
       arg %18
@@ -118,24 +113,20 @@
       %22 = cmp.ne %20, %21
       branch %22, bb7, bb8)
     (bb7 preds bb6
-      %23 = const 4
-      ret %23)
+      ret %21)
     (bb8 preds bb6
       %24 = const 10
       arg %24
       %26 = call sum_to/1
-      %27 = const 55
-      %28 = cmp.ne %26, %27
+      %28 = cmp.ne %26, %6
       branch %28, bb9, bb10)
     (bb9 preds bb8
-      %29 = const 5
-      ret %29)
+      ret %0)
     (bb10 preds bb8
       %30 = const 20
       arg %30
       %32 = call first_square_over/1
-      %33 = const 5
-      %34 = cmp.ne %32, %33
+      %34 = cmp.ne %32, %0
       branch %34, bb11, bb12)
     (bb11 preds bb10
       %35 = const 6

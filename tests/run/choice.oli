@@ -1,0 +1,100 @@
+module choice
+-- A `choice` as the failure of a fallible result: built by `fail VARIANT`
+-- and `fail VARIANT { f: e }`, taken apart by `case … when fail VARIANT
+-- { f }`, handed on by `else fail`, kept in a place and failed from it. A
+-- choice that fits a word travels as its memory image (ABI.md §3): the tag
+-- in the first byte, each field at its offset. The exit status is the
+-- number of the check that failed; 42 when every one held.
+
+choice Err
+    small
+    big { by : u32 }
+    odd { d : s8, n : u16 }
+end
+
+proc clamp(x : u32) -> u32 or Err
+    if x < 10 then fail small
+    if x > 100 then fail big { by: x - 100 }
+    ret x
+end
+
+proc parity(x : s32) -> u32 or Err
+    if x % 2 != 0
+        fail odd { d: s8.wrap(x), n: 7 }
+    end
+    ret u32.bits(x)
+end
+
+proc twice(x : u32) -> u32 or Err
+    v := clamp(x) else fail
+    ret v * 2
+end
+
+proc fail_with(e : Err) -> u32 or Err
+    fail e
+end
+
+proc start -> s32
+    entry
+    a := clamp(50) else 0
+    if a != 50 then ret 1
+    b := clamp(5) else 7
+    if b != 7 then ret 2
+    case clamp(500)
+    when ok v
+        ret 3
+    when fail small
+        ret 4
+    when fail big { by }
+        if by != 400 then ret 5
+    when fail odd { d, n }
+        ret 22
+    end
+    case clamp(5)
+    when ok v2
+        ret 6
+    when fail big { by }
+        ret 7
+    when fail small
+    when fail
+        ret 23
+    end
+    m : s32 <- 0 - 3
+    case parity(m)
+    when ok v3
+        ret 8
+    when fail odd { d, n }
+        if d != 0 - 3 then ret 9
+        if n != 7 then ret 10
+    when fail small
+        ret 11
+    when fail big { by }
+        ret 12
+    end
+    case parity(8)
+    when ok v4
+        if v4 != 8 then ret 13
+    when fail
+        ret 14
+    end
+    case twice(500)
+    when ok v5
+        ret 15
+    when fail big { by }
+        if by != 400 then ret 16
+    when fail
+        ret 17
+    end
+    c := twice(30) else 0
+    if c != 60 then ret 18
+    e : Err <- big { by: 9 }
+    case fail_with(e)
+    when fail big { by }
+        if by != 9 then ret 19
+    when fail
+        ret 20
+    when ok v6
+        ret 21
+    end
+    ret 42
+end

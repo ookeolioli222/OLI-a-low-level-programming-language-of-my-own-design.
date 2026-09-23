@@ -2,16 +2,27 @@ module olic.elf
 -- The ELF64 writer (docs/ABI.md §4): a static, non-PIE executable with one
 -- loadable segment holding the whole image.
 --
--- Image: header (64) | program header (56) | statics | code. The segment is
--- mapped at `BASE_ADDR` with `p_offset = 0`, so a file offset and a virtual
--- address differ by exactly `BASE_ADDR` and a static's address is known
--- before any code is emitted. Section headers and a symbol table are what
--- ABI.md asks for next; this stage writes neither, and says so rather than
--- writing an empty one.
+-- Image: header (64) | program headers (56 each) | statics | code, and, when
+-- the program has static places, a second segment on the next page: their
+-- initialised bytes in the file (`.data`) and the zero ones as memory past
+-- the file (`.bss`). The first segment is mapped read+execute at the load
+-- address (`ob.base`: 0x400000, or what a `-- load:` line says) with
+-- `p_offset = 0`, so a file offset and a virtual address differ by exactly
+-- that; the second is mapped read+write at the same distance.
+-- Section headers and a symbol table are what ABI.md asks for next; this
+-- stage writes neither, and says so rather than writing an empty one.
 
 EHDR_SIZE := 64
 PHDR_SIZE := 56
 HDR_SIZE := 120
+
+proc hdr_size(ob: ref Oir) -> u64
+    -- One program header, or two when there is a writable segment.
+    if ob.dsize + ob.bsize > 0
+        ret EHDR_SIZE + PHDR_SIZE * 2
+    end
+    ret HDR_SIZE
+end
 
 proc put_u8(b: rw view u8, off: u64, v: u64)
     b[off] <- u8.wrap(v)
@@ -32,9 +43,9 @@ proc put_u64v(b: rw view u8, off: u64, v: u64)
     put_u32(b, off + 4, v >> 32)
 end
 
-proc elf_header(b: rw view u8, epoint: u64, total: u64)
+proc elf_header(b: rw view u8, epoint: u64, total: u64, base: u64)
     i : u64 <- 0
-    while i < HDR_SIZE
+    while i < b.len
         b[i] <- 0
         i <- i + 1
     end
@@ -54,23 +65,53 @@ proc elf_header(b: rw view u8, epoint: u64, total: u64)
     put_u16(b, 54, PHDR_SIZE)
     put_u16(b, 56, 1)
     put_u32(b, 64, 1)
-    put_u32(b, 68, 7)
+    put_u32(b, 68, 5)
     put_u64v(b, 72, 0)
-    put_u64v(b, 80, BASE_ADDR)
-    put_u64v(b, 88, BASE_ADDR)
+    put_u64v(b, 80, base)
+    put_u64v(b, 88, base)
     put_u64v(b, 96, total)
     put_u64v(b, 104, total)
     put_u64v(b, 112, 4096)
 end
 
+proc data_phdr(b: rw view u8, dofs: u64, filesz: u64, memsz: u64, base: u64)
+    -- The second program header: PT_LOAD, read+write, at the page after the
+    -- first segment in both the file and memory.
+    o : u64 <- EHDR_SIZE + PHDR_SIZE
+    put_u32(b, o, 1)
+    put_u32(b, o + 4, 6)
+    put_u64v(b, o + 8, dofs)
+    put_u64v(b, o + 16, base + dofs)
+    put_u64v(b, o + 24, base + dofs)
+    put_u64v(b, o + 32, filesz)
+    put_u64v(b, o + 40, memsz)
+    put_u64v(b, o + 48, 4096)
+end
+
 proc write_elf(ob: ref Oir, mc: ref Mach, z: zone)
-    total : u64 <- HDR_SIZE + ob.ndata + ob.ncode
-    epoint : u64 <- BASE_ADDR + HDR_SIZE + ob.ndata + mc.entrypos
-    hdr := z.bytes(HDR_SIZE)
-    elf_header(hdr, epoint, total)
+    hs := hdr_size(ob)
+    total : u64 <- hs + ob.ndata + ob.ncode
+    epoint : u64 <- ob.base + hs + ob.ndata + mc.entrypos
+    hdr := z.bytes(hs)
+    elf_header(hdr, epoint, total, ob.base)
+    if ob.dsize + ob.bsize > 0
+        put_u16(hdr, 56, 2)
+        dofs := page_up(total)
+        data_phdr(hdr, dofs, ob.dsize, ob.dsize + ob.bsize, ob.base)
+        put(1, hdr)
+        d := ob.data
+        put(1, d[..ob.ndata])
+        c := ob.code
+        put(1, c[..ob.ncode])
+        pad := z.bytes(dofs - total)
+        put(1, pad)
+        db := ob.dbytes
+        put(1, db[..ob.dsize])
+        ret
+    end
     put(1, hdr)
-    d := ob.data
-    put(1, d[..ob.ndata])
-    c := ob.code
-    put(1, c[..ob.ncode])
+    d2 := ob.data
+    put(1, d2[..ob.ndata])
+    c2 := ob.code
+    put(1, c2[..ob.ncode])
 end

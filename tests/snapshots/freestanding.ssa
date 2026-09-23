@@ -1,0 +1,99 @@
+(oir
+  (static 0 len=25)
+  (static 1 len=5)
+  (static 2 len=33)
+  (static 3 len=25)
+  (static 4 len=33)
+  (static 5 len=25)
+  (static 6 len=25)
+  (static 7 len=25)
+  (data 0 size=16384 zero)
+  (data 1 size=8192 zero)
+  (proc start locals=0 entry
+    (bb0
+      machine x64
+      ret))
+  (proc on_trap locals=2
+    (bb0
+      %0 = param 0
+      %1 = param stack.0
+      %2 = const 16
+      %3 = add %1, %2
+      %4 = raw.load.32 %3
+      machine.in edi, %4
+      machine x64
+      ret))
+  (proc main locals=5
+    (bb0
+      %0 = const 42
+      %1 = addr.of frame.3
+      %2 = const 4096
+      %3 = addr.of data.1
+      %4 = const 8192
+      %5 = const 4096
+      check.range %5, %4, %4
+      %7 = add %3, %5
+      %8 = sub %4, %5
+      zone.new.raw %1, %2, %7
+      %10 = addr.of frame.3
+      %11 = const 4
+      %12 = zone.alloc %10, %11
+      %13 = const 1
+      raw.store.32 %12, %13
+      %15 = raw.load.32 %12
+      %16 = const 1
+      %17 = cmp.ne %15, %16
+      branch %17, bb1, bb2)
+    (bb1 preds bb0
+      %18 = const 1
+      jump bb2)
+    (bb2 preds bb0 bb1
+      %19 = phi [bb0 %0] [bb1 %18]
+      %20 = addr.of frame.7
+      %21 = const 4096
+      %22 = addr.of data.1
+      %23 = const 8192
+      %24 = const 0
+      check.range %24, %21, %23
+      zone.new.raw %20, %21, %22
+      %27 = addr.of frame.7
+      %28 = const 256
+      %29 = zone.alloc %27, %28
+      %30 = const 0
+      check.bounds %30, %28
+      %32 = add %29, %30
+      %33 = const 85
+      raw.store.8 %32, %33
+      %35 = const 0
+      check.bounds %35, %28
+      %37 = add %29, %35
+      %38 = raw.load.8 %37
+      %39 = const 85
+      %40 = cmp.ne %38, %39
+      branch %40, bb3, bb4)
+    (bb3 preds bb2
+      %41 = const 2
+      jump bb4)
+    (bb4 preds bb2 bb3
+      %42 = phi [bb2 %19] [bb3 %41]
+      %43 = addr.of data.1
+      %44 = const 8192
+      %45 = const 0
+      %46 = const 256
+      check.range %45, %46, %44
+      %48 = add %43, %45
+      %49 = sub %46, %45
+      %50 = cmp.ne %29, %48
+      branch %50, bb5, bb6)
+    (bb5 preds bb4
+      %51 = const 3
+      jump bb6)
+    (bb6 preds bb4 bb5
+      %52 = phi [bb4 %42] [bb5 %51]
+      machine.in rdi, %52
+      machine x64
+      jump bb7)
+    (bb7 preds bb6 bb7
+      cpu.halt
+      %56 = const 0
+      jump bb7)))

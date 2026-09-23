@@ -1,0 +1,81 @@
+module olic.show_asm
+-- `olic --show-asm`: the bytes of every `machine x64` block as the lowering
+-- emitted them — after the fixups, so a `call` to a procedure or a jump to
+-- a local label carries its final displacement — one block per entry with
+-- the procedure and the line it stands on. The exact-byte fixtures in
+-- tests/machine/ compare this against the bytes the genesis assembler
+-- derived by hand.
+
+proc start -> s32
+    entry
+    permit os.syscall
+    zone z 4294967296
+        src := read_all(z, SRC_MAX)
+        pg := prog_new(z)
+        analyze(pg, z, src)
+        if pg.nerr > 0
+            ret 1
+        end
+        ob := oir_new(z)
+        build_oir(pg, ob)
+        if pg.nerr > 0
+            ret 1
+        end
+        before := count_checks(ob)
+        build_ssa(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        optimize(ob)
+        if verify_ssa(pg, ob, before) > 0
+            ret 4
+        end
+        if pg.entrynode == 0
+            put(2, "olic: no entry procedure\n")
+            ret 1
+        end
+        mc := mach_new(z)
+        lower_all(pg, ob, mc, ob.base + hdr_size(ob))
+        print_asm(pg, ob)
+        ret 0
+    end
+end
+
+proc print_asm(pg: ref Prog, ob: ref Oir)
+    tmp := pg.tmp
+    code := ob.code
+    put(1, "(asm")
+    b : u64 <- 0
+    while b < ob.nmblk
+        node := cell_get(ob.mblk, b * 5)
+        mi := cell_get(ob.mblk, b * 5 + 1)
+        start := cell_get(ob.mblk, b * 5 + 2)
+        stop := cell_get(ob.mblk, b * 5 + 3)
+        q := cell_get(ob.mblk, b * 5 + 4)
+        op := oproc_at(ob, q)
+        v := proc_at(pg, op.pi)
+        cx := mod_ctx(pg, v.mod)
+        nd := node_at(cx, v.node)
+        put(1, "\n  (machine ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, " line ")
+        mcx := mod_ctx(pg, mi)
+        mn := node_at(mcx, node)
+        t := ctok(mcx, mn.val)
+        put_uint(1, tmp, t.line)
+        put(1, " bytes=")
+        put_uint(1, tmp, stop - start)
+        put(1, "\n    ")
+        p : u64 <- start
+        while p < stop
+            if p > start
+                put(1, " ")
+            end
+            put_hex_byte(1, tmp, u64(code[p]))
+            p <- p + 1
+        end
+        put(1, ")")
+        b <- b + 1
+    end
+    put(1, ")\n")
+end

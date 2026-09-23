@@ -1,15 +1,34 @@
 # Freestanding Mode
 
-> **Status (2026-09-22).** This document is a *design* for milestone M3. None of
-> it is implemented: `olic` cannot generate code yet, there is no target-profile
-> reader and no `--freestanding` flag. What exists today is the front end
-> (`compiler/`, design 0022), which parses and analyses freestanding shapes:
-> `tests/sema/ok/freestanding.oli` and `tests/parse/ok/kernel_sketch.oli` are
-> checked by `sh genesis/test.sh`, including the `permit` rules of §7 below
-> (E0401) and the V1-only constructs they use (E0900). Every library name this
-> document mentions beyond `core.TrapKind`, `core.Site` and `core.CpuId` is
-> planned, not written; `lib/core.oli` and `lib/core/mem.oli` hold what is real.
-> See `docs/LANGUAGE.md` §13 and `docs/PROJECT_STATUS.md`.
+> **Status (2026-09-23).** The shape of §1, §3, §4 and §5 is implemented in
+> `olic` (back-end stage 14): a program that says `-- target: freestanding`
+> gets no generated code before its `entry` (`-> never`, `calls none`: the
+> first instruction of the image, `section ".text.boot"` first), no
+> `os.syscall` (E0401) and no `mmap` zone (E0330), zones `at` an address or
+> `from` a buffer, `cpu.halt()`/`cpu.pause()` as one instruction, `align N`
+> on statics, and a `traps` procedure that every trap site reaches with the
+> `core.TrapKind` and a `core.Site` built on the stack (SysV memory class);
+> without one a trap is `ud2`. A `-> never` body ends in `ud2`. This is
+> verified by execution: `tests/run/freestanding.oli` runs as a plain Linux
+> process — it can, because the image holds nothing but the program's own
+> bytes, and it exits through a system call written in a `machine` block —
+> and `tests/freestanding/trap_line.oli` exits with the line of its overflow,
+> delivered to `traps`. Of §2, `load_address` is read from a `-- load:` line
+> in the source (stage 15) — statics are named through 64-bit immediates, so
+> any address works; a `[static]` operand inside a `machine` block is a
+> sign-extended disp32 and needs the low or the top 2 GiB — and the §8 target
+> program exists: `examples/kernel.oli`, a Multiboot2 header as a static
+> layout with an initialiser in `.text.boot` (statics in `.text*`/`.rodata*`
+> sections go in front of the code), COM1 through `out dx, al` (design
+> 0023), the VGA text buffer through raw stores, `cpuid` through a block.
+> The harness checks the image structurally — load address, entry, header
+> bytes at offset 176, port I/O and `cpuid` in the blocks, no system call
+> anywhere — and `qemu-system-x86_64 -kernel kernel.elf -serial stdio` runs
+> it. Not implemented: the profile *file* of §2, the section order beyond
+> `.text.boot`, `mem.mmio`, `own`, the red-zone rule, and every library name
+> beyond `core.TrapKind`, `core.Site` and `core.CpuId`; `lib/core.oli` and
+> `lib/core/mem.oli` hold what is real. See `docs/LANGUAGE.md` §13 and
+> `docs/PROJECT_STATUS.md`.
 
 ```
 olic --freestanding kernel.oli          # planned

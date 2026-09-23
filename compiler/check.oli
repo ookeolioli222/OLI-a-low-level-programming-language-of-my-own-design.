@@ -34,6 +34,9 @@ proc smsg(code: u64) -> view u8
     if code == 212
         ret "value does not fit its type"
     end
+    if code == 208
+        ret "missing, unknown or duplicate field in a literal or pattern"
+    end
     if code == 401
         ret "capability not permitted here"
     end
@@ -452,6 +455,9 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
     k := nd.kind
     if k == N_RAWLOAD
         need(pg, mi, "memory.raw", nd.t0)
+    end
+    if k == N_LIT
+        check_lit(pg, mi, n)
     end
     if k == N_CONVERT
         if type_head_is(pg, mi, nd.t0, KW_ADDR)
@@ -1125,12 +1131,94 @@ proc bind_pattern_names(pg: ref Prog, mi: u64, pat: u64)
     if sn.kind != N_PAT
         ret
     end
+    vname := tok_text(cx, sn.t0)
     f : u64 <- kid1(cx, sub)
     while f != 0
         fn := node_at(cx, f)
+        -- E0208: a field the variant does not declare, or one named twice.
+        ft := variant_field_type(pg, vname, tok_text(cx, fn.t0))
+        if ft.len == 0
+            sdiag(pg, mi, 208, fn.t0)
+        elif named_before(cx, kid1(cx, sub), f) == 1
+            sdiag(pg, mi, 208, fn.t0)
+        end
         chk_push(pg, mi, fn.t0, 2, 1)
         f <- sibling(cx, f)
     end
+end
+
+proc named_before(cx: ref Ctx, first: u64, f: u64) -> word
+    -- Whether a sibling before `f` carries the same name token text.
+    fn := node_at(cx, f)
+    g : u64 <- first
+    while g != f
+        gn := node_at(cx, g)
+        if view_eq(tok_text(cx, gn.t0), tok_text(cx, fn.t0))
+            ret 1
+        end
+        g <- sibling(cx, g)
+    end
+    ret 0
+end
+
+proc check_lit(pg: ref Prog, mi: u64, n: u64)
+    -- `Name { f: e, … }` (spec §E0208): every field named must exist in the
+    -- layout or the variant, none twice, and none of the declared ones may
+    -- be left out.
+    cx := mod_ctx(pg, mi)
+    hn := node_at(cx, kid1(cx, n))
+    name := tok_text(cx, hn.t0)
+    idx : word <- item_find(pg, name)
+    declared : u64 <- 0
+    if idx >= 0
+        it := item_at(pg, u64.bits(idx))
+        declared <- it.nfld
+    else
+        idx <- variant_fields_of(pg, name)
+        if idx < 0
+            ret
+        end
+        declared <- variant_field_count(pg, u64.bits(idx), name)
+    end
+    given : u64 <- 0
+    wrong : u64 <- 0
+    f : u64 <- kid2(cx, n)
+    while f != 0
+        fn := node_at(cx, f)
+        ft := lit_field_type(pg, u64.bits(idx), name, tok_text(cx, fn.t0))
+        if ft.len == 0
+            sdiag(pg, mi, 208, fn.t0)
+            wrong <- 1
+        elif named_before(cx, kid2(cx, n), f) == 1
+            sdiag(pg, mi, 208, fn.t0)
+            wrong <- 1
+        else
+            given <- given + 1
+        end
+        f <- sibling(cx, f)
+    end
+    -- A literal with a wrong field is reported once, at that field.
+    if wrong == 0
+        if given < declared
+            sdiag(pg, mi, 208, hn.t0)
+        end
+    end
+end
+
+proc variant_field_count(pg: ref Prog, ci: u64, vname: view u8) -> u64
+    it := item_at(pg, ci)
+    cx := mod_ctx(pg, it.mod)
+    k : u64 <- 0
+    f : u64 <- 0
+    while f < it.nfld
+        fr := fld_at(pg, it.first + f)
+        vn := node_at(cx, fr.variant)
+        if view_eq(tok_text(cx, vn.t0), vname)
+            k <- k + 1
+        end
+        f <- f + 1
+    end
+    ret k
 end
 
 proc ends_in_machine(pg: ref Prog, mi: u64, body: u64) -> word

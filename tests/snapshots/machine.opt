@@ -1,0 +1,105 @@
+(oir
+  (static 0 len=28)
+  (data 0 size=8 init)
+  (proc add3 locals=4
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = param 2
+      machine.in rax, %0
+      machine.in rcx, %1
+      machine.in rdx, %2
+      machine x64
+      %8 = machine.out rax
+      ret %8))
+  (proc sum_to locals=2
+    (bb0
+      %0 = param 0
+      machine.in rcx, %0
+      machine x64
+      %4 = machine.out rax
+      ret %4))
+  (proc uses_rbx locals=2
+    (bb0
+      %0 = param 0
+      machine.in rbx, %0
+      machine x64
+      %4 = machine.out rax
+      ret %4))
+  (proc low_half locals=2
+    (bb0
+      %0 = param 0
+      machine.in rax, %0
+      machine x64
+      %4 = machine.out eax
+      ret %4))
+  (proc start locals=3 entry
+    (bb0
+      %0 = const 1
+      arg %0
+      %2 = const 2
+      arg %2
+      %4 = const 3
+      arg %4
+      %6 = call add3/3
+      %7 = const 6
+      %8 = cmp.ne %6, %7
+      branch %8, bb1, bb2)
+    (bb1 preds bb0
+      ret %0)
+    (bb2 preds bb0
+      %10 = const 10
+      arg %10
+      %12 = call sum_to/1
+      %13 = const 55
+      %14 = cmp.ne %12, %13
+      branch %14, bb3, bb4)
+    (bb3 preds bb2
+      ret %2)
+    (bb4 preds bb2
+      %16 = const 0
+      arg %16
+      %18 = call sum_to/1
+      %20 = cmp.ne %18, %16
+      branch %20, bb5, bb6)
+    (bb5 preds bb4
+      ret %4)
+    (bb6 preds bb4
+      machine x64
+      %24 = machine.out rbx
+      %25 = machine.out rbx
+      %26 = const 7
+      %27 = cmp.ne %25, %26
+      branch %27, bb7, bb8)
+    (bb7 preds bb6
+      %28 = const 4
+      ret %28)
+    (bb8 preds bb6
+      %29 = const 4294967296
+      %30 = const 9
+      %31 = add %29, %30
+      check.overflow %31
+      arg %31
+      %33 = call low_half/1
+      %35 = cmp.ne %33, %30
+      branch %35, bb9, bb10)
+    (bb9 preds bb8
+      %36 = const 5
+      ret %36)
+    (bb10 preds bb8
+      machine x64
+      %39 = machine.out rax
+      %40 = const 42
+      %41 = cmp.ne %39, %40
+      branch %41, bb11, bb12)
+    (bb11 preds bb10
+      ret %7)
+    (bb12 preds bb10
+      machine x64
+      %45 = machine.out rax
+      %47 = cmp.eq %45, %16
+      branch %47, bb13, bb14)
+    (bb13 preds bb12
+      ret %26)
+    (bb14 preds bb12
+      ret %40)))

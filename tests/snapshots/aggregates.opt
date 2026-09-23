@@ -1,0 +1,102 @@
+(oir
+  (static 0 len=8)
+  (static 1 len=2)
+  (static 2 removed)
+  (static 3 removed)
+  (static 4 removed)
+  (static 5 removed)
+  (static 6 removed)
+  (static 7 removed)
+  (data 0 size=32 init)
+  (data 1 size=16 init)
+  (data 2 size=3 init)
+  (proc start locals=0 entry
+    (bb0
+      %0 = addr.of data.0
+      %1 = const 4
+      ; check.bounds %2 -- removed: proof(constant)
+      %4 = const 8
+      %5 = const 16
+      %6 = add %0, %5
+      %7 = raw.load.64 %6
+      %8 = const 30
+      %9 = cmp.ne %7, %8
+      branch %9, bb1, bb2)
+    (bb1 preds bb0
+      %10 = const 1
+      ret %10)
+    (bb2 preds bb0
+      %14 = const 0
+      jump bb4)
+    (bb4 preds bb2
+      %16 = addr.of data.1
+      %17 = raw.load.32 %16
+      %18 = const 5
+      %19 = cmp.ne %17, %18
+      branch %19, bb5, bb6)
+    (bb5 preds bb4
+      %20 = const 3
+      ret %20)
+    (bb6 preds bb4
+      %23 = add %16, %4
+      %24 = raw.load.64 %23
+      %25 = const 37
+      %26 = cmp.ne %24, %25
+      branch %26, bb7, bb8)
+    (bb7 preds bb6
+      ret %1)
+    (bb8 preds bb6
+      %28 = addr.of data.2
+      ; check.bounds %30 -- removed: proof(constant)
+      %32 = add %28, %14
+      %33 = raw.load.8 %32
+      %34 = const 79
+      %35 = cmp.ne %33, %34
+      branch %35, bb9, bb10)
+    (bb9 preds bb8
+      ret %18)
+    (bb10 preds bb8
+      %37 = addr.of static.0
+      ; check.bounds %39 -- removed: proof(constant)
+      %42 = const 6
+      %43 = add %37, %42
+      %44 = raw.load.16 %43
+      %46 = cmp.ne %44, %1
+      branch %46, bb11, bb12)
+    (bb11 preds bb10
+      ret %42)
+    (bb12 preds bb10
+      jump bb14)
+    (bb14 preds bb12
+      %53 = addr.of static.1
+      %55 = const 1
+      ; check.bounds %55 -- removed: proof(constant)
+      %57 = add %53, %55
+      %58 = raw.load.8 %57
+      %59 = const 105
+      %60 = cmp.ne %58, %59
+      branch %60, bb15, bb16)
+    (bb15 preds bb14
+      ret %4)
+    (bb16 preds bb14
+      ; check.bounds %64 -- removed: proof(constant)
+      %69 = const 31
+      raw.store.64 %6, %69
+      ; check.bounds %73 -- removed: proof(constant)
+      %78 = raw.load.64 %6
+      %80 = cmp.ne %78, %69
+      branch %80, bb17, bb18)
+    (bb17 preds bb16
+      %81 = const 9
+      ret %81)
+    (bb18 preds bb16
+      raw.store.32 %16, %42
+      %86 = raw.load.32 %16
+      %88 = cmp.ne %86, %42
+      branch %88, bb19, bb20)
+    (bb19 preds bb18
+      %89 = const 10
+      ret %89)
+    (bb20 preds bb18
+      %90 = const 42
+      ret %90)))

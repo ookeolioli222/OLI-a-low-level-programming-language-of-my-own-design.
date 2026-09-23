@@ -53,7 +53,7 @@ prototype and every C function callable from Oli-- (V2 adds the `extern` declara
 - `packed`: no padding, alignment 1; accesses use unaligned moves (`ZERO` cost on x86-64, `CHECK`-free).
 - `align N` on a layout raises its alignment; `align N` on a field inserts padding before it.
 - `be T` / `le T` fields occupy exactly the bytes of `T` in that byte order.
-- `bool` is one byte holding 0 or 1. `choice` tags are the smallest unsigned integer that fits the variant count.
+- `bool` is one byte holding 0 or 1. `choice` tags are the smallest unsigned integer that fits the variant count; a variant's tag is its number in declaration order, from 0. A choice whose image fits eight bytes travels in a register as that image (the tag in the low byte, each field at its offset), which is what `olic` does today; a wider one is not lowered yet.
 - `view T` is `{ addr: u64, len: u64 }` in memory; `zone` is `{ base, cursor, limit: u64 }`.
 
 ## 4. Symbols

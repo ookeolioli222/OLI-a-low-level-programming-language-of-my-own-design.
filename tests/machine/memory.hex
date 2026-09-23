@@ -1,0 +1,15 @@
+48 8b 03 48 8b 04 24 49 8b 04 24 48 8b 45 00 49 8b 45 00
+48 8b 85 00 00 00 00 49 8b 85 f0 ff ff ff
+4f 8b 04 51 4f 8b 8c ac 10 00 00 00 4f 8b 94 e5 f0 ff ff ff
+4d 89 9c 07 ff ff ff 7f
+49 c7 80 00 00 00 80 ff ff ff ff
+4c 03 4d 00 4d 01 14 24
+4b 81 6c b5 00 2a 00 00 00
+48 85 04 24 49 f7 07 ff ff ff ff
+48 31 c0 49 ff 04 24 48 f7 9d f8 ff ff ff
+49 d3 64 cd 00 48 c1 3c 24 01
+4f 8d bc ac f8 ff ff ff 48 f7 6d 00
+41 ff 14 24 43 ff 64 f5 00
+4f 0f af 04 51
+4f 69 9c ac f8 ff ff ff d6 ff ff ff
+41 ff 75 00 41 8f 04 24 c3

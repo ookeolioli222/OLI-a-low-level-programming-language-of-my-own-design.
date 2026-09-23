@@ -1,0 +1,117 @@
+(oir
+  (static 0 len=25)
+  (static 1 len=5)
+  (static 2 len=33)
+  (static 3 len=25)
+  (static 4 len=33)
+  (static 5 len=25)
+  (static 6 len=25)
+  (static 7 len=25)
+  (data 0 size=16384 zero)
+  (data 1 size=8192 zero)
+  (proc start locals=0 entry
+    (bb0
+      machine x64
+      ret))
+  (proc on_trap locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param stack.0
+      store frame.1, %2
+      %4 = load frame.1
+      %5 = const 16
+      %6 = add %4, %5
+      %7 = raw.load.32 %6
+      machine.in edi, %7
+      machine x64
+      ret))
+  (proc main locals=5
+    (bb0
+      %0 = const 42
+      store frame.0, %0
+      %2 = addr.of frame.3
+      %3 = const 4096
+      %4 = addr.of data.1
+      %5 = const 8192
+      %6 = const 4096
+      check.range %6, %5, %5
+      %8 = add %4, %6
+      %9 = sub %5, %6
+      zone.new.raw %2, %3, %8
+      %11 = addr.of frame.3
+      %12 = const 4
+      %13 = zone.alloc %11, %12
+      store frame.4, %13
+      %15 = load frame.4
+      %16 = const 1
+      raw.store.32 %15, %16
+      %18 = load frame.4
+      %19 = raw.load.32 %18
+      %20 = const 1
+      %21 = cmp.ne %19, %20
+      branch %21, bb1, bb2)
+    (bb1 preds bb0
+      %23 = const 1
+      store frame.0, %23
+      jump bb2)
+    (bb2 preds bb0 bb1
+      %26 = addr.of frame.7
+      %27 = const 4096
+      %28 = addr.of data.1
+      %29 = const 8192
+      %30 = const 0
+      check.range %30, %27, %29
+      zone.new.raw %26, %27, %28
+      %33 = addr.of frame.7
+      %34 = const 256
+      %35 = zone.alloc %33, %34
+      store frame.8, %35
+      store frame.9, %34
+      %38 = load frame.8
+      %39 = load frame.9
+      %40 = const 0
+      check.bounds %40, %39
+      %42 = add %38, %40
+      %43 = const 85
+      raw.store.8 %42, %43
+      %45 = load frame.8
+      %46 = load frame.9
+      %47 = const 0
+      check.bounds %47, %46
+      %49 = add %45, %47
+      %50 = raw.load.8 %49
+      %51 = const 85
+      %52 = cmp.ne %50, %51
+      branch %52, bb3, bb4)
+    (bb3 preds bb2
+      %54 = const 2
+      store frame.0, %54
+      jump bb4)
+    (bb4 preds bb2 bb3
+      %57 = load frame.8
+      %58 = load frame.9
+      %59 = addr.of data.1
+      %60 = const 8192
+      %61 = const 0
+      %62 = const 256
+      check.range %61, %62, %60
+      %64 = add %59, %61
+      %65 = sub %62, %61
+      %66 = cmp.ne %57, %64
+      branch %66, bb5, bb6)
+    (bb5 preds bb4
+      %68 = const 3
+      store frame.0, %68
+      jump bb6)
+    (bb6 preds bb4 bb5
+      %71 = load frame.0
+      machine.in rdi, %71
+      machine x64
+      jump bb7)
+    (bb7 preds bb6 bb7
+      cpu.halt
+      %76 = const 0
+      jump bb7)
+    (bb8
+      ret)))

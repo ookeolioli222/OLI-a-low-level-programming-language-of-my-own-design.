@@ -1,0 +1,243 @@
+(oir
+  (static 0 removed)
+  (static 1 len=27)
+  (static 2 removed)
+  (static 3 len=27)
+  (static 4 removed)
+  (static 5 removed)
+  (static 6 removed)
+  (static 7 removed)
+  (static 8 len=27)
+  (static 9 removed)
+  (static 10 len=29)
+  (static 11 removed)
+  (static 12 removed)
+  (static 13 removed)
+  (static 14 removed)
+  (static 15 removed)
+  (static 16 len=27)
+  (static 17 removed)
+  (static 18 removed)
+  (proc sum locals=3 temps=1
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb3
+      %4 = phi [bb0 %2] [bb3 %10]
+      %5 = phi [bb0 %2] [bb3 %12]
+      %6 = cmp.lt %5, %1
+      branch %6, bb2, bb4)
+    (bb2 preds bb1
+      ; check.bounds %5 -- removed: proof(loop-bound)
+      %8 = add %0, %5
+      %9 = raw.load.8 %8
+      %10 = add %4, %9
+      check.overflow %10
+      jump bb3)
+    (bb3 preds bb2
+      %11 = const 1
+      %12 = add %5, %11
+      jump bb1)
+    (bb4 preds bb1
+      ret %4))
+  (proc scratch locals=3 temps=1
+    (bb0
+      %0 = param 0
+      %1 = addr.of frame.1
+      %2 = const 1
+      %3 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %4 = phi [bb0 %3] [bb2 %11]
+      %5 = cmp.lt %4, %2
+      branch %5, bb2, bb3)
+    (bb2 preds bb1
+      %6 = const 8
+      %7 = mul %4, %6
+      %8 = add %1, %7
+      raw.store.64 %8, %3
+      %11 = add %4, %2
+      jump bb1)
+    (bb3 preds bb1
+      jump bb4)
+    (bb4 preds bb3 bb5
+      %13 = phi [bb3 %3] [bb5 %23]
+      %15 = const 8
+      %16 = cmp.lt %13, %15
+      branch %16, bb5, bb6)
+    (bb5 preds bb4
+      ; check.bounds %13 -- removed: proof(loop-bound)
+      %20 = add %1, %13
+      raw.store.8 %20, %0
+      %23 = add %13, %2
+      check.overflow %23
+      jump bb4)
+    (bb6 preds bb4
+      arg %1
+      arg %15
+      %28 = call sum/2
+      ret %28))
+  (proc start locals=5 temps=3 entry
+    (bb0
+      %0 = addr.of frame.1
+      %1 = const 2
+      %2 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %3 = phi [bb0 %2] [bb2 %10]
+      %4 = cmp.lt %3, %1
+      branch %4, bb2, bb3)
+    (bb2 preds bb1
+      %5 = const 8
+      %6 = mul %3, %5
+      %7 = add %0, %6
+      raw.store.64 %7, %2
+      %9 = const 1
+      %10 = add %3, %9
+      jump bb1)
+    (bb3 preds bb1
+      %12 = const 16
+      %13 = const 3
+      ; check.bounds %13 -- removed: proof(constant)
+      %15 = add %0, %13
+      %16 = raw.load.8 %15
+      %18 = cmp.ne %16, %2
+      branch %18, bb4, bb5)
+    (bb4 preds bb3
+      %19 = const 1
+      ret %19)
+    (bb5 preds bb3
+      ; check.bounds %22 -- removed: proof(constant)
+      %24 = add %0, %2
+      %25 = const 5
+      raw.store.8 %24, %25
+      %29 = const 15
+      ; check.bounds %29 -- removed: proof(constant)
+      %31 = add %0, %29
+      %32 = const 7
+      raw.store.8 %31, %32
+      jump bb7)
+    (bb7 preds bb5
+      arg %0
+      arg %12
+      %43 = call sum/2
+      %44 = const 12
+      %45 = cmp.ne %43, %44
+      branch %45, bb8, bb9)
+    (bb8 preds bb7
+      ret %13)
+    (bb9 preds bb7
+      jump bb10)
+    (bb10 preds bb9 bb12
+      %51 = phi [bb9 %2] [bb12 %57]
+      %52 = phi [bb9 %2] [bb12 %59]
+      %53 = cmp.lt %52, %12
+      branch %53, bb11, bb13)
+    (bb11 preds bb10
+      ; check.bounds %52 -- removed: proof(loop-bound)
+      %55 = add %0, %52
+      %56 = raw.load.8 %55
+      %57 = add %51, %56
+      check.overflow %57
+      jump bb12)
+    (bb12 preds bb11
+      %58 = const 1
+      %59 = add %52, %58
+      jump bb10)
+    (bb13 preds bb10
+      %61 = cmp.ne %51, %44
+      branch %61, bb14, bb15)
+    (bb14 preds bb13
+      %62 = const 4
+      ret %62)
+    (bb15 preds bb13
+      %66 = const 8
+      ; check.bounds %65 -- removed: proof(constant)
+      check.align %0, 4
+      %69 = const 9
+      raw.store.32 %0, %69
+      ; check.bounds %73 -- removed: proof(constant)
+      %76 = raw.load.8 %24
+      %78 = cmp.ne %76, %69
+      branch %78, bb16, bb17)
+    (bb16 preds bb15
+      ret %25)
+    (bb17 preds bb15
+      %80 = addr.of frame.8
+      %81 = const 4
+      jump bb18)
+    (bb18 preds bb17 bb19
+      %83 = phi [bb17 %2] [bb19 %90]
+      %84 = cmp.lt %83, %81
+      branch %84, bb19, bb20)
+    (bb19 preds bb18
+      %86 = mul %83, %66
+      %87 = add %80, %86
+      raw.store.64 %87, %2
+      %89 = const 1
+      %90 = add %83, %89
+      jump bb18)
+    (bb20 preds bb18
+      ; check.bounds %93 -- removed: proof(constant)
+      %96 = const 24
+      %97 = add %80, %96
+      %98 = raw.load.64 %97
+      %100 = cmp.ne %98, %2
+      branch %100, bb21, bb22)
+    (bb21 preds bb20
+      %101 = const 6
+      ret %101)
+    (bb22 preds bb20
+      %104 = const 1
+      ; check.bounds %104 -- removed: proof(constant)
+      %108 = add %80, %66
+      %109 = const 40
+      raw.store.64 %108, %109
+      ; check.bounds %113 -- removed: proof(constant)
+      %117 = add %80, %12
+      raw.store.64 %117, %1
+      ; check.bounds %122 -- removed: proof(constant)
+      %127 = raw.load.64 %108
+      ; check.bounds %130 -- removed: proof(constant)
+      %135 = raw.load.64 %117
+      %136 = add %127, %135
+      check.overflow %136
+      %137 = const 42
+      %138 = cmp.ne %136, %137
+      branch %138, bb23, bb24)
+    (bb23 preds bb22
+      ret %32)
+    (bb24 preds bb22
+      arg %13
+      %142 = call scratch/1
+      %144 = cmp.ne %142, %96
+      branch %144, bb25, bb26)
+    (bb25 preds bb24
+      ret %66)
+    (bb26 preds bb24
+      arg %104
+      %148 = call scratch/1
+      %150 = cmp.ne %148, %66
+      branch %150, bb27, bb28)
+    (bb27 preds bb26
+      ret %69)
+    (bb28 preds bb26
+      ; check.bounds %154 -- removed: proof(constant)
+      %157 = raw.load.8 %31
+      %159 = cmp.ne %157, %32
+      branch %159, bb29, bb30)
+    (bb29 preds bb28
+      %160 = const 10
+      ret %160)
+    (bb30 preds bb28
+      ; check.bounds %163 -- removed: proof(constant)
+      %168 = raw.load.64 %108
+      %170 = cmp.ne %168, %109
+      branch %170, bb31, bb32)
+    (bb31 preds bb30
+      %171 = const 11
+      ret %171)
+    (bb32 preds bb30
+      ret %137)))

@@ -1,0 +1,36 @@
+choice Err
+    small
+    big { by : u32 }
+end
+layout P
+    a : u32
+    b : u32
+end
+proc f(x : u32) -> u32 or Err
+    if x > 1 then fail big { by: x, by: x }
+    if x > 2 then fail big { size: x }
+    ret x
+end
+proc main -> s32
+    entry
+    case f(1)
+    when ok v
+        ret 1
+    when fail small
+    when fail big { by, by }
+    end
+    case f(2)
+    when ok v2
+    when fail big { nope }
+    when fail small
+    end
+    p := P { a: 1 }
+    _q := p
+    ret 0
+end
+-- expect: E0208 @ 10:37
+-- expect: E0208 @ 11:30
+-- expect: E0208 @ 20:25
+-- expect: E0101 @ 20:25
+-- expect: E0208 @ 24:21
+-- expect: E0208 @ 27:10

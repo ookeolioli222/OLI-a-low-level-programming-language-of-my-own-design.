@@ -29,8 +29,8 @@ written in that subset and `oli1` had to run it first. Those rows say
 written. `docs/LANGUAGE.md` marks constructs by "covered by the test chain",
 which counts `oli1`; this file marks them by `olic` alone.
 
-**Cost classes** (from `docs/LANGUAGE_VISION.md` §7; `--explain-cost` will
-print them): `ZERO` no instructions or only register moves · `CHECK` a
+**Cost classes** (from `docs/LANGUAGE_VISION.md` §7; `olic --explain` prints
+them per line): `ZERO` no instructions or only register moves · `CHECK` a
 compare-and-branch a pass may remove with a proof · `STACK` frame space ·
 `COPY` a memory copy of a stated size · `ZONE` a bump allocation · `CALL` a
 procedure call · `SYSCALL` a kernel entry · `KERNEL` a privileged or device
@@ -58,16 +58,16 @@ hdr.len <- 20           -- store: into a field through a ref
 | Command | Meaning | Cost | Status |
 |---------|---------|------|--------|
 | `name := expr` | bind a name to a value; it may live in a register and has no address | ZERO | **runs** |
-| `name : T` / `name : T <- expr` | declare a place of a scalar, a view or a zone; `<-` initialises it | STACK | **runs** |
-| `name : [N]T` | declare an aggregate place (an array in the frame) | STACK | analysed |
+| `name : T` / `name : T <- expr` | declare a place of a scalar, a view or a zone; `<-` initialises it. At module level a static: an integer, an array or a layout, initialised by a constant, `{ a, b, … }` element by element or `Name { f: c, … }` field by field (`tests/run/aggregates.oli`) | STACK | **runs** |
+| `name : [N]T` in a procedure | an array in the frame: zero on declaration, read as the writable view of its bytes | STACK | **runs** (`tests/run/frames.oli`) |
 | `place <- expr` into a local | store | ZERO | **runs** |
 | `v[i] <- expr` | store into a view element, bounds-checked | CHECK + ZERO | **runs** |
 | `r.f <- expr` | store into a field through a `ref`, at the field's width | ZERO | **runs** |
-| `[p] <- expr` | raw store through an `addr` (`permit memory.raw`) | ZERO | analysed (runs under `oli1`) |
+| `[p] <- expr` | raw store through an `addr`, at the width of its element type (`permit memory.raw`) | ZERO | **runs** (`tests/run/statics.oli`) |
 | `place <~ expr` | move an `own` value; the source becomes unusable | ZERO | reserved (V1) |
 | `addr x` | the raw address of a place | ZERO | analysed |
 | `ref x` / `rw ref x` | a safe reference to one live object — a local keeps its frame words once its address is taken, a field is the address of that part of the record | ZERO | **runs** |
-| `[p]` | raw load through an `addr` (`permit memory.raw`) | ZERO | analysed (runs under `oli1`) |
+| `[p]` | raw load through an `addr` (`permit memory.raw`) | ZERO | **runs** |
 
 ### Views — `(address, length)` over existing memory, never a copy
 
@@ -111,13 +111,12 @@ end                           -- everything from `scratch` dies here
 | `zone z N ... end` from the operating system | one anonymous `mmap`, rounded to a page; `munmap` at `end`; the mapping the kernel refuses traps `zone_exhausted` | SYSCALL | **runs** |
 | `z.bytes(n)` | `n` zeroed bytes → `rw view u8`; the cursor is rounded to 16; traps `zone_exhausted` past the limit | ZONE | **runs** |
 | `z` passed to a `zone` parameter | the handle is the address of the (base, cursor, limit) triple | ZERO | **runs** |
-| `z.try_bytes(n)` | as `bytes`, but `→ rw view u8 or none` instead of trapping | ZONE | analysed |
+| `z.try_bytes(n)` | as `bytes`, but `→ rw view u8 or none` instead of trapping: the cursor and the limit are compared in the OIR, the cursor moves only on the ok path, and `else` / `case` resolve the view (`tests/run/zones.oli`) | ZONE | **runs** |
 | `z.make(T)` | one zeroed `T` → `rw ref T`, at the layout's alignment | ZONE | **runs** |
-| `zone z N at ADDR` | a zone over raw memory at an address (`permit memory.raw`); nothing is released at `end` | ZERO | analysed (runs under `oli1`) |
-| `zone z N from parent` / `from buffer` | carved from an enclosing zone or a static array | ZONE | analysed |
-| a `zone` inside a `zone` | the inner one is carved from the outer | ZONE | analysed |
-| `ret` inside a zone | in the entry procedure: `exit_group` releases everything | — | **runs** |
-| `ret`, `break`, `continue` that would leave a zone elsewhere | must release the zone on that edge first | SYSCALL | analysed (the back end refuses rather than leak) |
+| `zone z N at ADDR` | a zone over raw memory at an address (`permit memory.raw`); `zone.new.raw` in OIR, nothing is released at `end` | ZERO | **runs** |
+| `zone z N from parent` / `from buffer` | carved from an enclosing zone (`zone.new.from`: the parent's `zone_exhausted` trap; at `end` the parent's cursor is back where it was) / laid over a buffer whose length is proved to hold `N` (`check.range`, then `zone.new.raw`) | ZONE | **runs** |
+| a `zone` inside a `zone` | each has its own source: two mappings when both are from the operating system, or `from` the outer one when written so | ZONE / SYSCALL | **runs** |
+| `ret`, `fail`, `break`, `continue` inside a zone | the compiler releases every zone the jump leaves, innermost first, on that edge — `zone.end` (`munmap`) or `zone.end.from` — before the jump; a zone is never leaked and never released twice | SYSCALL / ZONE | **runs** |
 
 ---
 
@@ -138,8 +137,8 @@ if pkt.len < Header.size then fail too_short
 | `T.size`, `T.align` | compile-time constants | ZERO | **runs** |
 | `T.at(v)` | a `ref T` over a view; `check.range` traps `bounds` when short, `check.align` traps `misaligned` when not aligned (unless `packed`) | CHECK | **runs** |
 | `r.f` | a field load at the field's width, sign- or zero-extended; a view field as its two words; a by-value layout field as the address of that part | ZERO | **runs** |
-| `choice NAME ... end` | a tagged union of variants with optional payload | — | analysed |
-| `tag`, `payload` access on a `choice` | — | ZERO | analysed |
+| `choice NAME ... end` | a tagged union of variants with optional payload; one that fits eight bytes travels as its memory image in one word — the tag (variant number from 0, in declaration order) in the first byte, each field at its offset | — | **runs** when ≤ 8 bytes; a wider one is E0900 |
+| `tag`, `payload` access on a `choice` | — | ZERO | reserved |
 
 ---
 
@@ -170,14 +169,16 @@ end
 | `proc NAME(params) -> T ... end` | a procedure: arguments in the six SysV registers, then on the stack right to left; a view that does not fit in the registers left goes to the stack whole and the next integer still takes a register (the SysV rule, `docs/ABI.md` §1–2); one result (a view: two words) | **runs** (`tests/run/args.oli`) |
 | `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw` and `cpu.asm` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`) / analysed (the rest) |
 | `calls sysv` | the default convention | analysed |
-| `calls none` | no prologue (boot code) | analysed |
+| `calls none` | no prologue, no frame: the body is `machine` blocks alone, without `in`/`out` (boot code) | **runs** (`tests/run/freestanding.oli`) |
 | `calls interrupt` | an interrupt handler | reserved (V1) |
-| `section "x"`, `align N`, `export ["sym"]` | placement and linkage | analysed (the ELF writer emits one segment and no symbol table yet) |
+| `section "x"`, `align N`, `export ["sym"]` | placement and linkage: `section ".text.boot"` places a procedure first in the code and a static in the read-only segment in front of the code (as does `".rodata"`), `align N` on a static is honoured (the natural alignment otherwise); other sections and `export` are recorded but not placed (the ELF writer emits two segments and no symbol table) | **runs** for those; the rest analysed |
 | `entry` | the program's start; `-> s32` hosted (the result is the exit status), `-> never` freestanding. There is no `main` | **runs** |
-| `traps` | the procedure that receives traps (freestanding) | analysed |
+| `traps` | the procedure that receives traps in a freestanding program: `(kind : core.TrapKind, site : core.Site) -> never`; every trap site jumps to a routine that passes the kind and builds the `Site` (file, line) on the stack; without one a trap is `ud2` | **runs** (`tests/freestanding/trap_line.oli` exits with the line of its overflow) |
 | `NAME := expr` | a module-level constant | **runs** |
 | `NAME : T := expr` (aggregate constant) | a constant that lives in `.rodata` | analysed |
-| `NAME : T [<- expr]` at module level | a static place in `.bss`/`.data` | analysed |
+| `NAME : T [<- expr]` at module level | a static place: with an initialiser its bytes are in the file (`.data`), without one it is zero memory (`.bss`); the image gets a second, read+write segment | **runs** |
+| `NAME : [N]T` at module level | a static array, read as the view of its bytes: `.len`, `[i]`, `each`, passed where a view is | **runs** |
+| a static with an aggregate initialiser `:= { … }` | a constant in `.rodata` | analysed |
 
 ---
 
@@ -222,9 +223,9 @@ end
 | `fail [e]` | the failure exit of a `T or E` procedure: the pair (tag 1, e), or (1, 0) for `none` | **runs** (`tests/run/fallible.oli`) |
 | `e else fail` / `e else ret [v]` / `e else default` | resolve a fallible value: pass the failure on, leave, or take a default (a phi) | **runs** |
 | `case e when ok [x] ... when fail ... end`, with `else` for either arm | match a fallible value whose `E` is an integer type or `none` | **runs** |
-| `fail VARIANT {…}`, `case … when fail VARIANT` | a `choice` error, built and matched | analysed |
-| `case e when variant ... else ... end` | match a `choice`, exhaustively | analysed |
-| `machine x64 ... end` | inline machine code with declared inputs, outputs and clobbers (see §8) | analysed (assembled and run by genesis `asm` — `oli1` itself is written in these blocks) |
+| `fail VARIANT`, `fail VARIANT {…}`, `case … when fail VARIANT { f }` | a `choice` error: the image built with masks and shifts, the tag byte compared arm by arm, each named field read back at its width and sign (`tests/run/choice.oli`) | **runs** (choice ≤ 8 bytes) |
+| `case e when variant ... else ... end` | match a plain `choice` value, exhaustively | analysed |
+| `machine x64 ... end` | inline machine code with declared inputs, outputs and clobbers (see §8); `olic` assembles it with its own encoder (`compiler/asm.oli`) — the genesis assembler's subset byte for byte (`tests/machine/*.hex`) plus `hlt`, `cli`, `sti`, `nop`, `iretq`, `cpuid`, `rdmsr`, `wrmsr`, `rdtsc`, `pause`, `lgdt`, `lidt`, control registers — a line it does not know is `E0900` | **runs** (`tests/run/machine.oli`) |
 
 ---
 
@@ -246,15 +247,16 @@ checked(x + y)   -- yields `T or Overflow`, handled with else/case
 | `+ - * / %` | trapping arithmetic at the width of the type; `/` and `%` trap on a zero divisor, `/` on MIN/-1 (`%` answers 0 there) | CHECK | **runs** |
 | `- x` | negation; traps for an unsigned value other than 0 and for signed MIN | CHECK | **runs** |
 | `wrap(e)` | every operator inside `e` wraps at its width; the two division traps stay | ZERO | **runs** |
-| `sat(e)`, `checked(e)` | saturating / fallible arithmetic | CHECK | analysed |
+| `sat(e)`, `checked(e)` | saturating / fallible arithmetic: every operator inside `e` clamps to its type's range / `checked(e)` is `T or Overflow` for `else` and `case` (`tests/run/saturate.oli`) | CHECK | **runs** |
 | `== != < <= > >=` | comparisons → `bool`; they do not chain | ZERO | **runs** |
 | `and`, `or`, `not` | boolean, short-circuiting | ZERO | **runs** |
 | `& \| ^ ~ << >>` | bit operations on equal integer types; a shift count is masked to the width | ZERO | **runs** |
 | `T(x)` | a lossless widening; emits nothing | ZERO | **runs** |
 | `T.wrap(x)`, `T.bits(x)` | truncate to the width of `T`, wrapping / reinterpret at the same width | ZERO | **runs** |
-| `T.sat(x)`, `T.checked(x)` | saturating / fallible narrowing | CHECK | analysed |
+| `T.sat(x)`, `T.checked(x)` | saturating / fallible narrowing: clamp to the range of `T` / `T or Overflow` | CHECK | **runs** |
 | `physaddr(n)`, `addr T (n)` | an integer as a physical / raw virtual address (`permit memory.raw` for the latter) | ZERO | analysed |
 | an implicit narrowing | `E0202`: the conversion must be written | — | **runs** (as a diagnostic) |
+| a wrong field in a literal or pattern | `E0208`: a field the layout or variant does not declare, one named twice, or one left out of a literal (`tests/sema/err/fields.oli`) | — | **runs** (as a diagnostic) |
 
 The passes of `docs/OIR_SPEC.md` §6 decide constant expressions at compile
 time, turn a branch on a constant into a jump, and fold an operation whose
@@ -268,7 +270,7 @@ check they remove is printed with its proof by `--show-oir=opt`.
 | Command | What it does | Permit | Cost | Status |
 |---------|--------------|--------|------|--------|
 | `os.syscall(nr, a1..a6)` | a raw Linux system call — this is how `hello` prints without libc | `os.syscall` | SYSCALL | **runs** |
-| `cpu.halt()`, `cpu.pause()` | `hlt` / `pause` | `cpu.halt` / — | KERNEL / ZERO | analysed |
+| `cpu.halt()`, `cpu.pause()` | `hlt` / `pause`, one instruction each (`cpu.halt` in OIR) | `cpu.halt` / — | KERNEL / ZERO | **runs** |
 | `mem.copy(dst, src, n)` | copy `n` bytes (overlap allowed) | — | COPY | analysed |
 | `mem.set(dst, b)`, `mem.zero(dst)` | fill / zero a byte view | — | COPY | analysed |
 | `mem.secure_zero(dst)` | zero that no pass may delete (wipes a secret) | — | COPY | analysed |
@@ -299,7 +301,7 @@ port.u8[0x3F8] <- b                  -- V1: port I/O as an indexed place
 | `arch.x64.cr0/2/3/4/8`, `msr[n]`, `gdt`, `idt`, `tr`, `segments()` | `cpu.control` / `cpu.msr` | planned (V1) |
 | `port.u8/u16/u32[n]`, the `port T` type | `io.port` | reserved (V1) |
 | `atomic.load/store/add/sub/and/or/xor/cas(ref, ..., order)` | — | planned (V1) |
-| `machine x64 ... end` with `in`, `out`, `clobber` | `cpu.asm` | analysed (assembled and run by genesis `asm`) |
+| `machine x64 ... end` with `in`, `out`, `clobber` | `cpu.asm` | **runs**: `in REG <- e` loads the value before the block, `out REG -> place` stores the register after it, a callee-saved register the block names (rbx, r12–r15) is kept for the caller; `.label:` and jumps to it stay inside the block; port I/O (`in al\|ax\|eax, dx\|imm8`, `out dx\|imm8, al\|ax\|eax`), `mov SREG, ax`, `mov ax, SREG`, `mov ax, imm16` and `retfq` per design 0023; any other 8/16-bit form is `E0900` |
 
 Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 `--explain`.
@@ -317,11 +319,12 @@ Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 | `addr T` | a raw virtual address; as a value (e.g. `v.addr` handed to a syscall) it runs, dereferencing needs `memory.raw` | **runs** as a value / analysed as a place |
 | `view T` of a `layout` | a view of records | analysed |
 | `ref T` / `rw ref T` | reference to one object — safe, writable; one word | **runs** |
-| `[N]T` | fixed array (a place/static type, not a value) | analysed |
+| `[N]T` | fixed array (a place type, not a value): in a frame or as a static, read as `rw view T` | **runs** |
 | `layout` names | nominal record types | **runs** |
-| `choice` names | nominal tagged unions | analysed |
+| `choice` names | nominal tagged unions; a value is its image in a word when it fits eight bytes | **runs** (≤ 8 bytes) |
 | `T or E`, `T or none` | a fallible value / an optional; `T` an integer or a ref, `E` an integer type or `none` | **runs** |
-| `T or E` with a `choice` `E`, or a view `T` | the error a tagged union, or a payload that needs `sret` | analysed |
+| `T or E` with a `choice` `E` | the error a tagged union in the payload word | **runs** (choice ≤ 8 bytes) |
+| `T or E` with a view `T` from a procedure | a payload that needs `sret` | analysed (`z.try_bytes` is the one view payload that runs) |
 | `never` | a procedure that does not return | analysed |
 | `physaddr` | a physical address — never dereferenced; cannot mix with `addr` | analysed |
 | `be T` / `le T` | an integer stored big/little-endian, in a `layout` | analysed |
@@ -353,11 +356,12 @@ tool).
 | `show_ssa` (`--show-ssa`) | after `mem2reg`: places promoted to values, a phi where two definitions meet; `*.ssa` | **runs** |
 | `show_opt` (`--show-oir=opt`) | after the passes: constants folded, dead code gone, every removed check printed where it stood with its proof, statics nothing names marked removed; `*.opt` | **runs** |
 | `verify_check` | the verifier's own test: breaks the OIR of a program ten ways, each must be rejected with the invariant it violates | **runs** |
-| `--show-machine-ir`, `--show-asm`, `--show-bytes` | the lowering as MIR-x64, as assembly, as bytes | planned (the lowering exists; the printers do not) |
-| `--explain` | per procedure: frame size, register assignment, allocations, copies, views, checks and which were removed, syscalls, capabilities | planned (`docs/OIR_SPEC.md` §1) |
-| `--explain-cost` | the cost class of every line | planned |
+| `--show-asm` | the bytes of every `machine x64` block as emitted, after fixups, with the procedure and line | **runs** (`tests/machine/`) |
+| `--show-machine-ir`, `--show-bytes` | the lowering as MIR-x64, as bytes | planned (the lowering exists; the printers do not) |
+| `--explain` | per procedure: the frame in words (locals, temps, values, phi scratch), the checks kept and the ones removed by each proof (`constant`, `divisor`, `loop-bound`, `unreachable`, `dominance`), zones opened / released / allocated from, calls, syscalls, operations proved to always trap — then the cost class of every line that produced an instruction (`tests/snapshots/cse.explain`) | **runs** (`(registers values=N saved=…)` is the linear scan's assignment) |
+| `--explain-cost` | the same report; the per-line part is its `(lines …)` section | **runs** |
 | `--check` / `--check-syntax` | analyse / parse only | planned as flags; `show_sema`/`show_ast` with output discarded do it today |
-| `--freestanding` | target with no operating system: no `mmap` zones, `-> never` entry, `traps` | analysed (`tests/sema/ok/freestanding.oli`); no driver selects it yet |
+| `--freestanding` | target with no operating system, selected by a `-- target: freestanding` line at the top of the program: no `mmap` zones (`E0330`), no `os.syscall` (`E0401`), a `-> never` entry that is the first instruction of the image (`section ".text.boot"` first, no frame with `calls none`), `traps`, `cpu.halt()`; statics honour `align N`; a `-> never` body ends in `ud2`, never `ret`; `-- load: 0x100000` links and loads the image at that address (any address: the code names statics through 64-bit immediates; a `[static]` operand of a machine block needs the low or the top 2 GiB) | **runs** (`tests/run/freestanding.oli`, `tests/freestanding/`, `examples/kernel.oli` with its Multiboot2 header); the TOML profile file of FREESTANDING.md §2 is not read — its fields live in the source lines |
 | `--lib DIR` | where imported modules are found | planned; `lib/` under the working directory today |
 | `oli new/build/run/test/fmt/check/bench/doc/package/fuzz` | the project tool | planned |
 | `./genesis/test.sh` | build the whole chain from 322 hand-written bytes and run every test, layers 0–5 | **runs** |
@@ -367,15 +371,13 @@ tool).
 
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
-review that is: `[N]T` places, raw `[p]` access, `z.try_bytes`, `at`/`from`
-zones and a zone inside a zone, a jump out of a zone in a non-entry
-procedure, `each` over a range or an array, a view of records, `choice` (and
-a `T or E` whose `E` is one), a view inside a `T or E`, `be`/`le` fields,
-`fail` and every form of `T or E`, `case`, `machine` blocks, `sat`/`checked`
-in both forms, `physaddr(n)`/`addr T (n)`, the `cpu.*` and `mem.*`
+review that is: `each` over a range, a view of records, a `choice` wider
+than eight bytes, a `case` over a plain choice or a `bool`, a layout literal
+by value in an expression (a static's initialiser may be one), a layout of
+sixteen bytes or less as a parameter or any layout as an argument, a view inside a `T or E` that a procedure returns,
+`be`/`le` fields, a `machine` line the encoder does not know (8/16-bit and segment registers, port I/O, `bytes`), `physaddr(n)`, the `cpu.*` and `mem.*`
 intrinsics, an `os.syscall` with more than seven words (the number and six
-arguments are all the registers a system call has), aggregate constants and
-statics.
+arguments are all the registers a system call has) and aggregate constants.
 The front end already checks all of them, so a program using them is
 type-checked before it is refused.
 

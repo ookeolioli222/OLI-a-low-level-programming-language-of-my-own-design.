@@ -848,7 +848,13 @@ proc name_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
     name := tok_text(cx, nd.t0)
     li := loc_find(pg, name)
     if li >= 0
-        ret loc_type(pg, name)
+        lt := loc_type(pg, name)
+        if starts_with(lt, "[")
+            -- An array place read as a value is the writable view of its
+            -- bytes, as for a static array below.
+            ret mk_type(pg, "rw view ", arr_elem(lt))
+        end
+        ret lt
     end
     vi := val_find(pg, name)
     if vi < 0

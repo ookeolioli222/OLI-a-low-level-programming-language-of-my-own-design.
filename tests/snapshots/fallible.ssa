@@ -93,7 +93,7 @@
     (bb8 preds bb2
       %29 = const 1
       ret %29, %12))
-  (proc value_or locals=2 temps=1
+  (proc value_or locals=2 temps=2
     (bb0
       %0 = param 0
       %1 = param 1
@@ -209,7 +209,7 @@
       %10 = sub.s %8, %9
       check.overflow %10
       ret %10))
-  (proc start locals=15 temps=4 entry
+  (proc start locals=15 temps=8 entry
     (bb0
       %0 = const 55
       arg %0
@@ -467,10 +467,10 @@
       %153 = const 13
       ret %153)
     (bb50 preds bb48
-      %154 = addr.of frame.39
+      %154 = addr.of frame.16
       %155 = const 4096
       zone.new %154, %155
-      %157 = addr.of frame.39
+      %157 = addr.of frame.16
       arg %157
       %159 = const 5
       arg %159
@@ -480,42 +480,44 @@
       branch %163, bb51, bb52)
     (bb51 preds bb50
       %164 = const 14
+      zone.end %154
       ret %164)
     (bb52 preds bb50
-      %165 = addr.of frame.39
-      arg %165
-      %167 = const 0
-      arg %167
-      %169 = call sum/2
-      %170 = const 0
-      %171 = cmp.ne %169, %170
-      branch %171, bb53, bb54)
+      %166 = addr.of frame.16
+      arg %166
+      %168 = const 0
+      arg %168
+      %170 = call sum/2
+      %171 = const 0
+      %172 = cmp.ne %170, %171
+      branch %172, bb53, bb54)
     (bb53 preds bb52
-      %172 = const 15
-      ret %172)
+      %173 = const 15
+      zone.end %154
+      ret %173)
     (bb54 preds bb52
       zone.end %154
       arg %97
       arg %98
-      %176 = const 104
-      arg %176
-      %178 = call find/3
-      %179 = call.payload
-      %180 = const 0
-      %181 = cmp.eq %178, %180
-      branch %181, bb55, bb59)
+      %178 = const 104
+      arg %178
+      %180 = call find/3
+      %181 = call.payload
+      %182 = const 0
+      %183 = cmp.eq %180, %182
+      branch %183, bb55, bb59)
     (bb55 preds bb54
       jump bb56)
     (bb56 preds bb55
-      %182 = const 0
-      %183 = cmp.ne %179, %182
-      branch %183, bb57, bb58)
+      %184 = const 0
+      %185 = cmp.ne %181, %184
+      branch %185, bb57, bb58)
     (bb57 preds bb56
-      %184 = const 17
-      ret %184)
+      %186 = const 17
+      ret %186)
     (bb58 preds bb56
-      %185 = const 42
-      ret %185)
+      %187 = const 42
+      ret %187)
     (bb59 preds bb54
-      %186 = const 16
-      ret %186)))
+      %188 = const 16
+      ret %188)))

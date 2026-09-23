@@ -104,13 +104,23 @@ proc starts_with(s: view u8, p: view u8) -> word
 end
 
 proc elem_of(v: view u8) -> view u8
-    -- `rw view u8` and `view u8` both have element type `u8`.
+    -- `rw view u8` and `view u8` both have element type `u8`, and so does
+    -- the array place `[N]u8`.
     s : view u8 <- v
     if starts_with(s, "rw ")
         s <- s[3..]
     end
     if starts_with(s, "view ")
         ret s[5..]
+    end
+    if starts_with(s, "[")
+        i : u64 <- 0
+        while i < s.len
+            if s[i] == 93
+                ret s[i + 1..]
+            end
+            i <- i + 1
+        end
     end
     ret s
 end

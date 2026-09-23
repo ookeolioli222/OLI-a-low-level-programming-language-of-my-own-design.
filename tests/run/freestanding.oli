@@ -1,0 +1,67 @@
+-- target: freestanding
+module fs
+-- M3: a freestanding program — its own entry with no frame (`calls none`),
+-- its own stack installed by hand, a `traps` procedure that receives the
+-- `core.Site`, zones only at an address or from a buffer, `cpu.halt()` —
+-- run here as a plain Linux process, which it can be because nothing but
+-- the program's own bytes are in the image: it exits through a system call
+-- written in a machine block. Exit status 42 when every check held.
+
+boot_stack : [16K]u8
+    section ".bss.boot"
+    align 16
+
+heap_region : [8192]u8
+    align 4096
+
+layout Frame
+    count : u32
+end
+
+proc start -> never
+    entry
+    calls none
+    section ".text.boot"
+    permit cpu.asm
+    machine x64
+        lea rsp, [boot_stack + 16K]
+        xor ebp, ebp
+        call fs.main
+        hlt
+    end
+end
+
+proc on_trap(_kind : core.TrapKind, site : core.Site) -> never
+    traps
+    permit cpu.asm
+    machine x64
+        in edi <- site.line
+        mov eax, 60
+        syscall
+        hlt
+    end
+end
+
+proc main -> never
+    permit cpu.halt, memory.raw, cpu.asm
+    status : u64 <- 42
+    zone boot_zone 4096 at heap_region[4096..].addr
+        f := boot_zone.make(Frame)
+        f.count <- 1
+        if f.count != 1 then status <- 1
+    end
+    zone heap 4096 from heap_region
+        buf := heap.bytes(256)
+        buf[0] <- 85
+        if buf[0] != 85 then status <- 2
+        if buf.addr != heap_region[..256].addr then status <- 3
+    end
+    machine x64
+        in rdi <- status
+        mov eax, 60
+        syscall
+    end
+    loop
+        cpu.halt()
+    end
+end

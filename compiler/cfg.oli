@@ -420,6 +420,24 @@ proc defines_value(op: u64) -> word
     if op == O_ZEND
         ret 0
     end
+    if op == O_ZRAW
+        ret 0
+    end
+    if op == O_ZFROM
+        ret 0
+    end
+    if op == O_ZENDF
+        ret 0
+    end
+    if op == O_MIN
+        ret 0
+    end
+    if op == O_MACHINE
+        ret 0
+    end
+    if op == O_CPU
+        ret 0
+    end
     if is_term(op) == 1
         ret 0
     end

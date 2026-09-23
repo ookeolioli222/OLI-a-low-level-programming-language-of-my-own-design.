@@ -1,0 +1,1705 @@
+module olic.asm
+-- The x86-64 encoder behind `machine x64` blocks (design 0009). The parser
+-- cut the lines of a block into instructions and operands; this module turns
+-- them into bytes — the subset the genesis assembler proves byte for byte
+-- (genesis/2-asm/SPEC.md §9: all sixteen r64 and r32 registers, `mov`, the
+-- ALU group, `test`, the one-operand group, `imul`, the shifts, `lea`,
+-- `push`/`pop`, `call`/`jmp` direct and indirect, the conditional branches,
+-- `ret`, `cqo`, `syscall`) plus the fixed opcodes a kernel needs (`hlt`,
+-- `cli`, `sti`, `nop`, `iretq`, `cpuid`, `rdmsr`, `wrmsr`, `rdtsc`, `pause`,
+-- `lgdt`, `lidt`, `mov` to and from a control register). Every form it does
+-- not know is E0900 at the instruction — reported when the OIR is built, by
+-- a dry run over the same code — never approximated.
+--
+-- Operands: r64 (`rax`..`r15`), r32 (`eax`..`r15d`), an immediate (imm64
+-- for `mov r64, imm`, imm32 sign-extended elsewhere), memory `[base +
+-- index*scale + disp]` (an explicit displacement, even 0, always occupies
+-- 32 bits, as the genesis assembler writes it), `[static + disp]`, `.label`
+-- inside the block, and a procedure's name for `call`, `jmp` and `mov r64,
+-- name`. What the block cannot resolve itself — a procedure, a static — is
+-- recorded in `ob.mfix` for the lowering to hand to the ELF writer's table.
+
+-- The tables (`MLAB_MAX`, `MFIX_MAX`, `MBLK_MAX`) and the operand record
+-- (`Opnd`) are declared with the Oir arenas in compiler/oir.oli.
+-- Fixup kinds, shared with `apply_fixes` in compiler/x64.oli.
+MF_PROC := 0
+MF_RO64 := 2
+MF_DATA := 4
+MF_PROC64 := 5
+MF_DATA64 := 6
+MF_DATA32 := 7
+MF_RO32 := 8
+
+OK_REG := 1
+OK_IMM := 2
+OK_MEM := 3
+OK_LABEL := 4
+OK_PROC := 5
+OK_STATIC := 6
+OK_CL := 7
+OK_CR := 8
+
+proc opnd_at(ob: ref Oir, k: u64) -> rw ref Opnd
+    t := ob.mops
+    off := k * Opnd.size
+    ret Opnd.at(t[off..off + Opnd.size])
+end
+
+-- Registers ---------------------------------------------------------------------
+
+proc reg64(name: view u8) -> word
+    if view_eq(name, "rax")
+        ret 0
+    end
+    if view_eq(name, "rcx")
+        ret 1
+    end
+    if view_eq(name, "rdx")
+        ret 2
+    end
+    if view_eq(name, "rbx")
+        ret 3
+    end
+    if view_eq(name, "rsp")
+        ret 4
+    end
+    if view_eq(name, "rbp")
+        ret 5
+    end
+    if view_eq(name, "rsi")
+        ret 6
+    end
+    if view_eq(name, "rdi")
+        ret 7
+    end
+    if view_eq(name, "r8")
+        ret 8
+    end
+    if view_eq(name, "r9")
+        ret 9
+    end
+    if view_eq(name, "r10")
+        ret 10
+    end
+    if view_eq(name, "r11")
+        ret 11
+    end
+    if view_eq(name, "r12")
+        ret 12
+    end
+    if view_eq(name, "r13")
+        ret 13
+    end
+    if view_eq(name, "r14")
+        ret 14
+    end
+    if view_eq(name, "r15")
+        ret 15
+    end
+    ret -1
+end
+
+proc reg32(name: view u8) -> word
+    if view_eq(name, "eax")
+        ret 0
+    end
+    if view_eq(name, "ecx")
+        ret 1
+    end
+    if view_eq(name, "edx")
+        ret 2
+    end
+    if view_eq(name, "ebx")
+        ret 3
+    end
+    if view_eq(name, "esp")
+        ret 4
+    end
+    if view_eq(name, "ebp")
+        ret 5
+    end
+    if view_eq(name, "esi")
+        ret 6
+    end
+    if view_eq(name, "edi")
+        ret 7
+    end
+    if view_eq(name, "r8d")
+        ret 8
+    end
+    if view_eq(name, "r9d")
+        ret 9
+    end
+    if view_eq(name, "r10d")
+        ret 10
+    end
+    if view_eq(name, "r11d")
+        ret 11
+    end
+    if view_eq(name, "r12d")
+        ret 12
+    end
+    if view_eq(name, "r13d")
+        ret 13
+    end
+    if view_eq(name, "r14d")
+        ret 14
+    end
+    if view_eq(name, "r15d")
+        ret 15
+    end
+    ret -1
+end
+
+proc creg(name: view u8) -> word
+    if view_eq(name, "cr0")
+        ret 0
+    end
+    if view_eq(name, "cr2")
+        ret 2
+    end
+    if view_eq(name, "cr3")
+        ret 3
+    end
+    if view_eq(name, "cr4")
+        ret 4
+    end
+    if view_eq(name, "cr8")
+        ret 8
+    end
+    ret -1
+end
+
+proc reg_code_any(name: view u8) -> word
+    -- The code of an r64 or r32 name, or -1: what `in`, `out`, `clobber` and
+    -- the callee-saved scan accept.
+    r := reg64(name)
+    if r >= 0
+        ret r
+    end
+    ret reg32(name)
+end
+
+proc reg_name(code: u64, width: u64) -> view u8
+    if width == 32
+        if code == 0
+            ret "eax"
+        end
+        if code == 1
+            ret "ecx"
+        end
+        if code == 2
+            ret "edx"
+        end
+        if code == 3
+            ret "ebx"
+        end
+        if code == 4
+            ret "esp"
+        end
+        if code == 5
+            ret "ebp"
+        end
+        if code == 6
+            ret "esi"
+        end
+        if code == 7
+            ret "edi"
+        end
+        if code == 8
+            ret "r8d"
+        end
+        if code == 9
+            ret "r9d"
+        end
+        if code == 10
+            ret "r10d"
+        end
+        if code == 11
+            ret "r11d"
+        end
+        if code == 12
+            ret "r12d"
+        end
+        if code == 13
+            ret "r13d"
+        end
+        if code == 14
+            ret "r14d"
+        end
+        ret "r15d"
+    end
+    if code == 0
+        ret "rax"
+    end
+    if code == 1
+        ret "rcx"
+    end
+    if code == 2
+        ret "rdx"
+    end
+    if code == 3
+        ret "rbx"
+    end
+    if code == 4
+        ret "rsp"
+    end
+    if code == 5
+        ret "rbp"
+    end
+    if code == 6
+        ret "rsi"
+    end
+    if code == 7
+        ret "rdi"
+    end
+    if code == 8
+        ret "r8"
+    end
+    if code == 9
+        ret "r9"
+    end
+    if code == 10
+        ret "r10"
+    end
+    if code == 11
+        ret "r11"
+    end
+    if code == 12
+        ret "r12"
+    end
+    if code == 13
+        ret "r13"
+    end
+    if code == 14
+        ret "r14"
+    end
+    ret "r15"
+end
+
+-- Operands ----------------------------------------------------------------------
+
+proc int_image(nd: ref Node) -> u64
+    -- The two's complement word of an integer operand, `- n` included.
+    v := nd.val
+    if nd.sub == 1
+        if v == 0
+            ret 0
+        end
+        ret 18446744073709551615 - v + 1
+    end
+    ret v
+end
+
+proc fits_s32(v: u64) -> word
+    if v < 2147483648
+        ret 1
+    end
+    if v >= 18446744071562067968
+        ret 1
+    end
+    ret 0
+end
+
+proc fits_u32(v: u64) -> word
+    if v < 4294967296
+        ret 1
+    end
+    ret 0
+end
+
+proc last_part(t: view u8) -> view u8
+    -- `module.name` names the procedure by its last part.
+    i : u64 <- t.len
+    while i > 0
+        i <- i - 1
+        if t[i] == 46
+            j := i + 1
+            ret t[j..t.len]
+        end
+    end
+    ret t
+end
+
+proc word_operand(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64, o: rw ref Opnd) -> word
+    -- A register, `cl`, a control register, `.label`, a procedure or a static.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    t := ctok(cx, nd.t0)
+    if t.kind == TK_OP
+        -- `.label`: the name token follows the dot.
+        o.kind <- OK_LABEL
+        o.sym <- nd.t0 + 1
+        ret 1
+    end
+    name := tok_text(cx, nd.t0)
+    if nd.t1 > nd.t0 + 1
+        -- A dotted path: only a procedure has one.
+        full := cx.src
+        st := t.start
+        en := ctok(cx, nd.t1 - 1)
+        stop := en.start + en.len
+        pi := proc_find(pg, last_part(full[st..stop]))
+        if pi < 0
+            ret 0
+        end
+        o.kind <- OK_PROC
+        o.sym <- u64.bits(pi)
+        ret 1
+    end
+    r := reg64(name)
+    if r >= 0
+        o.kind <- OK_REG
+        o.reg <- u64.bits(r)
+        o.width <- 64
+        ret 1
+    end
+    r2 := reg32(name)
+    if r2 >= 0
+        o.kind <- OK_REG
+        o.reg <- u64.bits(r2)
+        o.width <- 32
+        ret 1
+    end
+    if view_eq(name, "cl")
+        o.kind <- OK_CL
+        ret 1
+    end
+    c := creg(name)
+    if c >= 0
+        o.kind <- OK_CR
+        o.reg <- u64.bits(c)
+        ret 1
+    end
+    pi2 := proc_find(pg, name)
+    if pi2 >= 0
+        o.kind <- OK_PROC
+        o.sym <- u64.bits(pi2)
+        ret 1
+    end
+    vi := val_find(pg, name)
+    if vi >= 0
+        di := data_of(ob, u64.bits(vi))
+        if di >= 0
+            d := dat_at(ob, u64.bits(di))
+            o.kind <- OK_STATIC
+            o.sym <- d.off
+            o.ro <- 0
+            ret 1
+        end
+        ri := rodata_of(ob, u64.bits(vi))
+        if ri >= 0
+            rs := stat_at(ob, u64.bits(ri))
+            o.kind <- OK_STATIC
+            o.sym <- rs.off
+            o.ro <- 1
+            ret 1
+        end
+    end
+    ret 0
+end
+
+proc mem_operand(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64, o: rw ref Opnd) -> word
+    -- `[base + index*scale + disp]`, `[static + disp]`: the terms in any
+    -- order, a scaled register the index, a second register the index at
+    -- scale one, a signed integer the displacement.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    o.kind <- OK_MEM
+    o.base <- NOREG
+    o.index <- NOREG
+    o.scale <- 1
+    o.disp <- 0
+    o.hasdisp <- 0
+    o.sym <- 0
+    o.issym <- 0
+    o.ro <- 0
+    o.width <- 64
+    if nd.val == 1
+        sz := tok_text(cx, nd.t0)
+        if view_eq(sz, "dword")
+            o.width <- 32
+        elif view_eq(sz, "qword") == 0
+            ret 0
+        end
+    end
+    hassym : u64 <- 0
+    k : u64 <- kid1(cx, n)
+    while k != 0
+        tn := node_at(cx, k)
+        sub := kid1(cx, k)
+        sn := node_at(cx, sub)
+        if sn.kind == N_INT
+            v : u64 <- sn.val
+            if tn.sub == 1
+                if v != 0
+                    v <- 18446744073709551615 - v + 1
+                end
+            end
+            o.disp <- o.disp + v
+            o.hasdisp <- 1
+        else
+            if tn.sub == 1
+                ret 0
+            end
+            name := tok_text(cx, sn.t0)
+            r := reg64(name)
+            if r < 0
+                if tn.val > 0
+                    ret 0
+                end
+                if hassym == 1
+                    ret 0
+                end
+                vi := val_find(pg, name)
+                if vi < 0
+                    ret 0
+                end
+                di := data_of(ob, u64.bits(vi))
+                if di >= 0
+                    d := dat_at(ob, u64.bits(di))
+                    o.sym <- d.off
+                else
+                    ri := rodata_of(ob, u64.bits(vi))
+                    if ri < 0
+                        ret 0
+                    end
+                    rs := stat_at(ob, u64.bits(ri))
+                    o.sym <- rs.off
+                    o.ro <- 1
+                end
+                hassym <- 1
+            elif tn.val > 0
+                if o.index != NOREG
+                    ret 0
+                end
+                if u64.bits(r) == 4
+                    ret 0
+                end
+                o.index <- u64.bits(r)
+                o.scale <- tn.val
+            elif o.base == NOREG
+                o.base <- u64.bits(r)
+            elif o.index == NOREG
+                if u64.bits(r) == 4
+                    ret 0
+                end
+                o.index <- u64.bits(r)
+                o.scale <- 1
+            else
+                ret 0
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    if hassym == 1
+        -- `[static + disp]`: an absolute address, no base and no index.
+        if o.base != NOREG
+            ret 0
+        end
+        if o.index != NOREG
+            ret 0
+        end
+        -- A disp32 is sign-extended: only the low 2 GiB and the top 2 GiB
+        -- of the address space can be named this way.
+        if ob.base >= 2147483648
+            if ob.base < 18446744071562067968
+                ret 0
+            end
+        end
+        o.issym <- 1
+        ret 1
+    end
+    if o.scale != 1
+        if o.scale != 2
+            if o.scale != 4
+                if o.scale != 8
+                    ret 0
+                end
+            end
+        end
+    end
+    if fits_s32(o.disp) == 0
+        ret 0
+    end
+    ret 1
+end
+
+proc read_operands(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> word
+    -- The operands of an instruction into `ob.mops`; the count, or -1.
+    cx := mod_ctx(pg, mi)
+    k : u64 <- kid1(cx, n)
+    c : u64 <- 0
+    while k != 0
+        if c >= 3
+            ret -1
+        end
+        o := opnd_at(ob, c)
+        o.node <- k
+        kn := node_at(cx, k)
+        ok : word <- 0
+        if kn.kind == N_INT
+            o.kind <- OK_IMM
+            o.imm <- int_image(kn)
+            ok <- 1
+        elif kn.kind == N_MEM
+            ok <- mem_operand(pg, ob, mi, k, o)
+        elif kn.kind == N_MWORD
+            ok <- word_operand(pg, ob, mi, k, o)
+        end
+        if ok == 0
+            ret -1
+        end
+        c <- c + 1
+        k <- sibling(cx, k)
+    end
+    ret word.bits(c)
+end
+
+-- Bytes ---------------------------------------------------------------------------
+
+proc rex(ob: rw ref Oir, w: u64, r: u64, x: u64, b: u64)
+    -- The prefix, only when a bit of it is set.
+    v : u64 <- 64
+    if w == 64
+        v <- v + 8
+    end
+    if r >= 8
+        if r != NOREG
+            v <- v + 4
+        end
+    end
+    if x >= 8
+        if x != NOREG
+            v <- v + 2
+        end
+    end
+    if b >= 8
+        if b != NOREG
+            v <- v + 1
+        end
+    end
+    if v != 64
+        cb(ob, v)
+    end
+end
+
+proc modrm_reg(ob: rw ref Oir, reg: u64, rm: u64)
+    -- mod=11: register direct.
+    cb(ob, 192 + reg % 8 * 8 + rm % 8)
+end
+
+proc emit_mem(ob: rw ref Oir, reg: u64, o: ref Opnd, mfix: u64)
+    -- ModRM, SIB and displacement for a memory operand, with `reg` in the
+    -- reg field. `mfix` is the fixup kind to record for a static, 0 for
+    -- none. The rules the genesis assembler proved: no displacement written
+    -- means none (rbp and r13 take a zero disp8, rsp and r12 a SIB), a
+    -- written one is always disp32.
+    r := reg % 8
+    if o.issym == 1
+        cb(ob, 4 + r * 8)
+        cb(ob, 37)
+        if o.ro == 1
+            note_fix(ob, ob.ncode, MF_RO32, o.sym + o.disp)
+        else
+            note_fix(ob, ob.ncode, MF_DATA32, o.sym + o.disp)
+        end
+        c32(ob, o.disp + o.sym)
+        ret
+    end
+    if o.base == NOREG
+        -- An index with no base: SIB with base 101 and a disp32.
+        cb(ob, 4 + r * 8)
+        cb(ob, scale_bits(o.scale) * 64 + o.index % 8 * 8 + 5)
+        c32(ob, o.disp)
+        ret
+    end
+    b := o.base % 8
+    mod : u64 <- 0
+    if o.hasdisp == 1
+        mod <- 2
+    elif b == 5
+        mod <- 1
+    end
+    if o.index == NOREG
+        if b == 4
+            cb(ob, mod * 64 + r * 8 + 4)
+            cb(ob, 36)
+        else
+            cb(ob, mod * 64 + r * 8 + b)
+        end
+    else
+        cb(ob, mod * 64 + r * 8 + 4)
+        cb(ob, scale_bits(o.scale) * 64 + o.index % 8 * 8 + b)
+    end
+    if mod == 1
+        cb(ob, 0)
+    end
+    if mod == 2
+        c32(ob, o.disp)
+    end
+end
+
+proc scale_bits(s: u64) -> u64
+    if s == 2
+        ret 1
+    end
+    if s == 4
+        ret 2
+    end
+    if s == 8
+        ret 3
+    end
+    ret 0
+end
+
+proc note_fix(ob: rw ref Oir, pos: u64, kind: u64, target: u64)
+    -- A fixup the lowering hands to `apply_fixes`: skipped in a dry run.
+    permit os.syscall
+    if ob.mdry == 1
+        ret
+    end
+    if ob.nmfix >= MFIX_MAX
+        put(2, "olic: machine fixup table exhausted\n")
+        os.syscall(60, 4)
+    end
+    k := ob.nmfix
+    cell_set(ob.mfix, k * 3, pos)
+    cell_set(ob.mfix, k * 3 + 1, kind)
+    cell_set(ob.mfix, k * 3 + 2, target)
+    ob.nmfix <- k + 1
+end
+
+proc note_label_ref(ob: rw ref Oir, pos: u64, tok: u64)
+    -- A rel32 to a local label, patched when the block ends.
+    permit os.syscall
+    if ob.nmref >= MLAB_MAX
+        put(2, "olic: machine label table exhausted\n")
+        os.syscall(60, 4)
+    end
+    k := ob.nmref
+    cell_set(ob.mref, k * 2, pos)
+    cell_set(ob.mref, k * 2 + 1, tok)
+    ob.nmref <- k + 1
+end
+
+-- Instructions ------------------------------------------------------------------
+
+proc enc_instr(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> word
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    m := tok_text(cx, nd.t0)
+    -- The narrow forms of design 0023: port I/O through al/ax/eax and dx,
+    -- and the segment loads a kernel needs, read from the tokens directly.
+    if view_eq(m, "in")
+        ret enc_port(cx, ob, n, 0)
+    end
+    if view_eq(m, "out")
+        ret enc_port(cx, ob, n, 1)
+    end
+    if view_eq(m, "mov")
+        if enc_mov_seg(cx, ob, n) == 1
+            ret 1
+        end
+    end
+    c := read_operands(pg, ob, mi, n)
+    if c < 0
+        ret 0
+    end
+    nop := u64.bits(c)
+    if view_eq(m, "mov")
+        ret enc_mov(ob, nop)
+    end
+    if view_eq(m, "add")
+        ret enc_alu(ob, nop, 0)
+    end
+    if view_eq(m, "or")
+        ret enc_alu(ob, nop, 1)
+    end
+    if view_eq(m, "and")
+        ret enc_alu(ob, nop, 4)
+    end
+    if view_eq(m, "sub")
+        ret enc_alu(ob, nop, 5)
+    end
+    if view_eq(m, "xor")
+        ret enc_alu(ob, nop, 6)
+    end
+    if view_eq(m, "cmp")
+        ret enc_alu(ob, nop, 7)
+    end
+    if view_eq(m, "test")
+        ret enc_test(ob, nop)
+    end
+    if view_eq(m, "inc")
+        ret enc_one(ob, nop, 255, 0)
+    end
+    if view_eq(m, "dec")
+        ret enc_one(ob, nop, 255, 1)
+    end
+    if view_eq(m, "not")
+        ret enc_one(ob, nop, 247, 2)
+    end
+    if view_eq(m, "neg")
+        ret enc_one(ob, nop, 247, 3)
+    end
+    if view_eq(m, "mul")
+        ret enc_one(ob, nop, 247, 4)
+    end
+    if view_eq(m, "imul")
+        if nop == 1
+            ret enc_one(ob, nop, 247, 5)
+        end
+        ret enc_imul(ob, nop)
+    end
+    if view_eq(m, "div")
+        ret enc_one(ob, nop, 247, 6)
+    end
+    if view_eq(m, "idiv")
+        ret enc_one(ob, nop, 247, 7)
+    end
+    if view_eq(m, "shl")
+        ret enc_shift(ob, nop, 4)
+    end
+    if view_eq(m, "shr")
+        ret enc_shift(ob, nop, 5)
+    end
+    if view_eq(m, "sar")
+        ret enc_shift(ob, nop, 7)
+    end
+    if view_eq(m, "lea")
+        ret enc_lea(ob, nop)
+    end
+    if view_eq(m, "push")
+        ret enc_push(ob, nop)
+    end
+    if view_eq(m, "pop")
+        ret enc_pop(ob, nop)
+    end
+    if view_eq(m, "call")
+        ret enc_branch(ob, nop, 232, 2)
+    end
+    if view_eq(m, "jmp")
+        ret enc_branch(ob, nop, 233, 4)
+    end
+    cc := jcc_code(m)
+    if cc >= 0
+        ret enc_jcc(ob, nop, u64.bits(cc))
+    end
+    if view_eq(m, "lgdt")
+        ret enc_sys_mem(ob, nop, 2)
+    end
+    if view_eq(m, "lidt")
+        ret enc_sys_mem(ob, nop, 3)
+    end
+    if nop != 0
+        ret 0
+    end
+    ret enc_fixed(ob, m)
+end
+
+proc enc_fixed(ob: rw ref Oir, m: view u8) -> word
+    if view_eq(m, "ret")
+        cb(ob, 195)
+        ret 1
+    end
+    if view_eq(m, "cqo")
+        cb(ob, 72)
+        cb(ob, 153)
+        ret 1
+    end
+    if view_eq(m, "syscall")
+        cb(ob, 15)
+        cb(ob, 5)
+        ret 1
+    end
+    if view_eq(m, "hlt")
+        cb(ob, 244)
+        ret 1
+    end
+    if view_eq(m, "cli")
+        cb(ob, 250)
+        ret 1
+    end
+    if view_eq(m, "sti")
+        cb(ob, 251)
+        ret 1
+    end
+    if view_eq(m, "nop")
+        cb(ob, 144)
+        ret 1
+    end
+    if view_eq(m, "iretq")
+        cb(ob, 72)
+        cb(ob, 207)
+        ret 1
+    end
+    if view_eq(m, "cpuid")
+        cb(ob, 15)
+        cb(ob, 162)
+        ret 1
+    end
+    if view_eq(m, "rdmsr")
+        cb(ob, 15)
+        cb(ob, 50)
+        ret 1
+    end
+    if view_eq(m, "wrmsr")
+        cb(ob, 15)
+        cb(ob, 48)
+        ret 1
+    end
+    if view_eq(m, "rdtsc")
+        cb(ob, 15)
+        cb(ob, 49)
+        ret 1
+    end
+    if view_eq(m, "pause")
+        cb(ob, 243)
+        cb(ob, 144)
+        ret 1
+    end
+    if view_eq(m, "retfq")
+        cb(ob, 72)
+        cb(ob, 203)
+        ret 1
+    end
+    ret 0
+end
+
+proc word_text(cx: ref Ctx, k: u64) -> view u8
+    -- The text of a plain-word operand, "-" for anything else (no register
+    -- or mnemonic is spelled that way).
+    kn := node_at(cx, k)
+    if kn.kind != N_MWORD
+        ret "-"
+    end
+    t := ctok(cx, kn.t0)
+    if t.kind == TK_OP
+        ret "-"
+    end
+    if kn.t1 > kn.t0 + 1
+        ret "-"
+    end
+    ret tok_text(cx, kn.t0)
+end
+
+proc acc_width(name: view u8) -> u64
+    -- al 8, ax 16, eax 32, 0 for anything else: the accumulator of a port
+    -- instruction.
+    if view_eq(name, "al")
+        ret 8
+    end
+    if view_eq(name, "ax")
+        ret 16
+    end
+    if view_eq(name, "eax")
+        ret 32
+    end
+    ret 0
+end
+
+proc enc_port(cx: ref Ctx, ob: rw ref Oir, n: u64, isout: u64) -> word
+    -- `in al|ax|eax, dx` / `in al|ax|eax, imm8` and `out dx|imm8, al|ax|eax`
+    -- (design 0023): E4/E5/EC/ED in, E6/E7/EE/EF out, `66` before a 16-bit
+    -- accumulator.
+    a := kid1(cx, n)
+    if a == 0
+        ret 0
+    end
+    b := sibling(cx, a)
+    if b == 0
+        ret 0
+    end
+    if sibling(cx, b) != 0
+        ret 0
+    end
+    acc : u64 <- a
+    pnode : u64 <- b
+    if isout == 1
+        acc <- b
+        pnode <- a
+    end
+    w := acc_width(word_text(cx, acc))
+    if w == 0
+        ret 0
+    end
+    pn := node_at(cx, pnode)
+    base : u64 <- 228
+    if isout == 1
+        base <- 230
+    end
+    if pn.kind == N_INT
+        if pn.val > 255
+            ret 0
+        end
+        if pn.sub == 1
+            ret 0
+        end
+        if w == 16
+            cb(ob, 102)
+        end
+        if w == 8
+            cb(ob, base)
+        else
+            cb(ob, base + 1)
+        end
+        cb(ob, pn.val)
+        ret 1
+    end
+    if view_eq(word_text(cx, pnode), "dx") == 0
+        ret 0
+    end
+    if w == 16
+        cb(ob, 102)
+    end
+    if w == 8
+        cb(ob, base + 8)
+    else
+        cb(ob, base + 9)
+    end
+    ret 1
+end
+
+proc sreg_code(name: view u8) -> word
+    if view_eq(name, "es")
+        ret 0
+    end
+    if view_eq(name, "cs")
+        ret 1
+    end
+    if view_eq(name, "ss")
+        ret 2
+    end
+    if view_eq(name, "ds")
+        ret 3
+    end
+    if view_eq(name, "fs")
+        ret 4
+    end
+    if view_eq(name, "gs")
+        ret 5
+    end
+    ret -1
+end
+
+proc enc_mov_seg(cx: ref Ctx, ob: rw ref Oir, n: u64) -> word
+    -- `mov SREG, ax` (8E /r), `mov ax, SREG` (8C /r) and `mov ax, imm16`
+    -- (66 B8 iw) — design 0023; 1 when the line was one of these.
+    a := kid1(cx, n)
+    if a == 0
+        ret 0
+    end
+    b := sibling(cx, a)
+    if b == 0
+        ret 0
+    end
+    da := word_text(cx, a)
+    sb := word_text(cx, b)
+    sd := sreg_code(da)
+    if sd >= 0
+        if view_eq(sb, "ax") == 0
+            ret 0
+        end
+        cb(ob, 142)
+        modrm_reg(ob, u64.bits(sd), 0)
+        ret 1
+    end
+    if view_eq(da, "ax") == 0
+        ret 0
+    end
+    ss := sreg_code(sb)
+    if ss >= 0
+        cb(ob, 140)
+        modrm_reg(ob, u64.bits(ss), 0)
+        ret 1
+    end
+    bn := node_at(cx, b)
+    if bn.kind == N_INT
+        if bn.sub == 1
+            ret 0
+        end
+        if bn.val > 65535
+            ret 0
+        end
+        cb(ob, 102)
+        cb(ob, 184)
+        cb(ob, bn.val)
+        cb(ob, bn.val >> 8)
+        ret 1
+    end
+    ret 0
+end
+
+proc jcc_code(m: view u8) -> word
+    if view_eq(m, "je")
+        ret 4
+    end
+    if view_eq(m, "jz")
+        ret 4
+    end
+    if view_eq(m, "jne")
+        ret 5
+    end
+    if view_eq(m, "jnz")
+        ret 5
+    end
+    if view_eq(m, "jl")
+        ret 12
+    end
+    if view_eq(m, "jle")
+        ret 14
+    end
+    if view_eq(m, "jg")
+        ret 15
+    end
+    if view_eq(m, "jge")
+        ret 13
+    end
+    if view_eq(m, "jb")
+        ret 2
+    end
+    if view_eq(m, "jc")
+        ret 2
+    end
+    if view_eq(m, "jbe")
+        ret 6
+    end
+    if view_eq(m, "ja")
+        ret 7
+    end
+    if view_eq(m, "jae")
+        ret 3
+    end
+    if view_eq(m, "jnc")
+        ret 3
+    end
+    if view_eq(m, "js")
+        ret 8
+    end
+    if view_eq(m, "jns")
+        ret 9
+    end
+    ret -1
+end
+
+proc op_width(a: ref Opnd, b: ref Opnd) -> u64
+    -- The operation's width: a register says its own, a sized memory
+    -- operand its size, otherwise 64.
+    if a.kind == OK_REG
+        ret a.width
+    end
+    if b.kind == OK_REG
+        ret b.width
+    end
+    if a.kind == OK_MEM
+        ret a.width
+    end
+    if b.kind == OK_MEM
+        ret b.width
+    end
+    ret 64
+end
+
+proc rex_rm(ob: rw ref Oir, w: u64, reg: u64, o: ref Opnd)
+    -- The prefix for `reg` against a register or memory operand `o`.
+    if o.kind == OK_REG
+        rex(ob, w, reg, NOREG, o.reg)
+    elif o.kind == OK_MEM
+        rex(ob, w, reg, o.index, o.base)
+    else
+        rex(ob, w, reg, NOREG, NOREG)
+    end
+end
+
+proc emit_rm(ob: rw ref Oir, reg: u64, o: ref Opnd)
+    -- The ModRM (and what follows it) for `reg` against `o`.
+    if o.kind == OK_REG
+        modrm_reg(ob, reg, o.reg)
+    else
+        emit_mem(ob, reg, o, MF_DATA)
+    end
+end
+
+proc is_rm(o: ref Opnd) -> word
+    -- A register or a memory operand (`[static]` included); a bare static
+    -- name is an address, not a place, and only `mov r64, name` takes it.
+    if o.kind == OK_REG
+        ret 1
+    end
+    if o.kind == OK_MEM
+        ret 1
+    end
+    ret 0
+end
+
+proc enc_mov(ob: rw ref Oir, nop: u64) -> word
+    if nop != 2
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    s := opnd_at(ob, 1)
+    if d.kind == OK_CR
+        if s.kind != OK_REG
+            ret 0
+        end
+        if s.width != 64
+            ret 0
+        end
+        rex(ob, 0, d.reg, NOREG, s.reg)
+        cb(ob, 15)
+        cb(ob, 34)
+        modrm_reg(ob, d.reg, s.reg)
+        ret 1
+    end
+    if s.kind == OK_CR
+        if d.kind != OK_REG
+            ret 0
+        end
+        if d.width != 64
+            ret 0
+        end
+        rex(ob, 0, s.reg, NOREG, d.reg)
+        cb(ob, 15)
+        cb(ob, 32)
+        modrm_reg(ob, s.reg, d.reg)
+        ret 1
+    end
+    if d.kind == OK_REG
+        if s.kind == OK_IMM
+            if d.width == 64
+                -- Always imm64, as the genesis assembler writes it.
+                rex(ob, 64, NOREG, NOREG, d.reg)
+                cb(ob, 184 + d.reg % 8)
+                c64(ob, s.imm)
+                ret 1
+            end
+            if fits_u32(s.imm) == 0
+                if fits_s32(s.imm) == 0
+                    ret 0
+                end
+            end
+            rex(ob, 32, NOREG, NOREG, d.reg)
+            cb(ob, 184 + d.reg % 8)
+            c32(ob, s.imm)
+            ret 1
+        end
+        if s.kind == OK_PROC
+            if d.width != 64
+                ret 0
+            end
+            rex(ob, 64, NOREG, NOREG, d.reg)
+            cb(ob, 184 + d.reg % 8)
+            note_fix(ob, ob.ncode, MF_PROC64, s.sym)
+            c64(ob, 0)
+            ret 1
+        end
+        if s.kind == OK_REG
+            if s.width != d.width
+                ret 0
+            end
+            rex(ob, d.width, s.reg, NOREG, d.reg)
+            cb(ob, 137)
+            modrm_reg(ob, s.reg, d.reg)
+            ret 1
+        end
+        if s.kind == OK_STATIC
+            -- `mov r64, static` is the address, like `lea`.
+            if d.width != 64
+                ret 0
+            end
+            rex(ob, 64, NOREG, NOREG, d.reg)
+            cb(ob, 184 + d.reg % 8)
+            if s.ro == 1
+                note_fix(ob, ob.ncode, MF_RO64, s.sym)
+            else
+                note_fix(ob, ob.ncode, MF_DATA64, s.sym)
+            end
+            c64(ob, 0)
+            ret 1
+        end
+        if is_rm(s) == 1
+            rex_rm(ob, d.width, d.reg, s)
+            cb(ob, 139)
+            emit_rm(ob, d.reg, s)
+            ret 1
+        end
+        ret 0
+    end
+    if d.kind == OK_MEM
+        if s.kind == OK_REG
+            rex_rm(ob, s.width, s.reg, d)
+            cb(ob, 137)
+            emit_rm(ob, s.reg, d)
+            ret 1
+        end
+        if s.kind == OK_IMM
+            if fits_s32(s.imm) == 0
+                ret 0
+            end
+            rex_rm(ob, d.width, 0, d)
+            cb(ob, 199)
+            emit_rm(ob, 0, d)
+            c32(ob, s.imm)
+            ret 1
+        end
+    end
+    ret 0
+end
+
+proc enc_alu(ob: rw ref Oir, nop: u64, ext: u64) -> word
+    -- add/or/and/sub/xor/cmp: `op r/m, r` (ext*8 + 1), `op r, r/m`
+    -- (ext*8 + 3), `op r/m, imm32` (81 /ext).
+    if nop != 2
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    s := opnd_at(ob, 1)
+    w := op_width(d, s)
+    if s.kind == OK_IMM
+        if is_rm(d) == 0
+            ret 0
+        end
+        if fits_s32(s.imm) == 0
+            ret 0
+        end
+        rex_rm(ob, w, 0, d)
+        cb(ob, 129)
+        emit_rm(ob, ext, d)
+        c32(ob, s.imm)
+        ret 1
+    end
+    if s.kind == OK_REG
+        if is_rm(d) == 0
+            ret 0
+        end
+        if d.kind == OK_REG
+            if d.width != s.width
+                ret 0
+            end
+        end
+        rex_rm(ob, w, s.reg, d)
+        cb(ob, ext * 8 + 1)
+        emit_rm(ob, s.reg, d)
+        ret 1
+    end
+    if d.kind == OK_REG
+        if is_rm(s) == 0
+            ret 0
+        end
+        rex_rm(ob, w, d.reg, s)
+        cb(ob, ext * 8 + 3)
+        emit_rm(ob, d.reg, s)
+        ret 1
+    end
+    ret 0
+end
+
+proc enc_test(ob: rw ref Oir, nop: u64) -> word
+    if nop != 2
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    s := opnd_at(ob, 1)
+    w := op_width(d, s)
+    if s.kind == OK_IMM
+        if is_rm(d) == 0
+            ret 0
+        end
+        if fits_s32(s.imm) == 0
+            ret 0
+        end
+        rex_rm(ob, w, 0, d)
+        cb(ob, 247)
+        emit_rm(ob, 0, d)
+        c32(ob, s.imm)
+        ret 1
+    end
+    if s.kind == OK_REG
+        if is_rm(d) == 0
+            ret 0
+        end
+        rex_rm(ob, w, s.reg, d)
+        cb(ob, 133)
+        emit_rm(ob, s.reg, d)
+        ret 1
+    end
+    if d.kind == OK_REG
+        if is_rm(s) == 0
+            ret 0
+        end
+        rex_rm(ob, w, d.reg, s)
+        cb(ob, 133)
+        emit_rm(ob, d.reg, s)
+        ret 1
+    end
+    ret 0
+end
+
+proc enc_one(ob: rw ref Oir, nop: u64, opc: u64, ext: u64) -> word
+    if nop != 1
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    if is_rm(d) == 0
+        ret 0
+    end
+    rex_rm(ob, d.width, 0, d)
+    cb(ob, opc)
+    emit_rm(ob, ext, d)
+    ret 1
+end
+
+proc enc_imul(ob: rw ref Oir, nop: u64) -> word
+    d := opnd_at(ob, 0)
+    s := opnd_at(ob, 1)
+    if d.kind != OK_REG
+        ret 0
+    end
+    if is_rm(s) == 0
+        ret 0
+    end
+    if nop == 2
+        rex_rm(ob, d.width, d.reg, s)
+        cb(ob, 15)
+        cb(ob, 175)
+        emit_rm(ob, d.reg, s)
+        ret 1
+    end
+    if nop == 3
+        i := opnd_at(ob, 2)
+        if i.kind != OK_IMM
+            ret 0
+        end
+        if fits_s32(i.imm) == 0
+            ret 0
+        end
+        rex_rm(ob, d.width, d.reg, s)
+        cb(ob, 105)
+        emit_rm(ob, d.reg, s)
+        c32(ob, i.imm)
+        ret 1
+    end
+    ret 0
+end
+
+proc enc_shift(ob: rw ref Oir, nop: u64, ext: u64) -> word
+    if nop != 2
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    s := opnd_at(ob, 1)
+    if is_rm(d) == 0
+        ret 0
+    end
+    if s.kind == OK_CL
+        rex_rm(ob, d.width, 0, d)
+        cb(ob, 211)
+        emit_rm(ob, ext, d)
+        ret 1
+    end
+    if s.kind == OK_IMM
+        if s.imm > 255
+            ret 0
+        end
+        rex_rm(ob, d.width, 0, d)
+        cb(ob, 193)
+        emit_rm(ob, ext, d)
+        cb(ob, s.imm)
+        ret 1
+    end
+    ret 0
+end
+
+proc enc_lea(ob: rw ref Oir, nop: u64) -> word
+    if nop != 2
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    s := opnd_at(ob, 1)
+    if d.kind != OK_REG
+        ret 0
+    end
+    if d.width != 64
+        ret 0
+    end
+    if s.kind != OK_MEM
+        ret 0
+    end
+    rex_rm(ob, 64, d.reg, s)
+    cb(ob, 141)
+    emit_rm(ob, d.reg, s)
+    ret 1
+end
+
+proc enc_push(ob: rw ref Oir, nop: u64) -> word
+    if nop != 1
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    if d.kind == OK_REG
+        if d.width != 64
+            ret 0
+        end
+        rex(ob, 0, NOREG, NOREG, d.reg)
+        cb(ob, 80 + d.reg % 8)
+        ret 1
+    end
+    if d.kind == OK_IMM
+        if fits_s32(d.imm) == 0
+            ret 0
+        end
+        cb(ob, 104)
+        c32(ob, d.imm)
+        ret 1
+    end
+    if d.kind == OK_MEM
+        rex(ob, 0, NOREG, d.index, d.base)
+        cb(ob, 255)
+        emit_mem(ob, 6, d, MF_DATA)
+        ret 1
+    end
+    ret 0
+end
+
+proc enc_pop(ob: rw ref Oir, nop: u64) -> word
+    if nop != 1
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    if d.kind == OK_REG
+        if d.width != 64
+            ret 0
+        end
+        rex(ob, 0, NOREG, NOREG, d.reg)
+        cb(ob, 88 + d.reg % 8)
+        ret 1
+    end
+    if d.kind == OK_MEM
+        rex(ob, 0, NOREG, d.index, d.base)
+        cb(ob, 143)
+        emit_mem(ob, 0, d, MF_DATA)
+        ret 1
+    end
+    ret 0
+end
+
+proc enc_branch(ob: rw ref Oir, nop: u64, direct: u64, ext: u64) -> word
+    -- `call`/`jmp`: rel32 to a label or a procedure (always rel32, as the
+    -- genesis assembler writes it), or through a register or memory.
+    if nop != 1
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    if d.kind == OK_LABEL
+        cb(ob, direct)
+        note_label_ref(ob, ob.ncode, d.sym)
+        c32(ob, 0)
+        ret 1
+    end
+    if d.kind == OK_PROC
+        cb(ob, direct)
+        note_fix(ob, ob.ncode, MF_PROC, d.sym)
+        c32(ob, 0)
+        ret 1
+    end
+    if d.kind == OK_REG
+        if d.width != 64
+            ret 0
+        end
+        rex(ob, 0, NOREG, NOREG, d.reg)
+        cb(ob, 255)
+        modrm_reg(ob, ext, d.reg)
+        ret 1
+    end
+    if d.kind == OK_MEM
+        rex(ob, 0, NOREG, d.index, d.base)
+        cb(ob, 255)
+        emit_mem(ob, ext, d, MF_DATA)
+        ret 1
+    end
+    ret 0
+end
+
+proc enc_jcc(ob: rw ref Oir, nop: u64, cc: u64) -> word
+    if nop != 1
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    if d.kind != OK_LABEL
+        ret 0
+    end
+    cb(ob, 15)
+    cb(ob, 128 + cc)
+    note_label_ref(ob, ob.ncode, d.sym)
+    c32(ob, 0)
+    ret 1
+end
+
+proc enc_sys_mem(ob: rw ref Oir, nop: u64, ext: u64) -> word
+    -- `lgdt [m]`, `lidt [m]`: 0F 01 /ext.
+    if nop != 1
+        ret 0
+    end
+    d := opnd_at(ob, 0)
+    if d.kind != OK_MEM
+        ret 0
+    end
+    rex(ob, 0, NOREG, d.index, d.base)
+    cb(ob, 15)
+    cb(ob, 1)
+    emit_mem(ob, ext, d, MF_DATA)
+    ret 1
+end
+
+-- The block ---------------------------------------------------------------------
+
+proc asm_block(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, dry: u64) -> word
+    -- The bytes of one `machine x64` block into `ob.code`, local labels
+    -- resolved at its end. Returns the number of lines refused, each
+    -- reported as E0900 at its instruction. In a dry run nothing is kept:
+    -- the caller resets `ob.ncode`, and no fixup is recorded.
+    cx := mod_ctx(pg, mi)
+    ob.mdry <- dry
+    ob.nmref <- 0
+    ob.nmlab <- 0
+    bad : word <- 0
+    k : u64 <- kid1(cx, n)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_LABEL
+            if ob.nmlab >= MLAB_MAX
+                oir_err(ob, pg, mi, 900, k)
+                bad <- bad + 1
+            else
+                cell_set(ob.mlab, ob.nmlab * 2, kn.t0)
+                cell_set(ob.mlab, ob.nmlab * 2 + 1, ob.ncode)
+                ob.nmlab <- ob.nmlab + 1
+            end
+        elif kn.kind == N_INSTR
+            if enc_instr(pg, ob, mi, k) == 0
+                oir_err(ob, pg, mi, 900, k)
+                bad <- bad + 1
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    -- The rel32 of every jump to a local label.
+    r : u64 <- 0
+    while r < ob.nmref
+        pos := cell_get(ob.mref, r * 2)
+        tok := cell_get(ob.mref, r * 2 + 1)
+        l := find_label(ob, cx, tok)
+        if l < 0
+            oir_err(ob, pg, mi, 900, n)
+            bad <- bad + 1
+        else
+            target := cell_get(ob.mlab, u64.bits(l) * 2 + 1)
+            patch32(ob, pos, target + 4294967296 - (pos + 4))
+        end
+        r <- r + 1
+    end
+    ret bad
+end
+
+proc find_label(ob: ref Oir, cx: ref Ctx, tok: u64) -> word
+    name := tok_text(cx, tok)
+    i : u64 <- 0
+    while i < ob.nmlab
+        if view_eq(tok_text(cx, cell_get(ob.mlab, i * 2)), name)
+            ret word.bits(i)
+        end
+        i <- i + 1
+    end
+    ret -1
+end
+
+proc saved_mask(pg: ref Prog, mi: u64, n: u64) -> u64
+    -- The callee-saved registers the block names anywhere — rbx, r12..r15 —
+    -- as a bit per register code: the lowering keeps them for the caller.
+    cx := mod_ctx(pg, mi)
+    mask : u64 <- 0
+    k : u64 <- kid1(cx, n)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_INSTR
+            if view_eq(tok_text(cx, kn.t0), "cpuid")
+                -- `cpuid` writes rbx without naming it.
+                mask <- mask | 8
+            end
+            o : u64 <- kid1(cx, k)
+            while o != 0
+                mask <- mask | operand_regs(cx, o)
+                o <- sibling(cx, o)
+            end
+        elif kn.kind == N_CLOBBER
+            o2 : u64 <- kid1(cx, k)
+            while o2 != 0
+                mask <- mask | operand_regs(cx, o2)
+                o2 <- sibling(cx, o2)
+            end
+        else
+            if kn.kind == N_MIN
+                mask <- mask | reg_bit(tok_text(cx, kn.t0))
+            end
+            if kn.kind == N_MOUT
+                mask <- mask | reg_bit(tok_text(cx, kn.t0))
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    ret mask
+end
+
+proc operand_regs(cx: ref Ctx, o: u64) -> u64
+    on := node_at(cx, o)
+    if on.kind == N_MWORD
+        t := ctok(cx, on.t0)
+        if t.kind == TK_OP
+            ret 0
+        end
+        ret reg_bit(tok_text(cx, on.t0))
+    end
+    if on.kind == N_MEM
+        m : u64 <- 0
+        k : u64 <- kid1(cx, o)
+        while k != 0
+            sub := kid1(cx, k)
+            sn := node_at(cx, sub)
+            if sn.kind == N_MWORD
+                m <- m | reg_bit(tok_text(cx, sn.t0))
+            end
+            k <- sibling(cx, k)
+        end
+        ret m
+    end
+    ret 0
+end
+
+proc reg_bit(name: view u8) -> u64
+    r := reg_code_any(name)
+    if r < 0
+        ret 0
+    end
+    c := u64.bits(r)
+    if c == 3
+        ret 8
+    end
+    if c >= 12
+        ret 1 << c
+    end
+    ret 0
+end
+
+proc put_hex_byte(fd: u64, tmp: rw view u8, v: u64)
+    tmp[0] <- hex_digit(v / 16)
+    tmp[1] <- hex_digit(v % 16)
+    put(fd, tmp[..2])
+end
+
+proc hex_digit(d: u64) -> u8
+    if d < 10
+        ret u8.wrap(48 + d)
+    end
+    ret u8.wrap(87 + d)
+end

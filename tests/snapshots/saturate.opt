@@ -1,0 +1,217 @@
+(oir
+  (static 0 removed)
+  (static 1 removed)
+  (static 2 removed)
+  (proc start locals=20 temps=33 entry
+    (bb0
+      %4 = const 0
+      %5 = const 1
+      jump bb1)
+    (bb1 preds bb0
+      jump bb4)
+    (bb4 preds bb1
+      jump bb6)
+    (bb6 preds bb4
+      jump bb8)
+    (bb8 preds bb6
+      jump bb9)
+    (bb9 preds bb8
+      jump bb10)
+    (bb10 preds bb9
+      jump bb12)
+    (bb12 preds bb10
+      jump bb13)
+    (bb13 preds bb12
+      jump bb16)
+    (bb16 preds bb13
+      jump bb18)
+    (bb18 preds bb16
+      ; check.overflow %32 -- removed: proof(constant)
+      ; check.overflow %35 -- removed: proof(constant)
+      ; check.overflow %37 -- removed: proof(constant)
+      jump bb19)
+    (bb19 preds bb18
+      jump bb22)
+    (bb22 preds bb19
+      jump bb24)
+    (bb24 preds bb22
+      jump bb26)
+    (bb26 preds bb24
+      jump bb27)
+    (bb27 preds bb26
+      jump bb28)
+    (bb28 preds bb27
+      jump bb30)
+    (bb30 preds bb28
+      jump bb32)
+    (bb32 preds bb30
+      jump bb33)
+    (bb33 preds bb32
+      jump bb34)
+    (bb34 preds bb33
+      jump bb36)
+    (bb36 preds bb34
+      %63 = const 18446744073709551615
+      %65 = add %63, %5
+      %66 = ovf.of %65
+      branch %66, bb37, bb38)
+    (bb37 preds bb36
+      jump bb38)
+    (bb38 preds bb36 bb37
+      %68 = phi [bb36 %65] [bb37 %63]
+      %70 = cmp.ne %68, %63
+      branch %70, bb39, bb40)
+    (bb39 preds bb38
+      %71 = const 7
+      ret %71)
+    (bb40 preds bb38
+      %74 = sub %4, %5
+      %75 = ovf.of %74
+      branch %75, bb41, bb42)
+    (bb41 preds bb40
+      jump bb42)
+    (bb42 preds bb40 bb41
+      %77 = phi [bb40 %74] [bb41 %4]
+      %79 = cmp.ne %77, %4
+      branch %79, bb43, bb44)
+    (bb43 preds bb42
+      %80 = const 8
+      ret %80)
+    (bb44 preds bb42
+      %81 = const 9223372036854775807
+      %83 = add.s %81, %5
+      %84 = ovf.of %83
+      %86 = cmp.lt.s %83, %4
+      %88 = const 9223372036854775808
+      branch %86, bb45, bb46)
+    (bb45 preds bb44
+      jump bb46)
+    (bb46 preds bb44 bb45
+      %89 = phi [bb44 %88] [bb45 %81]
+      branch %84, bb47, bb48)
+    (bb47 preds bb46
+      jump bb48)
+    (bb48 preds bb46 bb47
+      %90 = phi [bb46 %83] [bb47 %89]
+      %92 = cmp.ne.s %90, %81
+      branch %92, bb49, bb50)
+    (bb49 preds bb48
+      %93 = const 9
+      ret %93)
+    (bb50 preds bb48
+      %96 = sub.s %88, %5
+      %97 = ovf.of %96
+      %99 = cmp.lt.s %96, %4
+      branch %99, bb51, bb52)
+    (bb51 preds bb50
+      jump bb52)
+    (bb52 preds bb50 bb51
+      %102 = phi [bb50 %88] [bb51 %81]
+      branch %97, bb53, bb54)
+    (bb53 preds bb52
+      jump bb54)
+    (bb54 preds bb52 bb53
+      %103 = phi [bb52 %96] [bb53 %102]
+      %105 = cmp.ne.s %103, %88
+      branch %105, bb55, bb56)
+    (bb55 preds bb54
+      %106 = const 10
+      ret %106)
+    (bb56 preds bb54
+      jump bb58)
+    (bb58 preds bb56
+      jump bb60)
+    (bb60 preds bb58
+      jump bb62)
+    (bb62 preds bb60
+      jump bb64)
+    (bb64 preds bb62
+      jump bb65)
+    (bb65 preds bb64
+      jump bb67)
+    (bb67 preds bb65
+      jump bb68)
+    (bb68 preds bb67
+      jump bb70)
+    (bb70 preds bb68
+      jump bb72)
+    (bb72 preds bb70
+      %148 = add %63, %5
+      %149 = ovf.of %148
+      %150 = or %4, %149
+      %152 = cmp.eq %150, %4
+      branch %152, bb73, bb74)
+    (bb73 preds bb72
+      jump bb75)
+    (bb74 preds bb72
+      %153 = const 3
+      jump bb75)
+    (bb75 preds bb73 bb74
+      %154 = phi [bb73 %148] [bb74 %153]
+      %155 = const 3
+      %156 = cmp.ne %154, %155
+      branch %156, bb76, bb77)
+    (bb76 preds bb75
+      %157 = const 14
+      ret %157)
+    (bb77 preds bb75
+      jump bb79)
+    (bb79 preds bb77
+      jump bb80)
+    (bb80 preds bb79
+      jump bb82)
+    (bb82 preds bb80
+      %182 = add.s %81, %81
+      %183 = ovf.of %182
+      %184 = or %4, %183
+      %186 = cmp.eq %184, %4
+      branch %186, bb83, bb84)
+    (bb83 preds bb82
+      jump bb85)
+    (bb84 preds bb82
+      %188 = const 2
+      jump bb85)
+    (bb85 preds bb83 bb84
+      %189 = phi [bb83 %5] [bb84 %188]
+      %190 = const 2
+      %191 = cmp.ne %189, %190
+      branch %191, bb86, bb87)
+    (bb86 preds bb85
+      %192 = const 16
+      ret %192)
+    (bb87 preds bb85
+      jump bb88)
+    (bb88 preds bb87
+      jump bb91)
+    (bb91 preds bb88
+      jump bb93)
+    (bb93 preds bb91
+      jump bb94)
+    (bb94 preds bb93
+      jump bb97)
+    (bb97 preds bb94
+      jump bb99)
+    (bb99 preds bb97
+      ; check.overflow %212 -- removed: proof(constant)
+      jump bb101)
+    (bb101 preds bb99
+      jump bb102)
+    (bb102 preds bb101
+      jump bb103)
+    (bb103 preds bb102
+      jump bb105)
+    (bb105 preds bb103
+      jump bb107)
+    (bb107 preds bb105
+      jump bb108)
+    (bb108 preds bb107
+      jump bb110)
+    (bb110 preds bb108
+      %233 = const 42
+      jump bb111)
+    (bb111 preds bb110
+      jump bb113)
+    (bb113 preds bb111
+      jump bb115)
+    (bb115 preds bb113
+      ret %233)))

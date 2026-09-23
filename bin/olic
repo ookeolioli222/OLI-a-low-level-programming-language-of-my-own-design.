@@ -15,6 +15,10 @@
 #   olic --show-oir FILE.oli     the OIR in blocks, before any pass
 #   olic --show-ssa FILE.oli     after mem2reg
 #   olic --show-opt FILE.oli     after the passes, with every removed check and its proof
+#   olic --explain FILE.oli      per procedure: frame, checks and proofs, zones, calls,
+#                                syscalls, and the cost class of every line
+#   olic --explain-cost FILE.oli the same report (the line costs are its last part)
+#   olic --show-asm FILE.oli     the bytes of every machine x64 block, after fixups
 #
 # Exit status: the compiler's (0 built, 1 diagnostics, 4 a defect in the
 # compiler itself), or 2 for a usage error.
@@ -36,6 +40,8 @@ case "$1" in
     --show-oir)    mode=show_oir;    shift ;;
     --show-ssa)    mode=show_ssa;    shift ;;
     --show-opt|--show-oir=opt) mode=show_opt; shift ;;
+    --explain|--explain-cost) mode=explain; shift ;;
+    --show-asm)    mode=show_asm; shift ;;
     -h|--help)     sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     --*)           die "unknown option $1" ;;
 esac
