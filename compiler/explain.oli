@@ -111,18 +111,6 @@ proc explain_regs(pg: ref Prog, ob: ref Oir, mc: ref Mach, q: u64)
     put(1, "))")
 end
 
-proc ins_line(pg: ref Prog, mi: u64, node: u64) -> u64
-    -- The source line an instruction came from: that of the statement's
-    -- leftmost token, 0 for the instructions no statement produced (the
-    -- parameters, the phis).
-    if node == 0
-        ret 0
-    end
-    cx := mod_ctx(pg, mi)
-    t := ctok(cx, first_tok(pg, mi, node))
-    ret t.line
-end
-
 proc ins_class(ob: ref Oir, i: u64) -> u64
     -- The cost class of one instruction (docs/MACHINE_MODEL.md §3): a
     -- memory access is a move, an address-taken local is frame space, a
@@ -292,7 +280,7 @@ proc explain_proc(pg: ref Prog, ob: rw ref Oir, q: u64, lines: rw view u8)
                 ins := ins_at(ob, i)
                 o := ins.op
                 if o != O_DEAD
-                    ln := ins_line(pg, op.mi, ins.node)
+                    ln : u64 <- ins_line(pg, op.mi, ins.node)
                     if ln < LINE_MAX
                         c := ins_class(ob, i)
                         k := ln * NCLASS + c
@@ -429,7 +417,7 @@ proc clear_lines(pg: ref Prog, ob: ref Oir, op: ref OProc, lines: rw view u8)
     while i < last
         ins := ins_at(ob, i)
         if ins.op != O_DEAD
-            ln := ins_line(pg, op.mi, ins.node)
+            ln : u64 <- ins_line(pg, op.mi, ins.node)
             if ln < LINE_MAX
                 c : u64 <- 0
                 while c < NCLASS

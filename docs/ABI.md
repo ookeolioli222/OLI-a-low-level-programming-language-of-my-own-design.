@@ -124,7 +124,7 @@ built from the initial stack (`[rsp] = argc`, `[rsp+8..] = argv`).
 | segments | `PT_LOAD R+X` (`.text`), `PT_LOAD R` (`.rodata`), `PT_LOAD RW` (`.data` + `.bss`), page-aligned; `PT_GNU_STACK` non-executable |
 | sections | `.rodata`, the code groups in the profile's order (`.text.boot`, `.text`, named ones, `.text.trap`), `.data`, the zero groups (`.bss`, `.bss.boot`, …), `.symtab .strtab .shstrtab` — each with its own header (stage 28) |
 | relocations | none in the executable: all addresses are resolved by the writer (RIP-relative for code/data, absolute 32-bit sign-extended in `code kernel`) |
-| debug | `.symtab` always; DWARF line tables planned (tooling phase) |
+| debug | `.symtab` always; DWARF 4 `.debug_line` (a row per change of source line, one file per module, `a.b` as `a/b.oli`) and `.debug_info`/`.debug_abbrev` (one compile unit — the root module, language `0x8000` — and a subprogram per procedure with its range) in every executable (stage 29); an object file carries none yet (its addresses would need relocations) |
 
 `-- output: object` (stage 24) produces `ET_REL`: the same sections at address
 0 each, no program headers, `.rela.text` with `R_X86_64_64` for every absolute

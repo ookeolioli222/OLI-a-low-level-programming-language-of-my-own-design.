@@ -605,6 +605,18 @@ proc stat_at(ob: ref Oir, i: u64) -> rw ref Stat
     ret Stat.at(t[off..off + Stat.size])
 end
 
+proc ins_line(pg: ref Prog, mi: u64, node: u64) -> u64
+    -- The source line an instruction came from: that of the statement's
+    -- leftmost token, 0 for the instructions no statement produced (the
+    -- parameters, the phis).
+    if node == 0
+        ret 0
+    end
+    cx := mod_ctx(pg, mi)
+    t := ctok(cx, first_tok(pg, mi, node))
+    ret t.line
+end
+
 proc sect_at(ob: ref Oir, i: u64) -> rw ref Sect
     t := ob.sects
     off := i * Sect.size

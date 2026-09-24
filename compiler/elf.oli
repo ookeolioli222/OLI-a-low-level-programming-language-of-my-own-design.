@@ -284,6 +284,309 @@ proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
     end
 end
 
+-- Debug information (DWARF 4, ABI.md §7) ------------------------------------
+-- `.debug_line`: one sequence over the code, a row per change of source
+-- line (from the line table `note_line` kept while lowering), the files
+-- named after the modules (`a.b` is `a/b.oli`). `.debug_info` with
+-- `.debug_abbrev`: one compile unit (the root module, its code range, the
+-- line table) and one subprogram per procedure with its name and range —
+-- what `addr2line`, `objdump --dwarf` and `gdb` need to name a line.
+
+layout Dbg
+    ab : rw view u8
+    nab : u64
+    info : rw view u8
+    ninfo : u64
+    line : rw view u8
+    nline : u64
+end
+
+DBG_MAX := 4194304
+
+proc db_u8(b: rw view u8, off: u64, v: u64) -> u64
+    b[off] <- u8.wrap(v)
+    ret off + 1
+end
+
+proc db_uleb(b: rw view u8, off: u64, v: u64) -> u64
+    o : u64 <- off
+    x : u64 <- v
+    loop
+        grp := x & 127
+        x <- x >> 7
+        if x != 0
+            b[o] <- u8.wrap(grp + 128)
+        else
+            b[o] <- u8.wrap(grp)
+        end
+        o <- o + 1
+        if x == 0
+            break
+        end
+    end
+    ret o
+end
+
+proc db_sleb(b: rw view u8, off: u64, v: u64) -> u64
+    -- A signed LEB128 of the two's-complement word `v`: seven bits a byte,
+    -- the word shifted arithmetically (bit operations only, so the genesis
+    -- compiler's signed division never enters), until what is left is all
+    -- zeros under a clear sign bit or all ones under a set one.
+    o : u64 <- off
+    x : u64 <- v
+    loop
+        grp := x & 127
+        neg := (x >> 63) & 1
+        x <- x >> 7
+        if neg == 1
+            x <- x | 18302628885633695744
+        end
+        more : u64 <- 1
+        if x == 0
+            if grp < 64
+                more <- 0
+            end
+        end
+        if x == 18446744073709551615
+            if grp >= 64
+                more <- 0
+            end
+        end
+        if more == 1
+            b[o] <- u8.wrap(grp + 128)
+        else
+            b[o] <- u8.wrap(grp)
+        end
+        o <- o + 1
+        if more == 0
+            break
+        end
+    end
+    ret o
+end
+
+proc db_str(b: rw view u8, off: u64, s: view u8) -> u64
+    i : u64 <- 0
+    while i < s.len
+        b[off + i] <- s[i]
+        i <- i + 1
+    end
+    b[off + s.len] <- 0
+    ret off + s.len + 1
+end
+
+proc db_modfile(pg: ref Prog, b: rw view u8, off: u64, mi: u64) -> u64
+    -- `a.b` as `a/b.oli`, terminated.
+    cx := mod_ctx(pg, mi)
+    root := node_at(cx, cx.root)
+    nm := mod_text(cx, root.t0, root.t1)
+    o : u64 <- off
+    i : u64 <- 0
+    while i < nm.len
+        if nm[i] == 46
+            b[o] <- 47
+        else
+            b[o] <- nm[i]
+        end
+        o <- o + 1
+        i <- i + 1
+    end
+    ret db_str(b, o, ".oli")
+end
+
+proc dbg_abbrev(d: rw ref Dbg)
+    b := d.ab
+    o : u64 <- 0
+    -- 1: compile_unit, with children: producer, language, name, low_pc,
+    -- high_pc (a length), stmt_list.
+    o <- db_uleb(b, o, 1)
+    o <- db_uleb(b, o, 17)
+    o <- db_u8(b, o, 1)
+    o <- db_uleb(b, o, 37)
+    o <- db_uleb(b, o, 8)
+    o <- db_uleb(b, o, 19)
+    o <- db_uleb(b, o, 5)
+    o <- db_uleb(b, o, 3)
+    o <- db_uleb(b, o, 8)
+    o <- db_uleb(b, o, 17)
+    o <- db_uleb(b, o, 1)
+    o <- db_uleb(b, o, 18)
+    o <- db_uleb(b, o, 7)
+    o <- db_uleb(b, o, 16)
+    o <- db_uleb(b, o, 23)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 0)
+    -- 2: subprogram, no children: name, low_pc, high_pc.
+    o <- db_uleb(b, o, 2)
+    o <- db_uleb(b, o, 46)
+    o <- db_u8(b, o, 0)
+    o <- db_uleb(b, o, 3)
+    o <- db_uleb(b, o, 8)
+    o <- db_uleb(b, o, 17)
+    o <- db_uleb(b, o, 1)
+    o <- db_uleb(b, o, 18)
+    o <- db_uleb(b, o, 7)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 0)
+    d.nab <- o
+end
+
+proc dbg_info(pg: ref Prog, ob: ref Oir, d: rw ref Dbg, codeaddr: u64)
+    b := d.info
+    o : u64 <- 11
+    o <- db_uleb(b, o, 1)
+    o <- db_str(b, o, "olic")
+    put_u16(b, o, 32768)
+    o <- o + 2
+    o <- db_modfile(pg, b, o, 0)
+    put_u64v(b, o, codeaddr)
+    o <- o + 8
+    put_u64v(b, o, ob.ncode)
+    o <- o + 8
+    put_u32(b, o, 0)
+    o <- o + 4
+    q : u64 <- 0
+    while q < ob.nproc
+        op := oproc_at(ob, q)
+        if op.isextern == 0
+            if o + 64 + STRTAB_MAX / 64 < DBG_MAX
+                v := proc_at(pg, op.pi)
+                cx := mod_ctx(pg, v.mod)
+                nd := node_at(cx, v.node)
+                root := node_at(cx, cx.root)
+                o <- db_uleb(b, o, 2)
+                o <- db_modpre(b, o, mod_text(cx, root.t0, root.t1))
+                o <- db_str(b, o, tok_text(cx, nd.t0))
+                put_u64v(b, o, codeaddr + op.codepos)
+                o <- o + 8
+                put_u64v(b, o, op.codeend - op.codepos)
+                o <- o + 8
+            end
+        end
+        q <- q + 1
+    end
+    o <- db_u8(b, o, 0)
+    -- The unit header: length (after itself), version 4, abbrev offset,
+    -- address size.
+    put_u32(b, 0, o - 4)
+    put_u16(b, 4, 4)
+    put_u32(b, 6, 0)
+    put_u8(b, 10, 8)
+    d.ninfo <- o
+end
+
+proc db_modpre(b: rw view u8, off: u64, m: view u8) -> u64
+    -- `module.` in front of a name; the offset after the dot.
+    o : u64 <- off
+    i : u64 <- 0
+    while i < m.len
+        b[o] <- m[i]
+        o <- o + 1
+        i <- i + 1
+    end
+    b[o] <- 46
+    ret o + 1
+end
+
+proc dbg_line(pg: ref Prog, ob: ref Oir, mc: ref Mach, d: rw ref Dbg, codeaddr: u64)
+    b := d.line
+    o : u64 <- 10
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 251)
+    o <- db_u8(b, o, 14)
+    o <- db_u8(b, o, 13)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 0)
+    o <- db_u8(b, o, 1)
+    o <- db_u8(b, o, 0)
+    mi : u64 <- 0
+    while mi < pg.nmod
+        o <- db_modfile(pg, b, o, mi)
+        o <- db_u8(b, o, 0)
+        o <- db_u8(b, o, 0)
+        o <- db_u8(b, o, 0)
+        mi <- mi + 1
+    end
+    o <- db_u8(b, o, 0)
+    put_u32(b, 6, o - 10)
+    -- The program: the code's address, then a row per record.
+    o <- db_u8(b, o, 0)
+    o <- db_uleb(b, o, 9)
+    o <- db_u8(b, o, 2)
+    put_u64v(b, o, codeaddr)
+    o <- o + 8
+    pos : u64 <- 0
+    line : u64 <- 1
+    file : u64 <- 1
+    k : u64 <- 0
+    while k < mc.nline
+        if o + 64 >= DBG_MAX
+            break
+        end
+        rpos := cell_get(mc.lines, k * 3)
+        rline := cell_get(mc.lines, k * 3 + 1)
+        rfile := cell_get(mc.lines, k * 3 + 2) + 1
+        if rfile != file
+            o <- db_u8(b, o, 4)
+            o <- db_uleb(b, o, rfile)
+            file <- rfile
+        end
+        if rpos != pos
+            o <- db_u8(b, o, 2)
+            o <- db_uleb(b, o, rpos - pos)
+            pos <- rpos
+        end
+        if rline != line
+            o <- db_u8(b, o, 3)
+            -- The delta as a two's-complement word, without a wrapping
+            -- subtraction the genesis compiler does not have.
+            delta : u64 <- 0
+            if rline >= line
+                delta <- rline - line
+            else
+                delta <- 18446744073709551615 - (line - rline - 1)
+            end
+            o <- db_sleb(b, o, delta)
+            line <- rline
+        end
+        o <- db_u8(b, o, 1)
+        k <- k + 1
+    end
+    if ob.ncode > pos
+        o <- db_u8(b, o, 2)
+        o <- db_uleb(b, o, ob.ncode - pos)
+    end
+    o <- db_u8(b, o, 0)
+    o <- db_uleb(b, o, 1)
+    o <- db_u8(b, o, 1)
+    put_u32(b, 0, o - 4)
+    put_u16(b, 4, 4)
+    d.nline <- o
+end
+
+proc dbg_build(pg: ref Prog, ob: ref Oir, mc: ref Mach, z: zone, codeaddr: u64) -> rw ref Dbg
+    d := z.make(Dbg)
+    d.ab <- z.bytes(256)
+    d.info <- z.bytes(DBG_MAX)
+    d.line <- z.bytes(DBG_MAX)
+    dbg_abbrev(d)
+    dbg_info(pg, ob, d, codeaddr)
+    dbg_line(pg, ob, mc, d, codeaddr)
+    ret d
+end
+
 proc round8(n: u64) -> u64
     ret (n + 7) / 8 * 8
 end
@@ -378,7 +681,8 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
         g <- g + 1
     end
     symsec := w.datasec + 1 + nbss
-    nsect := symsec + 3
+    nsect := symsec + 6
+    dbg := dbg_build(pg, ob, mc, z, ob.base + w.textoff)
     -- The local symbols first, as ELF orders them, then the global ones.
     sym_procs(pg, ob, w, 0)
     sym_trap(ob, mc, w)
@@ -416,6 +720,12 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     n1 <- shs_name(shs, n1, ".strtab")
     nshs := n1
     n1 <- shs_name(shs, n1, ".shstrtab")
+    nabb := n1
+    n1 <- shs_name(shs, n1, ".debug_abbrev")
+    ninf := n1
+    n1 <- shs_name(shs, n1, ".debug_info")
+    nlin := n1
+    n1 <- shs_name(shs, n1, ".debug_line")
     shslen := n1
     -- The tables after the image, each on an eight-byte boundary.
     imgend : u64 <- total
@@ -425,7 +735,10 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     symoff := round8(imgend)
     stroff := symoff + w.nsym * SYM_SIZE
     shstroff := stroff + w.nstr
-    shoff := round8(shstroff + shslen)
+    aboff := shstroff + shslen
+    infoff := aboff + dbg.nab
+    linoff := infoff + dbg.ninfo
+    shoff := round8(linoff + dbg.nline)
     hdr := z.bytes(hs)
     elf_header(hdr, epoint, total, ob.base)
     put_u64v(hdr, 40, shoff)
@@ -458,8 +771,14 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     sb := w.strtab
     put(1, sb[..w.nstr])
     put(1, shs[..shslen])
-    if shoff > shstroff + shslen
-        pad3 := z.bytes(shoff - shstroff - shslen)
+    dab := dbg.ab
+    put(1, dab[..dbg.nab])
+    dinf := dbg.info
+    put(1, dinf[..dbg.ninfo])
+    dlin := dbg.line
+    put(1, dlin[..dbg.nline])
+    if shoff > linoff + dbg.nline
+        pad3 := z.bytes(shoff - linoff - dbg.nline)
         put(1, pad3)
     end
     sh := z.bytes(nsect * SHDR_SIZE)
@@ -509,6 +828,18 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     shdr_place(sh, symsec + 2, 0, shstroff, shslen)
     shdr_link(sh, symsec + 2, 0, 0)
     shdr_align(sh, symsec + 2, 1, 0)
+    shdr_kind(sh, symsec + 3, nabb, 1, 0)
+    shdr_place(sh, symsec + 3, 0, aboff, dbg.nab)
+    shdr_link(sh, symsec + 3, 0, 0)
+    shdr_align(sh, symsec + 3, 1, 0)
+    shdr_kind(sh, symsec + 4, ninf, 1, 0)
+    shdr_place(sh, symsec + 4, 0, infoff, dbg.ninfo)
+    shdr_link(sh, symsec + 4, 0, 0)
+    shdr_align(sh, symsec + 4, 1, 0)
+    shdr_kind(sh, symsec + 5, nlin, 1, 0)
+    shdr_place(sh, symsec + 5, 0, linoff, dbg.nline)
+    shdr_link(sh, symsec + 5, 0, 0)
+    shdr_align(sh, symsec + 5, 1, 0)
     put(1, sh)
 end
 

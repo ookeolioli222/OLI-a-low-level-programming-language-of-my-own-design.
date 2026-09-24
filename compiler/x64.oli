@@ -32,6 +32,9 @@ module olic.x64
 -- follow the blocks.
 LBL_MAX := 1048576
 FIX_MAX := 2097152
+-- The line table (DWARF, `compiler/elf.oli`): one record per change of
+-- source line along the code — position, line, module.
+LINE_REC_MAX := 262144
 BASE_ADDR := 4194304
 
 R_AX := 0
@@ -90,6 +93,10 @@ layout Mach
     curnever : u64
     curint : u64
     objmode : u64
+    lines : rw view u8
+    nline : u64
+    lastline : u64
+    lastmi : u64
 end
 
 proc mach_new(z: zone) -> rw ref Mach
@@ -123,6 +130,10 @@ proc mach_new(z: zone) -> rw ref Mach
     mc.curnever <- 0
     mc.curint <- 0
     mc.objmode <- 0
+    mc.lines <- z.bytes(LINE_REC_MAX * 3 * Cell.size)
+    mc.nline <- 0
+    mc.lastline <- 0
+    mc.lastmi <- 0
     ret mc
 end
 
@@ -2215,7 +2226,9 @@ proc lower_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
     mc.curnone <- op.nocalls
     mc.curnever <- op.isnever
     mc.curint <- op.isint
+    mc.lastline <- 0
     op.codepos <- ob.ncode
+    note_proc_line(pg, ob, mc, op)
     if op.isentry == 1
         mc.entrypos <- ob.ncode
     end
@@ -2261,6 +2274,48 @@ proc lower_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
     patch32(ob, fpos, frame_bytes(mc, op))
 end
 
+proc note_line(pg: ref Prog, ob: ref Oir, mc: rw ref Mach, i: u64)
+    -- The line table: where in the code a new source line begins.
+    ins := ins_at(ob, i)
+    op := oproc_at(ob, mc.curq)
+    ln := ins_line(pg, op.mi, ins.node)
+    if ln == 0
+        ret
+    end
+    if ln == mc.lastline
+        if op.mi == mc.lastmi
+            ret
+        end
+    end
+    if mc.nline >= LINE_REC_MAX
+        ret
+    end
+    cell_set(mc.lines, mc.nline * 3, ob.ncode)
+    cell_set(mc.lines, mc.nline * 3 + 1, ln)
+    cell_set(mc.lines, mc.nline * 3 + 2, op.mi)
+    mc.nline <- mc.nline + 1
+    mc.lastline <- ln
+    mc.lastmi <- op.mi
+end
+
+proc note_proc_line(pg: ref Prog, ob: ref Oir, mc: rw ref Mach, op: ref OProc)
+    -- The first row of a procedure: its prologue belongs to the line of
+    -- its declaration, so that a debugger finds the procedure's start.
+    v := proc_at(pg, op.pi)
+    cx := mod_ctx(pg, v.mod)
+    nd := node_at(cx, v.node)
+    t := ctok(cx, nd.t0)
+    if mc.nline >= LINE_REC_MAX
+        ret
+    end
+    cell_set(mc.lines, mc.nline * 3, ob.ncode)
+    cell_set(mc.lines, mc.nline * 3 + 1, t.line)
+    cell_set(mc.lines, mc.nline * 3 + 2, v.mod)
+    mc.nline <- mc.nline + 1
+    mc.lastline <- t.line
+    mc.lastmi <- v.mod
+end
+
 proc lower_blk(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, b: u64)
     bk := blk_at(ob, b)
     l := lbl_at(mc, b)
@@ -2271,6 +2326,7 @@ proc lower_blk(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, b: u64)
         ins := ins_at(ob, i)
         if ins.op != O_PHI
             if ins.op != O_DEAD
+                note_line(pg, ob, mc, i)
                 lower_ins(pg, ob, mc, i)
             end
         end

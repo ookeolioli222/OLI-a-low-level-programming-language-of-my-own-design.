@@ -1184,12 +1184,36 @@ constant in `.rodata`).
   instead of `-- load:`, and its image lists `.text.boot .text .text.trap
   .data .bss.boot .bss`.
 
+## Implemented in back-end stage 29 (2026-09-24): DWARF debug information
+
+- **Line tables.** While lowering, `note_line` records where in the code
+  a new source line begins (position, line, module), and `note_proc_line`
+  a row for every procedure's first byte at the line of its declaration,
+  so a debugger finds the procedure's start. `compiler/elf.oli` writes
+  them as a DWARF 4 `.debug_line`: one sequence over the code, the files
+  named after the modules (`core.x64.paging` is `core/x64/paging.oli`, the
+  root module `kernel.oli`), standard opcodes only.
+- **A compile unit and its subprograms.** `.debug_info` with
+  `.debug_abbrev`: one `DW_TAG_compile_unit` (producer `olic`, language
+  `0x8000` — the user-defined range, since DWARF has no code for Oli-- —
+  the root module's name, the code range, the line table) and one
+  `DW_TAG_subprogram` per procedure with its `module.name` and range.
+  Three non-loaded sections after `.shstrtab`; nothing loaded changes.
+  An object file carries no DWARF yet (its addresses would need
+  relocations).
+- The harness decodes `hello.elf`'s line table with `objdump --dwarf`,
+  resolves the entry with `addr2line` to the line of `proc start`, asks
+  `gdb` for `info line kernel.main` and expects the line of `proc main`,
+  finds `core/x64/paging.oli` among the kernel's files, and requires
+  `readelf --debug-dump=line` to raise nothing. `ins_line` moved from
+  `compiler/explain.oli` into `compiler/oir.oli`, where `olic` has it.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 27,516 lines) into
+compiles its own source (`compiler/`, seventeen modules, 27,903 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,083,512 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,218,056 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

@@ -1343,7 +1343,7 @@ echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all fou
 # Port places and the interrupt flag (design 0015): each form of
 # tests/run/hw.oli is exactly one instruction in the image, at its width,
 # found by binutils; a read is zero-extended to the canonical image.
-objdump -D -b binary -m i386:x86-64 --no-show-raw-insn build/hw.elf > build/hw.dis
+objdump -d --no-show-raw-insn build/hw.elf > build/hw.dis
 for pin in 'out    %al,(%dx)=3' 'out    %ax,(%dx)=2' 'out    %eax,(%dx)=1' 'in     (%dx),%al=2' 'in     (%dx),%ax=2' 'in     (%dx),%eax=1' 'cli$=1' 'sti$=1' 'movzwl %ax,%eax=2' 'mov    %rax,%cr3=1' 'mov    %cr3,%rax=1' 'mov    %cr0,%rax=1' 'mov    %rax,%cr0=1' 'mov    %cr2,%rax=1' 'mov    %cr4,%rax=1' 'mov    %rax,%cr4=1'; do
     pat=${pin%=*}; want=${pin##*=}
     [ "$(grep -c "$pat" build/hw.dis)" = "$want" ] || fail "hw: [$pat] must be $want times in hw.elf, is $(grep -c "$pat" build/hw.dis)"
@@ -1393,6 +1393,16 @@ nm build/wide.elf | grep -q ' t wide.relay$' || fail "elf: every procedure must 
 readelf -a build/statics.elf > build/statics.readelf 2> build/readelf.err || fail "elf: readelf -a rejects statics.elf"
 [ ! -s build/readelf.err ] || fail "elf: readelf -a warns about statics.elf: $(head -1 build/readelf.err)"
 echo "ok: every image carries section headers and a symbol table (module.name, local unless pub, statics in .data/.bss/.rodata, olic.trap): nm, readelf -S and objdump -d read it, and readelf -a has no complaint"
+# Debug information (ABI.md 7): DWARF 4 line tables and a compile unit with
+# a subprogram per procedure - what addr2line, objdump --dwarf and gdb read.
+[ "$(objdump --dwarf=decodedline build/hello.elf | grep -c '^hello.oli')" -ge 4 ] || fail "dwarf: hello.elf must carry line rows for hello.oli"
+hstart=$(grep -n '^proc start' ../examples/hello.oli | cut -d: -f1)
+[ "$(addr2line -e build/hello.elf 0x400084)" = "hello.oli:$hstart" ] || fail "dwarf: the entry of hello.elf must resolve to hello.oli:$hstart, got $(addr2line -e build/hello.elf 0x400084)"
+[ "$(readelf --debug-dump=line build/hello.elf 2>&1 | grep -ci 'warn\|error')" = 0 ] || fail "dwarf: readelf complains about hello.elf's line table"
+kmain=$(grep -n '^proc main' ../examples/kernel.oli | cut -d: -f1)
+gdb -batch -ex 'info line kernel.main' build/kernel.elf 2>&1 | grep -q "Line $kmain of \"kernel.oli\" starts at address" || fail "dwarf: gdb must place kernel.main on kernel.oli:$kmain: $(gdb -batch -ex 'info line kernel.main' build/kernel.elf 2>&1 | tail -1)"
+objdump --dwarf=decodedline build/kernel.elf | grep -q '^core/x64/paging.oli' || fail "dwarf: the lines of the library module core.x64.paging must be in the kernel's line table"
+echo "ok: DWARF 4 line tables and a compile unit with a subprogram per procedure: objdump --dwarf decodes them, addr2line names the entry's line, gdb places kernel.main on its line, library modules are files of their own"
 # The self-test of arith.oli is decided at compile time, and the messages of
 # the checks that were proved away are not in its image.
 arithsz=$(readelf -lW build/arith.elf | awk '$1=="LOAD"{print $5; exit}')
@@ -1434,7 +1444,7 @@ echo "ok: a freestanding program runs from its own entry with no frame, installs
 # it says, its code sections in its order and on its alignment, its zero
 # statics grouped by section - and the section headers say so.
 readelf -lW build/fs_profile.elf | grep -q 'LOAD .*0x0000000000500000 0x0000000000500000' || fail "profile: the image must be loaded at the profile's load_address 0x500000"
-[ "$(readelf -SW build/fs_profile.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text.init .text .text.trap .data .bss.stack .bss .symtab .strtab .shstrtab " ] || fail "profile: the sections must follow the profile's order: $(readelf -SW build/fs_profile.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
+[ "$(readelf -SW build/fs_profile.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text.init .text .text.trap .data .bss.stack .bss .symtab .strtab .shstrtab .debug_abbrev .debug_info .debug_line " ] || fail "profile: the sections must follow the profile's order: $(readelf -SW build/fs_profile.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
 for s in .text.boot .text.init .text .text.trap; do
     a=$(readelf -SW build/fs_profile.elf | grep -oP "\] $s\s+PROGBITS\s+[0-9a-f]{16}" | awk '{print $NF}')
     [ $(( 0x$a % 64 )) = 0 ] || fail "profile: $s at 0x$a is not on the profile's 64-byte section alignment"
@@ -1443,7 +1453,6 @@ objdump -t build/fs_profile.elf | grep -q '\.text\.init.*profile\.init_a$' || fa
 objdump -t build/fs_profile.elf | grep -q '\.bss\.stack.*profile\.stack$' || fail "profile: the stack must lie in .bss.stack"
 readelf -a build/fs_profile.elf > /dev/null 2> build/readelf.err || fail "profile: readelf -a rejects fs_profile.elf"
 [ ! -s build/readelf.err ] || fail "profile: readelf -a warns: $(head -1 build/readelf.err)"
-[ "$(readelf -SW build/kernel.elf 2>/dev/null | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text .text.trap .data .bss.boot .bss .symtab .strtab .shstrtab " ] || true
 echo "ok: a target profile lays the image out - load_address, the order of sections, align_sections - and every code and zero-static section has its own header"
 
 # The reference program of the language documents runs: examples/packet_demo.oli
@@ -1475,7 +1484,7 @@ readelf -l build/kernel.elf | grep -q 'LOAD .*0x0000000000100000 0x0000000000100
     || [ "$(od -An -tx1 -j176 -N24 build/kernel.elf | tr -d ' \n')" = "d65052e8000000001800000012afad170000000008000000" ] \
     || fail "kernel: the Multiboot2 header is not at offset 176: $(od -An -tx1 -j176 -N24 build/kernel.elf | tr -d '\n')"
 ( cd .. && genesis/build/show_asm < examples/kernel.oli > genesis/build/kernel.asm 2>/dev/null ) || fail "kernel: show_asm"
-objdump -D -b binary -m i386:x86-64 --no-show-raw-insn build/kernel.elf > build/kernel.dis
+objdump -d --no-show-raw-insn build/kernel.elf > build/kernel.dis
 [ "$(grep -c 'out    %al,(%dx)' build/kernel.dis)" -ge 15 ] || fail "kernel: COM1, the two PICs and the PIT are written through port places, one out dx, al each ($(grep -c 'out    %al,(%dx)' build/kernel.dis) found)"
 [ "$(grep -c 'sti$' build/kernel.dis)" = 1 ] || fail "kernel: cpu.interrupts(on) must be one sti"
 [ "$(grep -c 'iretq' build/kernel.dis)" = 2 ] || fail "kernel: the int 3 and timer handlers must both end in iretq"
@@ -1489,7 +1498,7 @@ grep -q '0f 01 1c 25' build/kernel.asm || fail "kernel: the descriptor table mus
 [ "$(grep -c 'hw.store port.u8' build/kernel.oir)" = 15 ] || fail "kernel: fifteen port writes - COM1 setup and byte, ICW1-4 and the masks of two PICs, the PIT's mode and divisor, the EOI"
 [ "$(grep -c 'hw.store arch.x64.cr3' build/kernel.oir)" = 1 ] || fail "kernel: the page tables go into cr3 through a hardware place"
 nm build/kernel.elf | grep -q '^00000000001000b0 R kernel.header$' || fail "kernel: the Multiboot2 header must be the .rodata symbol kernel.header at 0x1000b0"
-[ "$(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text .text.trap .data .bss.boot .bss .symtab .strtab .shstrtab " ] || fail "kernel: the sections must follow examples/x86_64-kernel.oli-target: $(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
+[ "$(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text .text.trap .data .bss.boot .bss .symtab .strtab .shstrtab .debug_abbrev .debug_info .debug_line " ] || fail "kernel: the sections must follow examples/x86_64-kernel.oli-target: $(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
 nm build/kernel.elf | grep -q ' T core.x64.paging.identity_2m$' || fail "kernel: the pub procedures of core.x64.paging must be global symbols"
 grep -q 'call core.x64.paging.identity_2m\|= call ' build/kernel.oir || fail "kernel: the page directory must be filled by core.x64.paging"
 [ "$(od -An -tx1 -v build/kernel.elf | tr -d '\n' | grep -o '48 cf' | wc -l)" = 2 ] || fail "kernel: exactly two calls-interrupt handlers end in iretq"
