@@ -268,6 +268,8 @@ layout OProc
     isnever : u64
     boot : u64
     isint : u64
+    isextern : u64
+    symidx : u64
 end
 
 layout Stat
@@ -5047,8 +5049,41 @@ proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
     end
 end
 
+proc gen_extern_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
+    -- An `extern proc`: an `OProc` with no instructions and no blocks, so
+    -- that procedure and `OProc` indices stay one; the object file carries
+    -- it as an undefined symbol and every call to it as a relocation.
+    v := proc_at(pg, pi)
+    op := oproc_at(ob, ob.nproc)
+    op.pi <- pi
+    op.mi <- v.mod
+    op.first <- ob.nins
+    op.n <- 0
+    op.nval <- 0
+    op.nloc <- 0
+    op.nwords <- 0
+    op.ntmp <- 0
+    op.isentry <- 0
+    op.codepos <- 0
+    op.codeend <- 0
+    op.nphi <- 0
+    op.nsave <- 0
+    op.nocalls <- 0
+    op.isint <- 0
+    op.isnever <- 0
+    op.boot <- 0
+    op.isextern <- 1
+    op.symidx <- 0
+    build_blocks(ob, ob.nproc)
+    ob.nproc <- ob.nproc + 1
+end
+
 proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     -- No statement yet: the parameters belong to no line of the last one.
+    if proc_is_extern(pg, pi) == 1
+        gen_extern_proc(pg, ob, pi)
+        ret
+    end
     ob.curnode <- 0
     v := proc_at(pg, pi)
     mi := v.mod
@@ -5066,6 +5101,8 @@ proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     op.isentry <- 0
     op.codepos <- 0
     op.codeend <- 0
+    op.isextern <- 0
+    op.symidx <- 0
     op.bfirst <- 0
     op.nblk <- 0
     op.nphi <- 0

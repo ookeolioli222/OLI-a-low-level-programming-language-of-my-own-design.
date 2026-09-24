@@ -1,0 +1,16 @@
+-- output: object
+module oli_side
+-- Linked with C (tests/c/c_side.c) by the system linker: `oli_add`, exported
+-- under that name, is called from C's `main`; it writes a line through the
+-- C library's `write` and answers through C's `c_double` — both directions
+-- of the SysV ABI (ABI.md §6), checked by running the linked program.
+
+extern proc c_double(x : s64) -> s64
+extern proc write(fd : s32, buf : addr u8, n : uword) -> word
+
+pub proc oli_add(a : s64, b : s64) -> s64
+    export "oli_add"
+    s := "oli: adding\n"
+    write(1, s.addr, s.len)
+    ret c_double(a + b)
+end

@@ -39,12 +39,19 @@ proc start -> s32
             ret 4
         end
         if pg.entrynode == 0
-            put(2, "olic: no entry procedure\n")
-            ret 1
+            if pg.objmode == 0
+                put(2, "olic: no entry procedure\n")
+                ret 1
+            end
         end
         mc := mach_new(z)
         lower_all(pg, ob, mc, ob.base + hdr_size(ob))
-        write_elf(pg, ob, mc, z)
+        if pg.objmode == 1
+            -- `-- output: object`: a relocatable file for the linker.
+            write_object(pg, ob, mc, z)
+        else
+            write_elf(pg, ob, mc, z)
+        end
         ret 0
     end
 end

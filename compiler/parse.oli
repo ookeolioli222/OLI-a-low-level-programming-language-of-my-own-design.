@@ -9,6 +9,8 @@ KW_MODULE := 1
 KW_IMPORT := 2
 KW_PUB := 3
 KW_PROC := 4
+-- `extern proc` (ABI.md §6): a procedure the linker resolves.
+KW_EXTERN := 58
 KW_PERMIT := 5
 KW_CALLS := 6
 KW_SECTION := 7
@@ -2332,6 +2334,10 @@ proc p_proc(cx: ref Ctx, ispub: u64) -> u64
     end
     end_line(cx)
     take_docs(cx, n)
+    if ispub == 2
+        -- `extern proc`: the signature alone; no clauses, no body, no `end`.
+        ret n
+    end
     seen : u64 <- 0
     loop
         skip_nl(cx)
@@ -2492,6 +2498,16 @@ proc p_const(cx: ref Ctx) -> u64
 end
 
 proc p_decl(cx: rw ref Ctx, mod: u64)
+    if at_kw(cx, KW_EXTERN)
+        adv(cx)
+        if at_kw(cx, KW_PROC)
+            add_kid(cx, mod, p_proc(cx, 2))
+            cx.ndecl <- cx.ndecl + 1
+            ret
+        end
+        diag_at(cx, 11, tpos(cx))
+        ret
+    end
     if at_kw(cx, KW_PUB)
         adv(cx)
         if at_kw(cx, KW_PROC)

@@ -1423,7 +1423,30 @@ proc check_items(pg: ref Prog)
     q : u64 <- 0
     while q < pg.nproc
         v := proc_at(pg, q)
-        check_proc(pg, v.mod, v.node)
+        if proc_is_extern(pg, q) == 1
+            check_extern(pg, v.mod, v.node)
+        else
+            check_proc(pg, v.mod, v.node)
+        end
         q <- q + 1
+    end
+end
+
+proc check_extern(pg: rw ref Prog, mi: u64, node: u64)
+    -- An `extern proc`: its parameter types, and the object output that
+    -- alone can carry an unresolved symbol (`E0900` in an executable).
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, node)
+    if pg.objmode == 0
+        sdiag(pg, mi, 900, nd.t0)
+    end
+    params := kid1(cx, node)
+    p : u64 <- kid1(cx, params)
+    while p != 0
+        check_type(pg, mi, kid1(cx, p))
+        p <- sibling(cx, p)
+    end
+    if nd.val == 1
+        check_type(pg, mi, sibling(cx, params))
     end
 end

@@ -63,8 +63,11 @@ proc print_explain(pg: ref Prog, ob: rw ref Oir, mc: ref Mach, lines: rw view u8
     put(1, "(explain")
     q : u64 <- 0
     while q < ob.nproc
-        explain_proc(pg, ob, q, lines)
-        explain_regs(pg, ob, mc, q)
+        opx := oproc_at(ob, q)
+        if opx.isextern == 0
+            explain_proc(pg, ob, q, lines)
+            explain_regs(pg, ob, mc, q)
+        end
         q <- q + 1
     end
     put(1, ")\n")

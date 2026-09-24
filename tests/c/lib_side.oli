@@ -1,0 +1,9 @@
+-- output: object
+module lib_side
+-- One half of a program linked from two Oli-- objects by `ld` alone, with
+-- no C runtime: `square`, exported under that name for the other half.
+
+pub proc square(x : u64) -> u64
+    export "square"
+    ret x * x
+end

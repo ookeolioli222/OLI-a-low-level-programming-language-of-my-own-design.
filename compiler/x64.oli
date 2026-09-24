@@ -89,6 +89,7 @@ layout Mach
     curnone : u64
     curnever : u64
     curint : u64
+    objmode : u64
 end
 
 proc mach_new(z: zone) -> rw ref Mach
@@ -121,6 +122,7 @@ proc mach_new(z: zone) -> rw ref Mach
     mc.curnone <- 0
     mc.curnever <- 0
     mc.curint <- 0
+    mc.objmode <- 0
     ret mc
 end
 
@@ -1573,6 +1575,13 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
             cb(ob, 8)
         end
         load_args(ob, mc, i, ins.b, 0)
+        opc := oproc_at(ob, ins.a)
+        if opc.isextern == 1
+            -- A call the linker resolves: `al` says how many vector
+            -- registers a variadic callee was given — none.
+            cb(ob, 49)
+            cb(ob, 192)
+        end
         cb(ob, 232)
         add_fix(mc, ob.ncode, 0, ins.a)
         c32(ob, 0)
@@ -2056,6 +2065,14 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
     i : u64 <- 0
     while i < mc.nfix
         f := fix_at(mc, i)
+        if mc.objmode == 1
+            if abs_kind(f.kind) == 1
+                -- An object file: an absolute address is a relocation the
+                -- linker fills (`compiler/elf.oli`), the field stays zero.
+                i <- i + 1
+                continue
+            end
+        end
         if f.kind == 2
             -- The absolute address of a read-only static, in an imm64.
             patch64(ob, f.pos, database + f.target)
@@ -2079,6 +2096,11 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
             target : u64 <- 0
             if f.kind == 0
                 op := oproc_at(ob, f.target)
+                if op.isextern == 1
+                    -- A call to an extern procedure: a PLT32 relocation.
+                    i <- i + 1
+                    continue
+                end
                 target <- op.codepos
             elif f.kind == 3
                 target <- mc.trappos
@@ -2095,7 +2117,32 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
     end
 end
 
+proc abs_kind(k: u64) -> word
+    -- The fixes that are absolute addresses: read-only statics (2, 8), the
+    -- writable segment (4, 6, 7) and procedures (5).
+    if k == 2
+        ret 1
+    end
+    if k == 4
+        ret 1
+    end
+    if k == 5
+        ret 1
+    end
+    if k == 6
+        ret 1
+    end
+    if k == 7
+        ret 1
+    end
+    if k == 8
+        ret 1
+    end
+    ret 0
+end
+
 proc lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
+    mc.objmode <- pg.objmode
     i : u64 <- 0
     while i < LBL_MAX
         l := lbl_at(mc, i)
@@ -2115,8 +2162,10 @@ proc lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
         while q < ob.nproc
             opq := oproc_at(ob, q)
             if opq.boot == 1 - pass
-                lower_proc(pg, ob, mc, q)
-                opq.codeend <- ob.ncode
+                if opq.isextern == 0
+                    lower_proc(pg, ob, mc, q)
+                    opq.codeend <- ob.ncode
+                end
             end
             q <- q + 1
         end

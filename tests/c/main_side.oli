@@ -1,0 +1,13 @@
+-- output: object
+module main_side
+-- The other half: the entry procedure (`_start` in the object) calling
+-- `square` from tests/c/lib_side.oli through `extern`; exit status 42.
+
+extern proc square(x : u64) -> u64
+
+proc start -> s32
+    entry
+    if square(6) != 36 then ret 1
+    if square(0) != 0 then ret 2
+    ret 42
+end

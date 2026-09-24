@@ -1451,6 +1451,36 @@ grep -q 'call core.x64.paging.identity_2m\|= call ' build/kernel.oir || fail "ke
 [ "$(grep -c 'syscalls=0' build/kernel.explain)" = "$(grep -c '(proc ' build/kernel.explain)" ] || fail "kernel: a procedure of the kernel makes a system call"
 echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2 header at offset 176, COM1, the PICs and the PIT written through port places, cpuid, lidt and int 3 in its machine blocks, two calls-interrupt handlers ending in iretq, sti, and no system call anywhere (run it: qemu-system-x86_64 -kernel kernel.elf -serial stdio)"
 
+# Object files (ABI.md 6, `-- output: object`): a relocatable ELF with the
+# same sections at address 0, .rela.text for every absolute address and
+# every extern call, an undefined global symbol per `extern proc`, and
+# `_start` for an entry procedure. Two Oli-- objects link with ld alone and
+# run; the C half of tests/c links with cc, calls into Oli-- and is called
+# back, and prints what tests/c/expected.out says.
+for n in oli_side lib_side main_side; do
+    ( cd .. && genesis/build/olic < tests/c/$n.oli > genesis/build/$n.o 2> genesis/build/$n.err ) || fail "object: olic could not compile tests/c/$n.oli: $(head -1 build/$n.err)"
+done
+readelf -h build/oli_side.o | grep -q 'Type: *REL' || fail "object: oli_side.o is not ET_REL"
+readelf -SW build/oli_side.o | grep -q '\.rela\.text  *RELA' || fail "object: oli_side.o has no .rela.text"
+[ "$(nm build/oli_side.o | grep -c ' U c_double$\| U write$')" = 2 ] || fail "object: the two extern procedures must be undefined symbols"
+nm build/oli_side.o | grep -q ' T oli_add$' || fail "object: the exported procedure must be the global symbol oli_add"
+[ "$(readelf -rW build/oli_side.o | grep -c 'R_X86_64_PLT32')" = 2 ] || fail "object: one PLT32 relocation per extern call"
+[ "$(readelf -rW build/oli_side.o | grep -c 'R_X86_64_64  *0000000000000000 .rodata')" = 2 ] || fail "object: the string literal's address and length go through .rodata relocations"
+readelf -a build/oli_side.o > /dev/null 2> build/readelf.err || fail "object: readelf -a rejects oli_side.o"
+[ ! -s build/readelf.err ] || fail "object: readelf -a warns about oli_side.o: $(head -1 build/readelf.err)"
+nm build/main_side.o | grep -q ' T _start$' || fail "object: the entry procedure must also be _start"
+ld -o build/two build/main_side.o build/lib_side.o 2> build/ld.err || fail "object: ld could not link two Oli-- objects: $(head -1 build/ld.err)"
+set +e; ./build/two; st=$?; set -e
+[ "$st" = 42 ] || fail "object: the program linked from two Oli-- objects exited $st, want 42"
+if command -v cc > /dev/null 2>&1; then
+    cc -no-pie -o build/c_prog build/oli_side.o ../tests/c/c_side.c 2> build/cc.err || fail "object: cc could not link oli_side.o with tests/c/c_side.c: $(head -1 build/cc.err)"
+    ./build/c_prog > build/c_prog.out || fail "object: the C program linked with Oli-- exited non-zero"
+    cmp build/c_prog.out ../tests/c/expected.out || fail "object: the C program's output differs from tests/c/expected.out"
+    echo "ok: object files: two Oli-- objects link with ld alone and run; oli_side.o links with C by cc, C calls oli_add, oli_add calls C's c_double and libc's write, and the output is tests/c/expected.out"
+else
+    echo "ok: object files: two Oli-- objects link with ld alone and run (no cc on this machine: the C half of tests/c was not linked)"
+fi
+
 # A program with no trap site carries no trap routine.
 printf 'module notrap\nproc start -> s32\n    entry\n    ret 0\nend\n' > build/notrap.oli
 ( cd .. && genesis/build/olic < genesis/build/notrap.oli > genesis/build/notrap.elf ) || fail "olic could not compile notrap.oli"

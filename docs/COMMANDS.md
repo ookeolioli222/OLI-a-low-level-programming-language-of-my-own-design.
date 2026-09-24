@@ -166,6 +166,7 @@ end
 | Command | Meaning | Status |
 |---------|---------|--------|
 | `module a.b` | one file = one module; `cpu`/`mem`/`os` always in scope, `core` implicit | **runs** |
+| `extern proc f(params) [-> T]` | a procedure the linker resolves: called like any other (SysV; `al` cleared for a variadic callee), an undefined global symbol in the object; only with `-- output: object` (`E0900` in an executable) | **runs** (`tests/c/`: `oli_side.o` linked with C by `cc`, C calls `oli_add` and is called back; two Oli-- objects linked by `ld` alone) |
 | `import a.b [as x]`, `pub` | imports resolve under `lib/`, names are checked across modules; `mod.proc(...)` and `mod.CONST` reach a library's procedures and constants (names are program-wide: a local of a library procedure may not shadow a static of the program, `E0101`) | **runs** (`tests/run/paging.oli` calls `core.x64.paging`; `examples/kernel.oli` too) |
 | `proc NAME(params) -> T ... end` | a procedure: arguments in the six SysV registers, then on the stack right to left; a view that does not fit in the registers left goes to the stack whole and the next integer still takes a register (the SysV rule, `docs/ABI.md` §1–2); one result (a view: two words) | **runs** (`tests/run/args.oli`) |
 | `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw`, `memory.mmio`, `io.port`, `cpu.asm`, `cpu.interrupt` and `cpu.control` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`, `memory.raw`, `memory.mmio`, `io.port`, `cpu.asm`, `cpu.interrupt`, `cpu.control`) / analysed (the rest) |
@@ -367,6 +368,7 @@ tool).
 | `--explain` | per procedure: the frame in words (locals, temps, values, phi scratch), the checks kept and the ones removed by each proof (`constant`, `divisor`, `loop-bound`, `unreachable`, `dominance`), zones opened / released / allocated from, calls, syscalls, operations proved to always trap — then the cost class of every line that produced an instruction (`tests/snapshots/cse.explain`) | **runs** (`(registers values=N saved=…)` is the linear scan's assignment) |
 | `--explain-cost` | the same report; the per-line part is its `(lines …)` section | **runs** |
 | `--check` / `--check-syntax` | analyse / parse only | planned as flags; `show_sema`/`show_ast` with output discarded do it today |
+| `-- output: object` | a relocatable ELF (ET_REL) instead of an executable: the same sections at address 0, `.rela.text` (`R_X86_64_64`/`32S` for absolute addresses, `PLT32` per `extern` call), every procedure and static a symbol, an entry procedure also `_start`; no entry is required; links with `ld` or `cc -no-pie` (ABI.md §6) | **runs** |
 | `--freestanding` | target with no operating system, selected by a `-- target: freestanding` line at the top of the program: no `mmap` zones (`E0330`), no `os.syscall` (`E0401`), a `-> never` entry that is the first instruction of the image (`section ".text.boot"` first, no frame with `calls none`), `traps`, `cpu.halt()`; statics honour `align N`; a `-> never` body ends in `ud2`, never `ret`; `-- load: 0x100000` links and loads the image at that address (any address: the code names statics through 64-bit immediates; a `[static]` operand of a machine block needs the low or the top 2 GiB) | **runs** (`tests/run/freestanding.oli`, `tests/freestanding/`, `examples/kernel.oli` with its Multiboot2 header); the TOML profile file of FREESTANDING.md §2 is not read — its fields live in the source lines |
 | `--lib DIR` | where imported modules are found | planned; `lib/` under the working directory today |
 | `oli new/build/run/test/fmt/check/bench/doc/package/fuzz` | the project tool | planned |
@@ -378,7 +380,7 @@ tool).
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
 review that is:
-a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause`/`interrupts` and the `mem.*` intrinsics beyond `get_*`/`put_*`/`mmio`, the `port T` type and `port T (n)`, `each` and `Name.at` over an `mmio` view,
+a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause`/`interrupts` and the `mem.*` intrinsics beyond `get_*`/`put_*`/`mmio`, the `port T` type and `port T (n)`, an `extern proc` in an executable (only an object file can carry an unresolved symbol), `each` and `Name.at` over an `mmio` view,
 an `os.syscall` with more than seven words (the number and six
 arguments are all the registers a system call has) and aggregate constants (`NAME : [N]T := { … }` or a layout constant, which would live in `.rodata`; reading one is refused, and the harness probes that).
 The front end already checks all of them, so a program using them is

@@ -87,6 +87,7 @@ layout Prog
     zdepth : u64
     fstanding : u64
     loadaddr : u64
+    objmode : u64
     curhasres : u64
     curnever : u64
     curfallible : u64
@@ -131,6 +132,7 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.zdepth <- 0
     pg.fstanding <- 0
     pg.loadaddr <- 4194304
+    pg.objmode <- 0
     pg.curhasres <- 0
     pg.curnever <- 0
     pg.curfallible <- 0
@@ -1101,7 +1103,11 @@ proc print_proc(pg: ref Prog, pi: u64)
     cx := mod_ctx(pg, mi)
     nd := node_at(cx, v.node)
     bline(pg, 2)
-    put(1, "(proc ")
+    if nd.sub == 2
+        put(1, "(extern-proc ")
+    else
+        put(1, "(proc ")
+    end
     put_module_name(pg, mi)
     put(1, ".")
     put_name(pg, mi, v.node)
@@ -1242,6 +1248,37 @@ proc parse_addr(src: view u8, start: u64) -> u64
     ret v
 end
 
+proc output_object(src: view u8) -> u64
+    -- `-- output: object` near the top: a relocatable object file (ET_REL)
+    -- for the system linker instead of an executable (ABI.md §6).
+    mark := "-- output: object"
+    if src.len < mark.len
+        ret 0
+    end
+    i : u64 <- 0
+    while i + mark.len <= src.len
+        if i > 256
+            ret 0
+        end
+        if view_eq(src[i..i + mark.len], mark)
+            ret 1
+        end
+        i <- i + 1
+    end
+    ret 0
+end
+
+proc proc_is_extern(pg: ref Prog, pi: u64) -> word
+    -- An `extern proc`: a signature the linker resolves (node `sub` 2).
+    v := proc_at(pg, pi)
+    cx := mod_ctx(pg, v.mod)
+    nd := node_at(cx, v.node)
+    if nd.sub == 2
+        ret 1
+    end
+    ret 0
+end
+
 proc target_freestanding(src: view u8) -> word
     -- A fixture selects the target with a `-- target: freestanding` line.
     mark := "-- target: freestanding"
@@ -1265,6 +1302,7 @@ proc analyze(pg: rw ref Prog, z: zone, src: view u8)
     -- The root module is stdin; `core` is always available, then its imports.
     pg.fstanding <- target_freestanding(src)
     pg.loadaddr <- target_load(src)
+    pg.objmode <- output_object(src)
     root := add_module(pg, z, src, "stdin")
     load_named(pg, z, "core")
     load_imports(pg, z, root)

@@ -1057,12 +1057,40 @@ constant in `.rodata`).
   pins that guarded against emitted trap messages now measure the code
   segment rather than the file.
 
+## Implemented in back-end stage 24 (2026-09-24): object files and `extern`
+
+- **`-- output: object`** makes `olic` write a relocatable ELF (`ET_REL`)
+  instead of an executable: `.rodata`, `.text`, `.data`, `.bss` at address
+  0 each, no program headers, the symbol table of stage 23 with the four
+  section symbols in front and `_start` for an entry procedure, and
+  `.rela.text` built from the same fixes the executable would have patched
+  — `R_X86_64_64` for an absolute address of a static or a procedure
+  (`R_X86_64_32S` for a disp32 inside a machine block), against the section
+  it names, and `R_X86_64_PLT32` (addend −4) for a call to an `extern`
+  procedure. `apply_fixes` leaves those fields zero in object mode. No entry
+  procedure is required.
+- **`extern proc f(params) [-> T]`** is a signature the linker resolves:
+  parsed without clauses, body or `end`; an `OProc` with no instructions,
+  so procedure and `OProc` indices stay one; an undefined global symbol
+  under its bare name; `al` cleared before every call to it (a variadic C
+  callee's vector count). Allowed only with `-- output: object`: `E0900`
+  in an executable, which has no linker to resolve it.
+- **Both directions of the SysV ABI, executed.** `tests/c/oli_side.oli`
+  exports `oli_add`, which writes a line through libc's `write` and answers
+  through C's `c_double`; `tests/c/c_side.c` calls it from `main`. The
+  harness compiles the object, checks `ET_REL`, `.rela.text`, the two
+  undefined symbols, the two `PLT32` and two `.rodata` relocations and
+  `readelf -a`, links with `cc -no-pie`, runs, and compares the output with
+  `tests/c/expected.out`; `main_side.oli` + `lib_side.oli` link with `ld`
+  alone, no C runtime, and exit 42. Cautions in ABI.md §2: C-facing
+  parameters should be 64-bit types, and a view is two words.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 25,230 lines) into
+compiles its own source (`compiler/`, seventeen modules, 26,000 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 994,808 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,017,096 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

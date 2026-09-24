@@ -1002,6 +1002,9 @@ proc ps_proc(cx: ref Ctx, n: u64, ind: u64)
     if nd.sub == 1
         emit(cx, "pub ")
     end
+    if nd.sub == 2
+        emit(cx, "extern ")
+    end
     emit(cx, "proc ")
     emit_tok(cx, nd.t0)
     emit(cx, " ")

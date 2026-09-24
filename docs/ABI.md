@@ -45,7 +45,12 @@ the equivalent C aggregates.
 
 Rule of thumb: whatever a C compiler would do with the equivalent `struct`,
 Oli-- does. This makes every Oli-- procedure callable from C with the obvious
-prototype and every C function callable from Oli-- (V2 adds the `extern` declaration syntax).
+prototype and every C function callable from Oli-- (`extern proc name(params) -> T`
+declares one; stage 24). Two cautions: a narrow integer parameter (`s32`, `u8`, …)
+of a procedure C calls is read as the canonical 64-bit image, which a C caller
+does not promise for the upper bits — declare C-facing parameters as `s64`,
+`u64`, `word` or `uword`; and a `view` is two words, not a C type — pass
+`addr T` and a length.
 
 ## 3. Layout rules
 
@@ -121,8 +126,16 @@ built from the initial stack (`[rsp] = argc`, `[rsp+8..] = argv`).
 | relocations | none in the executable: all addresses are resolved by the writer (RIP-relative for code/data, absolute 32-bit sign-extended in `code kernel`) |
 | debug | `.symtab` always; DWARF line tables planned (tooling phase) |
 
-`--emit-obj` (later) produces `ET_REL` with `R_X86_64_PC32`/`R_X86_64_64`
-relocations for use with external loaders; it is not needed for Milestones 1–4.
+`-- output: object` (stage 24) produces `ET_REL`: the same sections at address
+0 each, no program headers, `.rela.text` with `R_X86_64_64` for every absolute
+address the executable would have patched (`R_X86_64_32S` for a disp32 of a
+machine block), against the section symbol of what it names, and
+`R_X86_64_PLT32` (addend −4) per call to an `extern` procedure, which is an
+undefined global symbol under its bare name; an entry procedure is also
+`_start`. Every call to an `extern` clears `al` first (a variadic C callee's
+count of vector registers). The absolute relocations mean non-PIE linking:
+`ld` as it is, or `cc -no-pie`; `tests/c` links two Oli-- objects with `ld`
+and one with C by `cc`, and runs both.
 
 ## 8. Interrupt procedures (`calls interrupt`)
 

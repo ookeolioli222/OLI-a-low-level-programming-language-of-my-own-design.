@@ -234,7 +234,10 @@ wrap sat checked
 ```
 
 Reserved for later versions and rejected as names (`E0010`): `bit bits atomic
-thread extern generic const static volatile`.
+thread generic const static volatile`. `extern proc f(params) [-> T]` declares
+a procedure the linker resolves — a signature, no body, no `end` — and is
+allowed only in a program compiled with `-- output: object` (a relocatable
+file for `ld` or `cc`; ABI.md §6); in an executable it is `E0900`.
 
 Primitive type names (`u8`, `word`, …) are **not** keywords; they are ordinary
 identifiers the compiler knows.

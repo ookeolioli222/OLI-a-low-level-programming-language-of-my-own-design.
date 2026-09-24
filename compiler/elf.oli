@@ -112,6 +112,7 @@ layout Elfw
     textoff : u64
     dofs : u64
     hasdata : u64
+    bssadj : u64
 end
 
 proc str_put(w: rw ref Elfw, s: view u8)
@@ -179,6 +180,9 @@ proc sym_procs(pg: ref Prog, ob: ref Oir, w: rw ref Elfw, want_pub: u64)
         if nd.sub == 1
             ispub <- 1
         end
+        if op.isextern == 1
+            ispub <- 2
+        end
         if ispub == want_pub
             off := qualified(pg, w, v.mod, tok_text(cx, nd.t0))
             add_sym(w, off, 2 + want_pub * 16, 2, w.base + w.textoff + op.codepos, op.codeend - op.codepos)
@@ -245,10 +249,12 @@ proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
         vn := node_at(cx, v.node)
         off := qualified(pg, w, v.mod, tok_text(cx, vn.t0))
         sh : u64 <- 4
+        adj : u64 <- w.bssadj
         if d.init == 1
             sh <- 3
+            adj <- 0
         end
-        add_sym(w, off, 17, sh, w.base + w.dofs + d.off, d.size)
+        add_sym(w, off, 17, sh, w.base + w.dofs + d.off - adj, d.size)
         k <- k + 1
     end
     vi : u64 <- 0
@@ -330,6 +336,7 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     w.rodoff <- hs
     w.textoff <- hs + ob.ndata
     w.hasdata <- 0
+    w.bssadj <- 0
     w.dofs <- total
     if ob.dsize + ob.bsize > 0
         w.hasdata <- 1
@@ -434,5 +441,268 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     shdr_place(sh, 7, 0, shstroff, SHSTR_LEN)
     shdr_link(sh, 7, 0, 0)
     shdr_align(sh, 7, 1, 0)
+    put(1, sh)
+end
+
+-- Object files -------------------------------------------------------------------
+-- `-- output: object` (ABI.md §6): the same sections, at address 0 each,
+-- no program headers, `e_type` ET_REL, and `.rela.text` with one entry per
+-- absolute address the executable would have had patched — `R_X86_64_64`
+-- or `R_X86_64_32S` against the section symbol of what it names — and one
+-- `R_X86_64_PLT32` per call to an `extern` procedure, an undefined global
+-- symbol under its bare name. The entry procedure, when there is one, is
+-- also `_start`, for `ld` without a C runtime.
+
+NSECT_OBJ := 9
+SHSTR_OBJ := 63
+RELA_SIZE := 24
+RELA_MAX := 262144
+
+proc sym_sections(w: rw ref Elfw)
+    -- `STT_SECTION` symbols 1..4 for `.rodata`, `.text`, `.data`, `.bss`:
+    -- what the relocations of the object refer to.
+    k : u64 <- 1
+    while k <= 4
+        add_sym(w, 0, 3, k, 0, 0)
+        k <- k + 1
+    end
+end
+
+proc sym_externs(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
+    -- Every `extern proc`: global, no type, undefined, under its bare name;
+    -- the index goes to its `OProc` for the relocations.
+    q : u64 <- 0
+    while q < ob.nproc
+        op := oproc_at(ob, q)
+        if op.isextern == 1
+            v := proc_at(pg, op.pi)
+            cx := mod_ctx(pg, v.mod)
+            nd := node_at(cx, v.node)
+            off := w.nstr
+            str_put(w, tok_text(cx, nd.t0))
+            str_term(w)
+            op.symidx <- w.nsym
+            add_sym(w, off, 16, 0, 0, 0)
+        end
+        q <- q + 1
+    end
+end
+
+proc sym_start(pg: ref Prog, ob: ref Oir, mc: ref Mach, w: rw ref Elfw)
+    if pg.entrynode == 0
+        ret
+    end
+    off := w.nstr
+    str_put(w, "_start")
+    str_term(w)
+    add_sym(w, off, 18, 2, mc.entrypos, 0)
+end
+
+proc put_rela(b: rw view u8, n: u64, pos: u64, info: u64, addend: u64)
+    o := n * RELA_SIZE
+    put_u64v(b, o, pos)
+    put_u64v(b, o + 8, info)
+    put_u64v(b, o + 16, addend)
+end
+
+proc build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
+    -- The relocations, from the fixes the executable would have patched:
+    -- `r_info` is the symbol index shifted by 32 over the type.
+    permit os.syscall
+    n : u64 <- 0
+    i : u64 <- 0
+    while i < mc.nfix
+        f := fix_at(mc, i)
+        if n >= RELA_MAX
+            put(2, "olic: relocation table exhausted\n")
+            os.syscall(60, 4)
+        end
+        if f.kind == 2
+            put_rela(rb, n, f.pos, 4294967296 + 1, f.target)
+            n <- n + 1
+        elif f.kind == 8
+            put_rela(rb, n, f.pos, 4294967296 + 11, f.target)
+            n <- n + 1
+        elif f.kind == 5
+            op5 := oproc_at(ob, f.target)
+            put_rela(rb, n, f.pos, 2 * 4294967296 + 1, op5.codepos)
+            n <- n + 1
+        elif f.kind == 4
+            data_rela(ob, rb, n, f)
+            n <- n + 1
+        elif f.kind == 6
+            data_rela(ob, rb, n, f)
+            n <- n + 1
+        elif f.kind == 7
+            data_rela(ob, rb, n, f)
+            n <- n + 1
+        elif f.kind == 0
+            op0 := oproc_at(ob, f.target)
+            if op0.isextern == 1
+                put_rela(rb, n, f.pos, op0.symidx * 4294967296 + 4, 18446744073709551612)
+                n <- n + 1
+            end
+        end
+        i <- i + 1
+    end
+    ret n
+end
+
+proc data_rela(ob: ref Oir, rb: rw view u8, n: u64, f: ref Fix)
+    -- An address in the writable segment: `.data` below `dsize`, `.bss`
+    -- from there on, each from its own start; an imm64 (kinds 4 and 6) is
+    -- `R_X86_64_64`, a disp32 (kind 7) `R_X86_64_32S`.
+    kind : u64 <- 1
+    if f.kind == 7
+        kind <- 11
+    end
+    if f.target < ob.dsize
+        put_rela(rb, n, f.pos, 3 * 4294967296 + kind, f.target)
+    else
+        put_rela(rb, n, f.pos, 4 * 4294967296 + kind, f.target - ob.dsize)
+    end
+end
+
+proc obj_header(b: rw view u8, shoff: u64)
+    i : u64 <- 0
+    while i < b.len
+        b[i] <- 0
+        i <- i + 1
+    end
+    put_u8(b, 0, 127)
+    put_u8(b, 1, 69)
+    put_u8(b, 2, 76)
+    put_u8(b, 3, 70)
+    put_u8(b, 4, 2)
+    put_u8(b, 5, 1)
+    put_u8(b, 6, 1)
+    put_u16(b, 16, 1)
+    put_u16(b, 18, 62)
+    put_u32(b, 20, 1)
+    put_u64v(b, 40, shoff)
+    put_u16(b, 52, EHDR_SIZE)
+    put_u16(b, 58, SHDR_SIZE)
+    put_u16(b, 60, NSECT_OBJ)
+    put_u16(b, 62, 7)
+end
+
+proc write_object(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
+    w := z.make(Elfw)
+    w.symtab <- z.bytes(SYMTAB_MAX * SYM_SIZE)
+    w.strtab <- z.bytes(STRTAB_MAX)
+    w.nsym <- 1
+    w.nstr <- 1
+    zt := w.symtab
+    zi : u64 <- 0
+    while zi < SYM_SIZE
+        zt[zi] <- 0
+        zi <- zi + 1
+    end
+    zs := w.strtab
+    zs[0] <- 0
+    w.base <- 0
+    w.rodoff <- 0
+    w.textoff <- 0
+    w.dofs <- 0
+    w.hasdata <- 1
+    w.bssadj <- ob.dsize
+    sym_sections(w)
+    sym_procs(pg, ob, w, 0)
+    sym_trap(ob, mc, w)
+    nlocal := w.nsym
+    sym_procs(pg, ob, w, 1)
+    sym_statics(pg, ob, w)
+    sym_start(pg, ob, mc, w)
+    sym_externs(pg, ob, w)
+    rb := z.bytes(RELA_MAX * RELA_SIZE)
+    nrela := build_rela(ob, mc, rb)
+    -- File: header, .rodata, .text, .data, then the tables, each on an
+    -- eight-byte boundary, and the section headers last.
+    rodoff : u64 <- 64
+    textoff := rodoff + ob.ndata
+    dataoff := textoff + ob.ncode
+    imgend := dataoff + ob.dsize
+    symoff := round8(imgend)
+    stroff := symoff + w.nsym * SYM_SIZE
+    shstroff := stroff + w.nstr
+    relaoff := round8(shstroff + SHSTR_OBJ)
+    shoff := round8(relaoff + nrela * RELA_SIZE)
+    hdr := z.bytes(EHDR_SIZE)
+    obj_header(hdr, shoff)
+    put(1, hdr)
+    d := ob.data
+    put(1, d[..ob.ndata])
+    c := ob.code
+    put(1, c[..ob.ncode])
+    db := ob.dbytes
+    put(1, db[..ob.dsize])
+    if symoff > imgend
+        pad := z.bytes(symoff - imgend)
+        put(1, pad)
+    end
+    st := w.symtab
+    put(1, st[..w.nsym * SYM_SIZE])
+    sb := w.strtab
+    put(1, sb[..w.nstr])
+    shs := z.bytes(SHSTR_OBJ)
+    shs[0] <- 0
+    n1 := shs_name(shs, 1, ".rodata")
+    n2 := shs_name(shs, n1, ".text")
+    n3 := shs_name(shs, n2, ".data")
+    n4 := shs_name(shs, n3, ".bss")
+    n5 := shs_name(shs, n4, ".symtab")
+    n6 := shs_name(shs, n5, ".strtab")
+    n7 := shs_name(shs, n6, ".shstrtab")
+    _n8 := shs_name(shs, n7, ".rela.text")
+    put(1, shs)
+    if relaoff > shstroff + SHSTR_OBJ
+        pad2 := z.bytes(relaoff - shstroff - SHSTR_OBJ)
+        put(1, pad2)
+    end
+    if nrela > 0
+        put(1, rb[..nrela * RELA_SIZE])
+    end
+    if shoff > relaoff + nrela * RELA_SIZE
+        pad3 := z.bytes(shoff - relaoff - nrela * RELA_SIZE)
+        put(1, pad3)
+    end
+    sh := z.bytes(NSECT_OBJ * SHDR_SIZE)
+    zi2 : u64 <- 0
+    while zi2 < NSECT_OBJ * SHDR_SIZE
+        sh[zi2] <- 0
+        zi2 <- zi2 + 1
+    end
+    shdr_kind(sh, 1, 1, 1, 2)
+    shdr_place(sh, 1, 0, rodoff, ob.ndata)
+    shdr_link(sh, 1, 0, 0)
+    shdr_align(sh, 1, 8, 0)
+    shdr_kind(sh, 2, n1, 1, 6)
+    shdr_place(sh, 2, 0, textoff, ob.ncode)
+    shdr_link(sh, 2, 0, 0)
+    shdr_align(sh, 2, 16, 0)
+    shdr_kind(sh, 3, n2, 1, 3)
+    shdr_place(sh, 3, 0, dataoff, ob.dsize)
+    shdr_link(sh, 3, 0, 0)
+    shdr_align(sh, 3, 8, 0)
+    shdr_kind(sh, 4, n3, 8, 3)
+    shdr_place(sh, 4, 0, imgend, ob.bsize)
+    shdr_link(sh, 4, 0, 0)
+    shdr_align(sh, 4, 8, 0)
+    shdr_kind(sh, 5, n4, 2, 0)
+    shdr_place(sh, 5, 0, symoff, w.nsym * SYM_SIZE)
+    shdr_link(sh, 5, 6, nlocal)
+    shdr_align(sh, 5, 8, SYM_SIZE)
+    shdr_kind(sh, 6, n5, 3, 0)
+    shdr_place(sh, 6, 0, stroff, w.nstr)
+    shdr_link(sh, 6, 0, 0)
+    shdr_align(sh, 6, 1, 0)
+    shdr_kind(sh, 7, n6, 3, 0)
+    shdr_place(sh, 7, 0, shstroff, SHSTR_OBJ)
+    shdr_link(sh, 7, 0, 0)
+    shdr_align(sh, 7, 1, 0)
+    shdr_kind(sh, 8, n7, 4, 64)
+    shdr_place(sh, 8, 0, relaoff, nrela * RELA_SIZE)
+    shdr_link(sh, 8, 5, 2)
+    shdr_align(sh, 8, 8, RELA_SIZE)
     put(1, sh)
 end
