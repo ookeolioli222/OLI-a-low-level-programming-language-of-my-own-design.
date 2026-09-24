@@ -1035,12 +1035,34 @@ constant in `.rodata`).
   the OIR and the call into `core.x64.paging`. `tests/run/hw.oli` pins all
   seven control-register accesses once each by objdump.
 
+## Implemented in back-end stage 23 (2026-09-24): symbol table and section headers
+
+- **The image is readable by the tools.** After the loaded segments
+  `compiler/elf.oli` writes `.symtab` and `.strtab` exactly as ABI.md §4
+  lays them out — every procedure as `module.name` (`STB_LOCAL` unless
+  `pub`, `STT_FUNC`, with its size from the new `codeend` of its `OProc`),
+  an `export` clause as a second global symbol (the bare name or the string
+  given), every static as `module.name` (`STT_OBJECT`, its size) in
+  `.data`, `.bss` or `.rodata`, the trap routine as `olic.trap` — then
+  `.shstrtab` and eight section headers: null, `.rodata`, `.text`, `.data`,
+  `.bss`, `.symtab`, `.strtab`, `.shstrtab`. Nothing loaded changes: the
+  segments, the entry, the Multiboot2 header offset and the self-hosting
+  fixpoint are as before, with the tables appended.
+- The harness reads `hello.elf` with `nm` (`hello.start`, local, at the
+  entry), `readelf -S` (`.text` at the code) and `objdump -d`
+  (`<hello.start>:`), finds `statics.buf` in `.bss` and `olic.trap`, the
+  Multiboot2 header of the kernel as `kernel.header` in `.rodata` at
+  `0x1000b0` and the `pub` procedures of `core.x64.paging` as global
+  symbols, and requires `readelf -a` to raise no warning. The two size
+  pins that guarded against emitted trap messages now measure the code
+  segment rather than the file.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
 compiles its own source (`compiler/`, seventeen modules, 25,230 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 938,774 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 994,808 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

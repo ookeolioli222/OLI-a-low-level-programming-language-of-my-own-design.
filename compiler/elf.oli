@@ -9,8 +9,13 @@ module olic.elf
 -- address (`ob.base`: 0x400000, or what a `-- load:` line says) with
 -- `p_offset = 0`, so a file offset and a virtual address differ by exactly
 -- that; the second is mapped read+write at the same distance.
--- Section headers and a symbol table are what ABI.md asks for next; this
--- stage writes neither, and says so rather than writing an empty one.
+-- After the image come the tables that are not loaded: `.symtab` (ABI.md
+-- §4: every procedure as `module.name`, `STB_LOCAL` unless `pub`, an
+-- `export` clause as a second, global name; every static as `module.name`
+-- in `.data`, `.bss` or `.rodata`; the trap routine as `olic.trap`), its
+-- `.strtab`, `.shstrtab`, and eight section headers — null, `.rodata`,
+-- `.text`, `.data`, `.bss`, `.symtab`, `.strtab`, `.shstrtab` — so that
+-- `nm`, `readelf -S` and `objdump -d` read the image as it is.
 
 EHDR_SIZE := 64
 PHDR_SIZE := 56
@@ -88,30 +93,346 @@ proc data_phdr(b: rw view u8, dofs: u64, filesz: u64, memsz: u64, base: u64)
     put_u64v(b, o + 48, 4096)
 end
 
-proc write_elf(ob: ref Oir, mc: ref Mach, z: zone)
-    hs := hdr_size(ob)
-    total : u64 <- hs + ob.ndata + ob.ncode
-    epoint : u64 <- ob.base + hs + ob.ndata + mc.entrypos
-    hdr := z.bytes(hs)
-    elf_header(hdr, epoint, total, ob.base)
-    if ob.dsize + ob.bsize > 0
-        put_u16(hdr, 56, 2)
-        dofs := page_up(total)
-        data_phdr(hdr, dofs, ob.dsize, ob.dsize + ob.bsize, ob.base)
-        put(1, hdr)
-        d := ob.data
-        put(1, d[..ob.ndata])
-        c := ob.code
-        put(1, c[..ob.ncode])
-        pad := z.bytes(dofs - total)
-        put(1, pad)
-        db := ob.dbytes
-        put(1, db[..ob.dsize])
+SYM_SIZE := 24
+SHDR_SIZE := 64
+NSECT := 8
+SHSTR_LEN := 52
+SYMTAB_MAX := 16384
+STRTAB_MAX := 1048576
+
+layout Elfw
+    -- The symbol table under construction: entries, names, and where the
+    -- sections lie in the file, for the values of the symbols.
+    symtab : rw view u8
+    strtab : rw view u8
+    nsym : u64
+    nstr : u64
+    base : u64
+    rodoff : u64
+    textoff : u64
+    dofs : u64
+    hasdata : u64
+end
+
+proc str_put(w: rw ref Elfw, s: view u8)
+    permit os.syscall
+    if w.nstr + s.len + 1 > STRTAB_MAX
+        put(2, "olic: symbol names exhausted\n")
+        os.syscall(60, 4)
+    end
+    t := w.strtab
+    i : u64 <- 0
+    while i < s.len
+        t[w.nstr + i] <- s[i]
+        i <- i + 1
+    end
+    w.nstr <- w.nstr + s.len
+end
+
+proc str_term(w: rw ref Elfw)
+    t := w.strtab
+    t[w.nstr] <- 0
+    w.nstr <- w.nstr + 1
+end
+
+proc add_sym(w: rw ref Elfw, nameoff: u64, info: u64, shndx: u64, value: u64, sz: u64)
+    -- One Elf64_Sym: name, info (binding and type), other, section, value,
+    -- size.
+    permit os.syscall
+    if w.nsym >= SYMTAB_MAX
+        put(2, "olic: symbol table exhausted\n")
+        os.syscall(60, 4)
+    end
+    t := w.symtab
+    o := w.nsym * SYM_SIZE
+    put_u32(t, o, nameoff)
+    put_u8(t, o + 4, info)
+    put_u8(t, o + 5, 0)
+    put_u16(t, o + 6, shndx)
+    put_u64v(t, o + 8, value)
+    put_u64v(t, o + 16, sz)
+    w.nsym <- w.nsym + 1
+end
+
+proc qualified(pg: ref Prog, w: rw ref Elfw, mi: u64, name: view u8) -> u64
+    -- `module.name` appended to the string table; its offset.
+    cx := mod_ctx(pg, mi)
+    root := node_at(cx, cx.root)
+    off := w.nstr
+    str_put(w, mod_text(cx, root.t0, root.t1))
+    str_put(w, ".")
+    str_put(w, name)
+    str_term(w)
+    ret off
+end
+
+proc sym_procs(pg: ref Prog, ob: ref Oir, w: rw ref Elfw, want_pub: u64)
+    -- Every procedure with the binding `want_pub` names: `STB_LOCAL` (0)
+    -- unless `pub`, `STB_GLOBAL` (1); type `STT_FUNC` (2), in `.text` (2).
+    q : u64 <- 0
+    while q < ob.nproc
+        op := oproc_at(ob, q)
+        v := proc_at(pg, op.pi)
+        cx := mod_ctx(pg, v.mod)
+        nd := node_at(cx, v.node)
+        ispub : u64 <- 0
+        if nd.sub == 1
+            ispub <- 1
+        end
+        if ispub == want_pub
+            off := qualified(pg, w, v.mod, tok_text(cx, nd.t0))
+            add_sym(w, off, 2 + want_pub * 16, 2, w.base + w.textoff + op.codepos, op.codeend - op.codepos)
+        end
+        if want_pub == 1
+            sym_export(pg, w, op)
+        end
+        q <- q + 1
+    end
+end
+
+proc sym_export(pg: ref Prog, w: rw ref Elfw, op: ref OProc)
+    -- An `export` clause: a second, global symbol at the same address — the
+    -- bare name, or the string the clause gives.
+    v := proc_at(pg, op.pi)
+    cx := mod_ctx(pg, v.mod)
+    nd := node_at(cx, v.node)
+    k : u64 <- kid1(cx, v.node)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_EXPORT
+                off := w.nstr
+                sk := kid1(cx, k)
+                if sk == 0
+                    str_put(w, tok_text(cx, nd.t0))
+                else
+                    sn := node_at(cx, sk)
+                    st := tok_text(cx, sn.t0)
+                    if st.len >= 2
+                        se := st.len - 1
+                        str_put(w, st[1..se])
+                    else
+                        str_put(w, st)
+                    end
+                end
+                str_term(w)
+                add_sym(w, off, 18, 2, w.base + w.textoff + op.codepos, op.codeend - op.codepos)
+            end
+        end
+        k <- sibling(cx, k)
+    end
+end
+
+proc sym_trap(ob: ref Oir, mc: ref Mach, w: rw ref Elfw)
+    -- The trap routine, when the program has a trap site: `olic.trap`, local.
+    if mc.ntrap == 0
         ret
     end
+    off := w.nstr
+    str_put(w, "olic.trap")
+    str_term(w)
+    add_sym(w, off, 2, 2, w.base + w.textoff + mc.trappos, ob.ncode - mc.trappos)
+end
+
+proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
+    -- Every static place: `STT_OBJECT` (1), global, in `.data` (3), `.bss`
+    -- (4) or `.rodata` (1), with its size.
+    k : u64 <- 0
+    while k < ob.ndat
+        d := dat_at(ob, k)
+        v := val_at(pg, d.val)
+        cx := mod_ctx(pg, v.mod)
+        vn := node_at(cx, v.node)
+        off := qualified(pg, w, v.mod, tok_text(cx, vn.t0))
+        sh : u64 <- 4
+        if d.init == 1
+            sh <- 3
+        end
+        add_sym(w, off, 17, sh, w.base + w.dofs + d.off, d.size)
+        k <- k + 1
+    end
+    vi : u64 <- 0
+    while vi < pg.nval
+        v2 := val_at(pg, vi)
+        if v2.kind == 1
+            r := rodata_of(ob, vi)
+            if r >= 0
+                st := stat_at(ob, u64.bits(r))
+                cx2 := mod_ctx(pg, v2.mod)
+                vn2 := node_at(cx2, v2.node)
+                off2 := qualified(pg, w, v2.mod, tok_text(cx2, vn2.t0))
+                add_sym(w, off2, 17, 1, w.base + w.rodoff + st.off, st.len)
+            end
+        end
+        vi <- vi + 1
+    end
+end
+
+proc round8(n: u64) -> u64
+    ret (n + 7) / 8 * 8
+end
+
+proc shs_name(b: rw view u8, off: u64, s: view u8) -> u64
+    -- A section name into `.shstrtab`; the offset after its terminator.
+    i : u64 <- 0
+    while i < s.len
+        b[off + i] <- s[i]
+        i <- i + 1
+    end
+    b[off + s.len] <- 0
+    ret off + s.len + 1
+end
+
+proc shdr_kind(b: rw view u8, idx: u64, name: u64, kind: u64, flags: u64)
+    o := idx * SHDR_SIZE
+    put_u32(b, o, name)
+    put_u32(b, o + 4, kind)
+    put_u64v(b, o + 8, flags)
+end
+
+proc shdr_place(b: rw view u8, idx: u64, va: u64, off: u64, sz: u64)
+    o := idx * SHDR_SIZE
+    put_u64v(b, o + 16, va)
+    put_u64v(b, o + 24, off)
+    put_u64v(b, o + 32, sz)
+end
+
+proc shdr_link(b: rw view u8, idx: u64, link: u64, info: u64)
+    o := idx * SHDR_SIZE
+    put_u32(b, o + 40, link)
+    put_u32(b, o + 44, info)
+end
+
+proc shdr_align(b: rw view u8, idx: u64, al: u64, entsize: u64)
+    o := idx * SHDR_SIZE
+    put_u64v(b, o + 48, al)
+    put_u64v(b, o + 56, entsize)
+end
+
+proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
+    hs := hdr_size(ob)
+    total := hs + ob.ndata + ob.ncode
+    epoint := ob.base + hs + ob.ndata + mc.entrypos
+    w := z.make(Elfw)
+    w.symtab <- z.bytes(SYMTAB_MAX * SYM_SIZE)
+    w.strtab <- z.bytes(STRTAB_MAX)
+    w.nsym <- 1
+    w.nstr <- 1
+    zt := w.symtab
+    zi : u64 <- 0
+    while zi < SYM_SIZE
+        zt[zi] <- 0
+        zi <- zi + 1
+    end
+    zs := w.strtab
+    zs[0] <- 0
+    w.base <- ob.base
+    w.rodoff <- hs
+    w.textoff <- hs + ob.ndata
+    w.hasdata <- 0
+    w.dofs <- total
+    if ob.dsize + ob.bsize > 0
+        w.hasdata <- 1
+        w.dofs <- page_up(total)
+    end
+    -- The local symbols first, as ELF orders them, then the global ones.
+    sym_procs(pg, ob, w, 0)
+    sym_trap(ob, mc, w)
+    nlocal := w.nsym
+    sym_procs(pg, ob, w, 1)
+    sym_statics(pg, ob, w)
+    -- The tables after the image, each on an eight-byte boundary.
+    imgend : u64 <- total
+    if w.hasdata == 1
+        imgend <- w.dofs + ob.dsize
+    end
+    symoff := round8(imgend)
+    stroff := symoff + w.nsym * SYM_SIZE
+    shstroff := stroff + w.nstr
+    shoff := round8(shstroff + SHSTR_LEN)
+    hdr := z.bytes(hs)
+    elf_header(hdr, epoint, total, ob.base)
+    put_u64v(hdr, 40, shoff)
+    put_u16(hdr, 58, SHDR_SIZE)
+    put_u16(hdr, 60, NSECT)
+    put_u16(hdr, 62, 7)
+    if w.hasdata == 1
+        put_u16(hdr, 56, 2)
+        data_phdr(hdr, w.dofs, ob.dsize, ob.dsize + ob.bsize, ob.base)
+    end
     put(1, hdr)
-    d2 := ob.data
-    put(1, d2[..ob.ndata])
-    c2 := ob.code
-    put(1, c2[..ob.ncode])
+    d := ob.data
+    put(1, d[..ob.ndata])
+    c := ob.code
+    put(1, c[..ob.ncode])
+    if w.hasdata == 1
+        if w.dofs > total
+            pad := z.bytes(w.dofs - total)
+            put(1, pad)
+        end
+        db := ob.dbytes
+        put(1, db[..ob.dsize])
+    end
+    if symoff > imgend
+        pad2 := z.bytes(symoff - imgend)
+        put(1, pad2)
+    end
+    st := w.symtab
+    put(1, st[..w.nsym * SYM_SIZE])
+    sb := w.strtab
+    put(1, sb[..w.nstr])
+    shs := z.bytes(SHSTR_LEN)
+    shs[0] <- 0
+    n1 := shs_name(shs, 1, ".rodata")
+    n2 := shs_name(shs, n1, ".text")
+    n3 := shs_name(shs, n2, ".data")
+    n4 := shs_name(shs, n3, ".bss")
+    n5 := shs_name(shs, n4, ".symtab")
+    n6 := shs_name(shs, n5, ".strtab")
+    _n7 := shs_name(shs, n6, ".shstrtab")
+    put(1, shs)
+    if shoff > shstroff + SHSTR_LEN
+        pad3 := z.bytes(shoff - shstroff - SHSTR_LEN)
+        put(1, pad3)
+    end
+    sh := z.bytes(NSECT * SHDR_SIZE)
+    zi2 : u64 <- 0
+    while zi2 < NSECT * SHDR_SIZE
+        sh[zi2] <- 0
+        zi2 <- zi2 + 1
+    end
+    shdr_kind(sh, 1, 1, 1, 2)
+    shdr_place(sh, 1, ob.base + hs, hs, ob.ndata)
+    shdr_link(sh, 1, 0, 0)
+    shdr_align(sh, 1, 8, 0)
+    shdr_kind(sh, 2, n1, 1, 6)
+    shdr_place(sh, 2, ob.base + w.textoff, w.textoff, ob.ncode)
+    shdr_link(sh, 2, 0, 0)
+    shdr_align(sh, 2, 16, 0)
+    shdr_kind(sh, 3, n2, 1, 3)
+    shdr_kind(sh, 4, n3, 8, 3)
+    if w.hasdata == 1
+        shdr_place(sh, 3, ob.base + w.dofs, w.dofs, ob.dsize)
+        shdr_place(sh, 4, ob.base + w.dofs + ob.dsize, w.dofs + ob.dsize, ob.bsize)
+    else
+        shdr_place(sh, 3, 0, total, 0)
+        shdr_place(sh, 4, 0, total, 0)
+    end
+    shdr_link(sh, 3, 0, 0)
+    shdr_align(sh, 3, 8, 0)
+    shdr_link(sh, 4, 0, 0)
+    shdr_align(sh, 4, 8, 0)
+    shdr_kind(sh, 5, n4, 2, 0)
+    shdr_place(sh, 5, 0, symoff, w.nsym * SYM_SIZE)
+    shdr_link(sh, 5, 6, nlocal)
+    shdr_align(sh, 5, 8, SYM_SIZE)
+    shdr_kind(sh, 6, n5, 3, 0)
+    shdr_place(sh, 6, 0, stroff, w.nstr)
+    shdr_link(sh, 6, 0, 0)
+    shdr_align(sh, 6, 1, 0)
+    shdr_kind(sh, 7, n6, 3, 0)
+    shdr_place(sh, 7, 0, shstroff, SHSTR_LEN)
+    shdr_link(sh, 7, 0, 0)
+    shdr_align(sh, 7, 1, 0)
+    put(1, sh)
 end

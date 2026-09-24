@@ -2116,6 +2116,7 @@ proc lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
             opq := oproc_at(ob, q)
             if opq.boot == 1 - pass
                 lower_proc(pg, ob, mc, q)
+                opq.codeend <- ob.ncode
             end
             q <- q + 1
         end

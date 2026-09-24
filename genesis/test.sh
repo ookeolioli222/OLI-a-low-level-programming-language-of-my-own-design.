@@ -1352,9 +1352,22 @@ echo "ok: port.u8/u16/u32[n] read and written are one in/out each at the width, 
 # read+write on the page after the first; hello.elf still has one.
 [ "$(od -An -tu2 -j56 -N2 build/statics.elf | tr -d ' ')" = 2 ] || fail "elf: statics.elf should have two program headers"
 [ "$(od -An -tu2 -j56 -N2 build/hello.elf | tr -d ' ')" = 1 ] || fail "elf: hello.elf should have one program header"
+# The tables after the image (ABI.md 4): section headers binutils read, and
+# a symbol table with every procedure and static under its module's name -
+# local unless pub, an export clause a second global name.
+readelf -SW build/hello.elf | grep -q ' \.text  *PROGBITS  *0000000000400084' || fail "elf: hello.elf must have a .text section header at the code"
+[ "$(nm build/hello.elf)" = "0000000000400084 t hello.start" ] || fail "elf: nm must list hello.start, local, at the entry"
+objdump -d build/hello.elf | grep -q '^0000000000400084 <hello.start>:' || fail "elf: objdump -d must disassemble hello.elf by its symbols"
+nm build/statics.elf | grep -q ' B statics.buf$' || fail "elf: the zero static buf of statics.oli must be a .bss symbol"
+nm build/statics.elf | grep -q ' t olic.trap$' || fail "elf: the trap routine must be the local symbol olic.trap"
+nm build/wide.elf | grep -q ' t wide.relay$' || fail "elf: every procedure must be a symbol"
+readelf -a build/statics.elf > build/statics.readelf 2> build/readelf.err || fail "elf: readelf -a rejects statics.elf"
+[ ! -s build/readelf.err ] || fail "elf: readelf -a warns about statics.elf: $(head -1 build/readelf.err)"
+echo "ok: every image carries section headers and a symbol table (module.name, local unless pub, statics in .data/.bss/.rodata, olic.trap): nm, readelf -S and objdump -d read it, and readelf -a has no complaint"
 # The self-test of arith.oli is decided at compile time, and the messages of
 # the checks that were proved away are not in its image.
-[ "$(wc -c < build/arith.elf)" -lt 200 ] || fail "opt: arith.elf still carries the messages of checks that were proved away"
+arithsz=$(readelf -lW build/arith.elf | awk '$1=="LOAD"{print $5; exit}')
+[ "$((arithsz))" -lt 200 ] || fail "opt: arith.elf's code segment ($arithsz bytes) still carries the messages of checks that were proved away"
 
 # Trapping arithmetic (design 0006, MACHINE_MODEL.md §4): the message names the
 # kind and the line, and the status is 134.
@@ -1430,6 +1443,8 @@ grep -q '0f 01 1c 25' build/kernel.asm || fail "kernel: the descriptor table mus
 [ "$(grep -c 'raw.store.8.mmio' build/kernel.oir)" = 2 ] || fail "kernel: the VGA cells must be written through mem.mmio, volatile"
 [ "$(grep -c 'hw.store port.u8' build/kernel.oir)" = 15 ] || fail "kernel: fifteen port writes - COM1 setup and byte, ICW1-4 and the masks of two PICs, the PIT's mode and divisor, the EOI"
 [ "$(grep -c 'hw.store arch.x64.cr3' build/kernel.oir)" = 1 ] || fail "kernel: the page tables go into cr3 through a hardware place"
+nm build/kernel.elf | grep -q '^00000000001000b0 R kernel.header$' || fail "kernel: the Multiboot2 header must be the .rodata symbol kernel.header at 0x1000b0"
+nm build/kernel.elf | grep -q ' T core.x64.paging.identity_2m$' || fail "kernel: the pub procedures of core.x64.paging must be global symbols"
 grep -q 'call core.x64.paging.identity_2m\|= call ' build/kernel.oir || fail "kernel: the page directory must be filled by core.x64.paging"
 [ "$(od -An -tx1 -v build/kernel.elf | tr -d '\n' | grep -o '48 cf' | wc -l)" = 2 ] || fail "kernel: exactly two calls-interrupt handlers end in iretq"
 ( cd .. && genesis/build/explain < examples/kernel.oli > genesis/build/kernel.explain 2>/dev/null ) || fail "kernel: explain"
@@ -1439,7 +1454,8 @@ echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2
 # A program with no trap site carries no trap routine.
 printf 'module notrap\nproc start -> s32\n    entry\n    ret 0\nend\n' > build/notrap.oli
 ( cd .. && genesis/build/olic < genesis/build/notrap.oli > genesis/build/notrap.elf ) || fail "olic could not compile notrap.oli"
-[ "$(wc -c < build/notrap.elf)" -lt 200 ] || fail "notrap.elf is $(wc -c < build/notrap.elf) bytes: the trap routine was emitted anyway"
+notrapsz=$(readelf -lW build/notrap.elf | awk '$1=="LOAD"{print $5; exit}')
+[ "$((notrapsz))" -lt 200 ] || fail "notrap.elf's code segment is $notrapsz bytes: the trap routine was emitted anyway"
 echo "ok: the trap routine and its messages are in the binary only when a trap site is"
 
 # Anything the back end cannot lower is E0900, never approximated: here an

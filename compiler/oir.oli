@@ -256,6 +256,7 @@ layout OProc
     nval : u64
     isentry : u64
     codepos : u64
+    codeend : u64
     mi : u64
     bfirst : u64
     nblk : u64
@@ -5064,6 +5065,7 @@ proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     op.nwords <- lay_out_locals(pg, ob)
     op.isentry <- 0
     op.codepos <- 0
+    op.codeend <- 0
     op.bfirst <- 0
     op.nblk <- 0
     op.nphi <- 0

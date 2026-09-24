@@ -69,6 +69,15 @@ prototype and every C function callable from Oli-- (V2 adds the `extern` declara
 Dots are legal in ELF symbol names; no mangling scheme is needed until generics (V1),
 which will append a stable hash of the instantiation arguments.
 
+Implemented (stage 23, 2026-09-24): every image `olic` writes carries `.symtab`
+and `.strtab` with exactly the table above — `module.proc` (`STB_LOCAL` unless
+`pub`), an `export` clause as a second `STB_GLOBAL` symbol, every static as
+`module.name` (`STT_OBJECT`, with its size) in `.data`, `.bss` or `.rodata`, the
+trap routine as `olic.trap` — and eight section headers (`.rodata`, `.text`,
+`.data`, `.bss`, `.symtab`, `.strtab`, `.shstrtab`), so `nm`, `readelf -S`,
+`objdump -d` and `gdb` read it as it is. The tables follow the loaded image
+and are not mapped.
+
 ## 5. Linux syscall convention
 
 | Item | Register |
