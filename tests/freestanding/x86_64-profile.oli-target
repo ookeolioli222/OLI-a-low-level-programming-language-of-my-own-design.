@@ -1,0 +1,14 @@
+# The target profile of tests/freestanding/profile.oli (FREESTANDING.md §2):
+# what the linker script would say. `load_address`, `align_sections` and
+# the order of `sections` apply; the other keys are accepted for what they
+# document.
+[target]
+arch          = "x86_64"
+os            = "none"
+code_model    = "small"
+load_address  = 0x500000
+red_zone      = false
+stack_probe   = false
+entry         = "profile.start"
+sections      = [".text.boot", ".text.init", ".text", ".rodata", ".data", ".bss.stack", ".bss"]
+align_sections = 64

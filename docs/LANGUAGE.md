@@ -728,8 +728,9 @@ a static with `section ".text.boot"` goes in front of the code, so a
 Multiboot2 header is a static layout with an initialiser (`examples/kernel.oli`
 — a kernel that writes COM1 through `out dx, al`, the VGA text buffer through
 an `mmio` view from `mem.mmio` and reads `cpuid`; the harness checks the image
-structurally, QEMU runs it). Still planned: the TOML profile file, the section
-order beyond `.text.boot`. See `docs/FREESTANDING.md` and
+structurally, QEMU runs it). A `-- profile: PATH` line names the target profile — load
+address, the order of the sections, their alignment (`docs/FREESTANDING.md`
+§2). See `docs/FREESTANDING.md` and
 `docs/KERNEL_PROGRAMMING.md`; `tests/sema/ok/freestanding.oli` and
 `tests/parse/ok/kernel_sketch.oli` are the reference shapes.
 

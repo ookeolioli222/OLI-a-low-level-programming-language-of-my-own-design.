@@ -186,6 +186,8 @@ AM_WRAP := 1
 AM_SAT := 2
 AM_CHECKED := 3
 DAT_MAX := 8192
+SECT_MAX := 64
+SNAME_MAX := 4096
 DMAP_MAX := 65536
 
 -- Arena limits of the block form.
@@ -282,6 +284,7 @@ layout OProc
     isint : u64
     isextern : u64
     symidx : u64
+    sect : u64
 end
 
 layout Stat
@@ -292,11 +295,26 @@ end
 
 layout Dat
     -- A static place: its offset in the writable segment, its size, and
-    -- whether it starts as bytes in the file (`.data`) or as zero (`.bss`).
+    -- whether it starts as bytes in the file (`.data`) or as zero (`.bss`);
+    -- `sect` is its section group (a zero static's), 0 for `.data`.
     off : u64
     size : u64
     init : u64
     val : u64
+    sect : u64
+end
+
+layout Sect
+    -- A section group of the image (FREESTANDING.md §2): its name in
+    -- `ob.snames`, its kind (0 code, 1 zero statics), where it starts and
+    -- how long it is — in the code for kind 0, in the writable segment for
+    -- kind 1 — in the order the profile's `sections` list gives, then as
+    -- first seen.
+    noff : u64
+    nlen : u64
+    kind : u64
+    start : u64
+    size : u64
 end
 
 layout Blk
@@ -422,6 +440,10 @@ layout Oir
     widefall : u64
     paywide : u64
     entryp : u64
+    sects : rw view u8
+    nsect : u64
+    snames : rw view u8
+    nsname : u64
     amode : u64
     ovfacc : u64
     mbits : u64
@@ -453,6 +475,8 @@ proc oir_new(z: zone) -> rw ref Oir
     ob.stats <- z.bytes(STAT_MAX * Stat.size)
     ob.dats <- z.bytes(DAT_MAX * Dat.size)
     ob.dmap <- z.bytes(DMAP_MAX * Cell.size)
+    ob.sects <- z.bytes(SECT_MAX * Sect.size)
+    ob.snames <- z.bytes(SNAME_MAX)
     ob.dbytes <- z.bytes(DATA_MAX)
     ob.tmsgs <- z.bytes(TMSG_MAX * TMsg.size)
     ob.data <- z.bytes(DATA_MAX)
@@ -548,6 +572,8 @@ proc oir_reset(ob: rw ref Oir)
     ob.widefall <- 0
     ob.paywide <- 0
     ob.entryp <- 0
+    ob.nsect <- 0
+    ob.nsname <- 0
     ob.amode <- 0
     ob.ovfacc <- 0
     ob.mbits <- 0
@@ -577,6 +603,139 @@ proc stat_at(ob: ref Oir, i: u64) -> rw ref Stat
     t := ob.stats
     off := i * Stat.size
     ret Stat.at(t[off..off + Stat.size])
+end
+
+proc sect_at(ob: ref Oir, i: u64) -> rw ref Sect
+    t := ob.sects
+    off := i * Sect.size
+    ret Sect.at(t[off..off + Sect.size])
+end
+
+proc sect_name(ob: ref Oir, i: u64) -> view u8
+    s := sect_at(ob, i)
+    t := ob.snames
+    ret t[s.noff..s.noff + s.nlen]
+end
+
+proc sect_find(ob: ref Oir, name: view u8, kind: u64) -> word
+    i : u64 <- 0
+    while i < ob.nsect
+        s := sect_at(ob, i)
+        if s.kind == kind
+            if view_eq(sect_name(ob, i), name)
+                ret word.bits(i)
+            end
+        end
+        i <- i + 1
+    end
+    ret -1
+end
+
+proc sect_add(ob: rw ref Oir, name: view u8, kind: u64) -> u64
+    -- A section group, once: its index.
+    permit os.syscall
+    f := sect_find(ob, name, kind)
+    if f >= 0
+        ret u64.bits(f)
+    end
+    if ob.nsect >= SECT_MAX
+        put(2, "olic: section table exhausted\n")
+        os.syscall(60, 4)
+    end
+    if ob.nsname + name.len > SNAME_MAX
+        put(2, "olic: section names exhausted\n")
+        os.syscall(60, 4)
+    end
+    t := ob.snames
+    i : u64 <- 0
+    while i < name.len
+        t[ob.nsname + i] <- name[i]
+        i <- i + 1
+    end
+    s := sect_at(ob, ob.nsect)
+    s.noff <- ob.nsname
+    s.nlen <- name.len
+    s.kind <- kind
+    s.start <- 0
+    s.size <- 0
+    ob.nsname <- ob.nsname + name.len
+    ob.nsect <- ob.nsect + 1
+    ret ob.nsect - 1
+end
+
+proc order_sections(pg: ref Prog, ob: rw ref Oir)
+    -- The groups of the image: the profile's `sections` in its order first
+    -- (those a procedure or a zero static uses, `.text` and `.bss` always),
+    -- then every other name as first seen — `.text.boot` before `.text`
+    -- without a profile, as it always was.
+    if pg.hasprof == 1
+        rank : u64 <- 0
+        while rank < SECT_MAX
+            any : u64 <- 0
+            q : u64 <- 0
+            while q < pg.nproc
+                nm := proc_sect(pg, q)
+                if profile_sect_index(pg, nm) == word.bits(rank)
+                    sect_add(ob, nm, 0)
+                    any <- 1
+                end
+                q <- q + 1
+            end
+            vi : u64 <- 0
+            while vi < pg.nval
+                v := val_at(pg, vi)
+                if v.kind == 1
+                    if static_in_text(pg, vi) == 0
+                        if val_has_init(pg, vi) == 0
+                            nm2 := static_sect(pg, vi, 0)
+                            if profile_sect_index(pg, nm2) == word.bits(rank)
+                                sect_add(ob, nm2, 1)
+                                any <- 1
+                            end
+                        end
+                    end
+                end
+                vi <- vi + 1
+            end
+            rank <- rank + 1
+        end
+    else
+        q0 : u64 <- 0
+        while q0 < pg.nproc
+            if view_eq(proc_sect(pg, q0), ".text.boot")
+                sect_add(ob, ".text.boot", 0)
+            end
+            q0 <- q0 + 1
+        end
+    end
+    sect_add(ob, ".text", 0)
+    q2 : u64 <- 0
+    while q2 < pg.nproc
+        sect_add(ob, proc_sect(pg, q2), 0)
+        q2 <- q2 + 1
+    end
+    vi2 : u64 <- 0
+    while vi2 < pg.nval
+        v2 := val_at(pg, vi2)
+        if v2.kind == 1
+            if static_in_text(pg, vi2) == 0
+                if val_has_init(pg, vi2) == 0
+                    sect_add(ob, static_sect(pg, vi2, 0), 1)
+                end
+            end
+        end
+        vi2 <- vi2 + 1
+    end
+end
+
+proc val_has_init(pg: ref Prog, vi: u64) -> u64
+    v := val_at(pg, vi)
+    cx := mod_ctx(pg, v.mod)
+    vn := node_at(cx, v.node)
+    if vn.sub == 1
+        ret 1
+    end
+    ret 0
 end
 
 proc dat_at(ob: ref Oir, i: u64) -> rw ref Dat
@@ -1102,17 +1261,39 @@ proc collect_data(pg: rw ref Prog, ob: rw ref Oir)
         end
         i <- i + 1
     end
-    -- The zero statics follow the initialised ones, each at its alignment:
-    -- the natural one of its size, or what an `align N` clause asks for.
-    k : u64 <- 0
-    while k < ob.ndat
-        d := dat_at(ob, k)
-        if d.init == 0
-            here := round_up(ob.dsize + ob.bsize, static_align(pg, d.val, d.size))
-            d.off <- here
-            ob.bsize <- here + d.size - ob.dsize
+    -- The zero statics follow the initialised ones, section group by
+    -- section group in the order `order_sections` settled, each at its
+    -- alignment: the natural one of its size, or what an `align N` clause
+    -- asks for.
+    order_sections(pg, ob)
+    g : u64 <- 0
+    while g < ob.nsect
+        sg := sect_at(ob, g)
+        if sg.kind == 1
+            first : u64 <- 1
+            k : u64 <- 0
+            while k < ob.ndat
+                d := dat_at(ob, k)
+                if d.init == 0
+                    if view_eq(static_sect(pg, d.val, 0), sect_name(ob, g))
+                        here := round_up(ob.dsize + ob.bsize, static_align(pg, d.val, d.size))
+                        if first == 1
+                            sg.start <- here
+                            first <- 0
+                        end
+                        d.off <- here
+                        d.sect <- g
+                        ob.bsize <- here + d.size - ob.dsize
+                    end
+                end
+                k <- k + 1
+            end
+            if first == 1
+                sg.start <- ob.dsize + ob.bsize
+            end
+            sg.size <- ob.dsize + ob.bsize - sg.start
         end
-        k <- k + 1
+        g <- g + 1
     end
 end
 
@@ -1166,6 +1347,7 @@ proc add_data(pg: rw ref Prog, ob: rw ref Oir, vi: u64)
     d.val <- vi
     d.init <- 0
     d.off <- 0
+    d.sect <- 0
     cell_set(ob.dmap, vi, k + 1)
     ob.ndat <- k + 1
     if vn.sub == 1
@@ -5355,6 +5537,7 @@ proc gen_extern_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     op.boot <- 0
     op.isextern <- 1
     op.symidx <- 0
+    op.sect <- 0
     build_blocks(ob, ob.nproc)
     ob.nproc <- ob.nproc + 1
 end
@@ -5384,6 +5567,7 @@ proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     op.codeend <- 0
     op.isextern <- 0
     op.symidx <- 0
+    op.sect <- 0
     op.bfirst <- 0
     op.nblk <- 0
     op.nphi <- 0

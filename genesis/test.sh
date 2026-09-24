@@ -1429,6 +1429,22 @@ for f in ../tests/freestanding/*.oli; do
     [ ! -s build/fs_$n.out ] || fail "freestanding: $n wrote output, and it has no OS to write to"
 done
 echo "ok: a freestanding program runs from its own entry with no frame, installs its own stack, and a trap in it reaches the traps procedure with the kind and the core.Site of the line"
+# The target profile (FREESTANDING.md 2): tests/freestanding/profile.oli is
+# laid out by tests/freestanding/x86_64-profile.oli-target - loaded where
+# it says, its code sections in its order and on its alignment, its zero
+# statics grouped by section - and the section headers say so.
+readelf -lW build/fs_profile.elf | grep -q 'LOAD .*0x0000000000500000 0x0000000000500000' || fail "profile: the image must be loaded at the profile's load_address 0x500000"
+[ "$(readelf -SW build/fs_profile.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text.init .text .text.trap .data .bss.stack .bss .symtab .strtab .shstrtab " ] || fail "profile: the sections must follow the profile's order: $(readelf -SW build/fs_profile.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
+for s in .text.boot .text.init .text .text.trap; do
+    a=$(readelf -SW build/fs_profile.elf | grep -oP "\] $s\s+PROGBITS\s+[0-9a-f]{16}" | awk '{print $NF}')
+    [ $(( 0x$a % 64 )) = 0 ] || fail "profile: $s at 0x$a is not on the profile's 64-byte section alignment"
+done
+objdump -t build/fs_profile.elf | grep -q '\.text\.init.*profile\.init_a$' || fail "profile: init_a must lie in .text.init"
+objdump -t build/fs_profile.elf | grep -q '\.bss\.stack.*profile\.stack$' || fail "profile: the stack must lie in .bss.stack"
+readelf -a build/fs_profile.elf > /dev/null 2> build/readelf.err || fail "profile: readelf -a rejects fs_profile.elf"
+[ ! -s build/readelf.err ] || fail "profile: readelf -a warns: $(head -1 build/readelf.err)"
+[ "$(readelf -SW build/kernel.elf 2>/dev/null | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text .text.trap .data .bss.boot .bss .symtab .strtab .shstrtab " ] || true
+echo "ok: a target profile lays the image out - load_address, the order of sections, align_sections - and every code and zero-static section has its own header"
 
 # The reference program of the language documents runs: examples/packet_demo.oli
 # builds a packet in a zone, parses its header through a layout with a `be`
@@ -1473,6 +1489,7 @@ grep -q '0f 01 1c 25' build/kernel.asm || fail "kernel: the descriptor table mus
 [ "$(grep -c 'hw.store port.u8' build/kernel.oir)" = 15 ] || fail "kernel: fifteen port writes - COM1 setup and byte, ICW1-4 and the masks of two PICs, the PIT's mode and divisor, the EOI"
 [ "$(grep -c 'hw.store arch.x64.cr3' build/kernel.oir)" = 1 ] || fail "kernel: the page tables go into cr3 through a hardware place"
 nm build/kernel.elf | grep -q '^00000000001000b0 R kernel.header$' || fail "kernel: the Multiboot2 header must be the .rodata symbol kernel.header at 0x1000b0"
+[ "$(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text .text.trap .data .bss.boot .bss .symtab .strtab .shstrtab " ] || fail "kernel: the sections must follow examples/x86_64-kernel.oli-target: $(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
 nm build/kernel.elf | grep -q ' T core.x64.paging.identity_2m$' || fail "kernel: the pub procedures of core.x64.paging must be global symbols"
 grep -q 'call core.x64.paging.identity_2m\|= call ' build/kernel.oir || fail "kernel: the page directory must be filled by core.x64.paging"
 [ "$(od -An -tx1 -v build/kernel.elf | tr -d '\n' | grep -o '48 cf' | wc -l)" = 2 ] || fail "kernel: exactly two calls-interrupt handlers end in iretq"

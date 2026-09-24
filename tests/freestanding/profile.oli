@@ -1,0 +1,53 @@
+-- target: freestanding
+-- profile: tests/freestanding/x86_64-profile.oli-target
+module profile
+-- A freestanding program laid out by its target profile: loaded at the
+-- profile's address, its code sections in the profile's order and each
+-- aligned to `align_sections`, its zero statics grouped by section. It
+-- exits with what `init_a` in `.text.init` computed from `.bss.stack`.
+-- expect: exit 33
+proc start -> never
+    entry
+    calls none
+    section ".text.boot"
+    permit cpu.asm
+    machine x64
+        lea rsp, [stack + 4096]
+        xor ebp, ebp
+        call profile.main
+        hlt
+    end
+end
+
+stack : [4096]u8
+    section ".bss.stack"
+
+counter : u64
+
+proc init_a() -> u64
+    section ".text.init"
+    counter <- counter + 30
+    ret counter + 3
+end
+
+proc on_trap(_kind : core.TrapKind, _site : core.Site) -> never
+    traps
+    permit cpu.asm
+    machine x64
+        mov edi, 99
+        mov eax, 60
+        syscall
+        hlt
+    end
+end
+
+proc main -> never
+    permit cpu.asm
+    v := init_a()
+    machine x64
+        in rdi <- v
+        mov eax, 60
+        syscall
+        hlt
+    end
+end

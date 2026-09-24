@@ -13,9 +13,12 @@ module olic.elf
 -- §4: every procedure as `module.name`, `STB_LOCAL` unless `pub`, an
 -- `export` clause as a second, global name; every static as `module.name`
 -- in `.data`, `.bss` or `.rodata`; the trap routine as `olic.trap`), its
--- `.strtab`, `.shstrtab`, and eight section headers — null, `.rodata`,
--- `.text`, `.data`, `.bss`, `.symtab`, `.strtab`, `.shstrtab` — so that
--- `nm`, `readelf -S` and `objdump -d` read the image as it is.
+-- `.strtab`, `.shstrtab`, and the section headers — null, `.rodata`, one
+-- per code section group in the image's order (`.text.boot`, `.text`, the
+-- named ones, `.text.trap`), `.data`, one per zero-static group (`.bss`,
+-- `.bss.boot`, …), `.symtab`, `.strtab`, `.shstrtab` — so that `nm`,
+-- `readelf -S` and `objdump -d` read the image as it is (stage 28: the
+-- groups and their order come from the target profile).
 
 EHDR_SIZE := 64
 PHDR_SIZE := 56
@@ -113,6 +116,8 @@ layout Elfw
     dofs : u64
     hasdata : u64
     bssadj : u64
+    secidx : rw view u8
+    datasec : u64
 end
 
 proc str_put(w: rw ref Elfw, s: view u8)
@@ -185,7 +190,7 @@ proc sym_procs(pg: ref Prog, ob: ref Oir, w: rw ref Elfw, want_pub: u64)
         end
         if ispub == want_pub
             off := qualified(pg, w, v.mod, tok_text(cx, nd.t0))
-            add_sym(w, off, 2 + want_pub * 16, 2, w.base + w.textoff + op.codepos, op.codeend - op.codepos)
+            add_sym(w, off, 2 + want_pub * 16, cell_get(w.secidx, op.sect), w.base + w.textoff + op.codepos, op.codeend - op.codepos)
         end
         if want_pub == 1
             sym_export(pg, w, op)
@@ -220,7 +225,7 @@ proc sym_export(pg: ref Prog, w: rw ref Elfw, op: ref OProc)
                     end
                 end
                 str_term(w)
-                add_sym(w, off, 18, 2, w.base + w.textoff + op.codepos, op.codeend - op.codepos)
+                add_sym(w, off, 18, cell_get(w.secidx, op.sect), w.base + w.textoff + op.codepos, op.codeend - op.codepos)
             end
         end
         k <- sibling(cx, k)
@@ -235,7 +240,12 @@ proc sym_trap(ob: ref Oir, mc: ref Mach, w: rw ref Elfw)
     off := w.nstr
     str_put(w, "olic.trap")
     str_term(w)
-    add_sym(w, off, 2, 2, w.base + w.textoff + mc.trappos, ob.ncode - mc.trappos)
+    tg := sect_find(ob, ".text.trap", 0)
+    ts : u64 <- 2
+    if tg >= 0
+        ts <- cell_get(w.secidx, u64.bits(tg))
+    end
+    add_sym(w, off, 2, ts, w.base + w.textoff + mc.trappos, ob.ncode - mc.trappos)
 end
 
 proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
@@ -248,10 +258,10 @@ proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
         cx := mod_ctx(pg, v.mod)
         vn := node_at(cx, v.node)
         off := qualified(pg, w, v.mod, tok_text(cx, vn.t0))
-        sh : u64 <- 4
+        sh : u64 <- cell_get(w.secidx, d.sect)
         adj : u64 <- w.bssadj
         if d.init == 1
-            sh <- 3
+            sh <- w.datasec
             adj <- 0
         end
         add_sym(w, off, 17, sh, w.base + w.dofs + d.off - adj, d.size)
@@ -322,6 +332,7 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     w := z.make(Elfw)
     w.symtab <- z.bytes(SYMTAB_MAX * SYM_SIZE)
     w.strtab <- z.bytes(STRTAB_MAX)
+    w.secidx <- z.bytes(SECT_MAX * Cell.size)
     w.nsym <- 1
     w.nstr <- 1
     zt := w.symtab
@@ -342,12 +353,70 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
         w.hasdata <- 1
         w.dofs <- page_up(total)
     end
+    -- The sections: null, .rodata, the code groups, .data, the zero
+    -- groups, .symtab, .strtab, .shstrtab — the groups in the image's own
+    -- order (FREESTANDING.md §2).
+    ncode : u64 <- 0
+    nbss : u64 <- 0
+    g : u64 <- 0
+    while g < ob.nsect
+        sg := sect_at(ob, g)
+        if sg.kind == 0
+            cell_set(w.secidx, g, 2 + ncode)
+            ncode <- ncode + 1
+        end
+        g <- g + 1
+    end
+    w.datasec <- 2 + ncode
+    g <- 0
+    while g < ob.nsect
+        sg2 := sect_at(ob, g)
+        if sg2.kind == 1
+            cell_set(w.secidx, g, w.datasec + 1 + nbss)
+            nbss <- nbss + 1
+        end
+        g <- g + 1
+    end
+    symsec := w.datasec + 1 + nbss
+    nsect := symsec + 3
     -- The local symbols first, as ELF orders them, then the global ones.
     sym_procs(pg, ob, w, 0)
     sym_trap(ob, mc, w)
     nlocal := w.nsym
     sym_procs(pg, ob, w, 1)
     sym_statics(pg, ob, w)
+    -- The section names.
+    shs := z.bytes(SNAME_MAX + 128)
+    shs[0] <- 0
+    nameoff := z.bytes(SECT_MAX * Cell.size)
+    n1 : u64 <- shs_name(shs, 1, ".rodata")
+    g <- 0
+    while g < ob.nsect
+        sg3 := sect_at(ob, g)
+        if sg3.kind == 0
+            cell_set(nameoff, g, n1)
+            n1 <- shs_name(shs, n1, sect_name(ob, g))
+        end
+        g <- g + 1
+    end
+    ndata := n1
+    n1 <- shs_name(shs, n1, ".data")
+    g <- 0
+    while g < ob.nsect
+        sg4 := sect_at(ob, g)
+        if sg4.kind == 1
+            cell_set(nameoff, g, n1)
+            n1 <- shs_name(shs, n1, sect_name(ob, g))
+        end
+        g <- g + 1
+    end
+    nsym := n1
+    n1 <- shs_name(shs, n1, ".symtab")
+    nstr := n1
+    n1 <- shs_name(shs, n1, ".strtab")
+    nshs := n1
+    n1 <- shs_name(shs, n1, ".shstrtab")
+    shslen := n1
     -- The tables after the image, each on an eight-byte boundary.
     imgend : u64 <- total
     if w.hasdata == 1
@@ -356,13 +425,13 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     symoff := round8(imgend)
     stroff := symoff + w.nsym * SYM_SIZE
     shstroff := stroff + w.nstr
-    shoff := round8(shstroff + SHSTR_LEN)
+    shoff := round8(shstroff + shslen)
     hdr := z.bytes(hs)
     elf_header(hdr, epoint, total, ob.base)
     put_u64v(hdr, 40, shoff)
     put_u16(hdr, 58, SHDR_SIZE)
-    put_u16(hdr, 60, NSECT)
-    put_u16(hdr, 62, 7)
+    put_u16(hdr, 60, nsect)
+    put_u16(hdr, 62, symsec + 2)
     if w.hasdata == 1
         put_u16(hdr, 56, 2)
         data_phdr(hdr, w.dofs, ob.dsize, ob.dsize + ob.bsize, ob.base)
@@ -388,23 +457,14 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     put(1, st[..w.nsym * SYM_SIZE])
     sb := w.strtab
     put(1, sb[..w.nstr])
-    shs := z.bytes(SHSTR_LEN)
-    shs[0] <- 0
-    n1 := shs_name(shs, 1, ".rodata")
-    n2 := shs_name(shs, n1, ".text")
-    n3 := shs_name(shs, n2, ".data")
-    n4 := shs_name(shs, n3, ".bss")
-    n5 := shs_name(shs, n4, ".symtab")
-    n6 := shs_name(shs, n5, ".strtab")
-    _n7 := shs_name(shs, n6, ".shstrtab")
-    put(1, shs)
-    if shoff > shstroff + SHSTR_LEN
-        pad3 := z.bytes(shoff - shstroff - SHSTR_LEN)
+    put(1, shs[..shslen])
+    if shoff > shstroff + shslen
+        pad3 := z.bytes(shoff - shstroff - shslen)
         put(1, pad3)
     end
-    sh := z.bytes(NSECT * SHDR_SIZE)
+    sh := z.bytes(nsect * SHDR_SIZE)
     zi2 : u64 <- 0
-    while zi2 < NSECT * SHDR_SIZE
+    while zi2 < nsect * SHDR_SIZE
         sh[zi2] <- 0
         zi2 <- zi2 + 1
     end
@@ -412,35 +472,43 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     shdr_place(sh, 1, ob.base + hs, hs, ob.ndata)
     shdr_link(sh, 1, 0, 0)
     shdr_align(sh, 1, 8, 0)
-    shdr_kind(sh, 2, n1, 1, 6)
-    shdr_place(sh, 2, ob.base + w.textoff, w.textoff, ob.ncode)
-    shdr_link(sh, 2, 0, 0)
-    shdr_align(sh, 2, 16, 0)
-    shdr_kind(sh, 3, n2, 1, 3)
-    shdr_kind(sh, 4, n3, 8, 3)
-    if w.hasdata == 1
-        shdr_place(sh, 3, ob.base + w.dofs, w.dofs, ob.dsize)
-        shdr_place(sh, 4, ob.base + w.dofs + ob.dsize, w.dofs + ob.dsize, ob.bsize)
-    else
-        shdr_place(sh, 3, 0, total, 0)
-        shdr_place(sh, 4, 0, total, 0)
+    g <- 0
+    while g < ob.nsect
+        sg5 := sect_at(ob, g)
+        si := cell_get(w.secidx, g)
+        if sg5.kind == 0
+            shdr_kind(sh, si, cell_get(nameoff, g), 1, 6)
+            shdr_place(sh, si, ob.base + w.textoff + sg5.start, w.textoff + sg5.start, sg5.size)
+            shdr_link(sh, si, 0, 0)
+            shdr_align(sh, si, pg.sectalign, 0)
+        else
+            shdr_kind(sh, si, cell_get(nameoff, g), 8, 3)
+            shdr_place(sh, si, ob.base + w.dofs + sg5.start, w.dofs + ob.dsize, sg5.size)
+            shdr_link(sh, si, 0, 0)
+            shdr_align(sh, si, 8, 0)
+        end
+        g <- g + 1
     end
-    shdr_link(sh, 3, 0, 0)
-    shdr_align(sh, 3, 8, 0)
-    shdr_link(sh, 4, 0, 0)
-    shdr_align(sh, 4, 8, 0)
-    shdr_kind(sh, 5, n4, 2, 0)
-    shdr_place(sh, 5, 0, symoff, w.nsym * SYM_SIZE)
-    shdr_link(sh, 5, 6, nlocal)
-    shdr_align(sh, 5, 8, SYM_SIZE)
-    shdr_kind(sh, 6, n5, 3, 0)
-    shdr_place(sh, 6, 0, stroff, w.nstr)
-    shdr_link(sh, 6, 0, 0)
-    shdr_align(sh, 6, 1, 0)
-    shdr_kind(sh, 7, n6, 3, 0)
-    shdr_place(sh, 7, 0, shstroff, SHSTR_LEN)
-    shdr_link(sh, 7, 0, 0)
-    shdr_align(sh, 7, 1, 0)
+    shdr_kind(sh, w.datasec, ndata, 1, 3)
+    if w.hasdata == 1
+        shdr_place(sh, w.datasec, ob.base + w.dofs, w.dofs, ob.dsize)
+    else
+        shdr_place(sh, w.datasec, 0, total, 0)
+    end
+    shdr_link(sh, w.datasec, 0, 0)
+    shdr_align(sh, w.datasec, 8, 0)
+    shdr_kind(sh, symsec, nsym, 2, 0)
+    shdr_place(sh, symsec, 0, symoff, w.nsym * SYM_SIZE)
+    shdr_link(sh, symsec, symsec + 1, nlocal)
+    shdr_align(sh, symsec, 8, SYM_SIZE)
+    shdr_kind(sh, symsec + 1, nstr, 3, 0)
+    shdr_place(sh, symsec + 1, 0, stroff, w.nstr)
+    shdr_link(sh, symsec + 1, 0, 0)
+    shdr_align(sh, symsec + 1, 1, 0)
+    shdr_kind(sh, symsec + 2, nshs, 3, 0)
+    shdr_place(sh, symsec + 2, 0, shstroff, shslen)
+    shdr_link(sh, symsec + 2, 0, 0)
+    shdr_align(sh, symsec + 2, 1, 0)
     put(1, sh)
 end
 
@@ -606,6 +674,18 @@ proc write_object(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     w.dofs <- 0
     w.hasdata <- 1
     w.bssadj <- ob.dsize
+    w.secidx <- z.bytes(SECT_MAX * Cell.size)
+    w.datasec <- 3
+    og : u64 <- 0
+    while og < ob.nsect
+        osg := sect_at(ob, og)
+        if osg.kind == 0
+            cell_set(w.secidx, og, 2)
+        else
+            cell_set(w.secidx, og, 4)
+        end
+        og <- og + 1
+    end
     sym_sections(w)
     sym_procs(pg, ob, w, 0)
     sym_trap(ob, mc, w)

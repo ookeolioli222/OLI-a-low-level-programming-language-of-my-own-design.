@@ -1,5 +1,5 @@
 -- target: freestanding
--- load: 0x100000
+-- profile: examples/x86_64-kernel.oli-target
 module kernel
 import core.x64
 import core.x64.paging

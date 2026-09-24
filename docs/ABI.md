@@ -122,7 +122,7 @@ built from the initial stack (`[rsp] = argc`, `[rsp+8..] = argv`).
 | machine | `EM_X86_64`, little-endian, `ELFCLASS64` |
 | base address | `0x400000` hosted; `--load-address` / target profile in freestanding mode |
 | segments | `PT_LOAD R+X` (`.text`), `PT_LOAD R` (`.rodata`), `PT_LOAD RW` (`.data` + `.bss`), page-aligned; `PT_GNU_STACK` non-executable |
-| sections | `.text .rodata .data .bss .symtab .strtab .shstrtab`; user sections from `section` clauses |
+| sections | `.rodata`, the code groups in the profile's order (`.text.boot`, `.text`, named ones, `.text.trap`), `.data`, the zero groups (`.bss`, `.bss.boot`, …), `.symtab .strtab .shstrtab` — each with its own header (stage 28) |
 | relocations | none in the executable: all addresses are resolved by the writer (RIP-relative for code/data, absolute 32-bit sign-extended in `code kernel`) |
 | debug | `.symtab` always; DWARF line tables planned (tooling phase) |
 

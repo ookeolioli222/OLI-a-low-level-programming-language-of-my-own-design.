@@ -1,0 +1,13 @@
+# The target profile of examples/kernel.oli (FREESTANDING.md §2): the flat
+# image a Multiboot2 loader takes at 0x100000, `.text.boot` first, every
+# section on a sixteen-byte boundary.
+[target]
+arch          = "x86_64"
+os            = "none"
+code_model    = "small"
+load_address  = 0x100000
+red_zone      = false
+stack_probe   = false
+entry         = "kernel.start"
+sections      = [".text.boot", ".text", ".rodata", ".data", ".bss.boot", ".bss"]
+align_sections = 16

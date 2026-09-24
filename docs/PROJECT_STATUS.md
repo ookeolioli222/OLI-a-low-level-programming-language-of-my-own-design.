@@ -1156,12 +1156,40 @@ constant in `.rodata`).
   documents — reports only its intended `E0401` and `E0200`: nothing in it
   is `E0900` any more.
 
+## Implemented in back-end stage 28 (2026-09-24): the target profile and named sections
+
+- **`-- profile: PATH`** names the target profile of FREESTANDING.md §2,
+  a file of `key = value` lines read like a module (relative to the
+  working directory; a missing file stops the compilation with its name).
+  `load_address` overrides `-- load:`, `align_sections` sets the boundary
+  every code section starts on (padded with `int3`), and `sections`
+  orders the groups; the other keys are read for what they document.
+- **Named sections are placed.** Every distinct `section "name"` on a
+  procedure is a code group (`.text` for those without a clause,
+  `.text.trap` for the trap routine, last), every distinct name on a zero
+  static a group of the writable segment (`.bss`, `.bss.boot`, …); the
+  order is the profile's list first, then first seen — without a profile
+  `.text.boot`, `.text`, the rest, exactly the layout of stage 14. Each
+  group has its own ELF section header with its address and size, so
+  `readelf -S` shows the layout and `objdump -t` places every symbol in
+  its section. The read-only data stays in front of the code (a boot
+  loader's header must be there) and `.data` on the page after it.
+- `tests/freestanding/profile.oli` with `x86_64-profile.oli-target`:
+  loaded at 0x500000, `.text.boot`, `.text.init`, `.text`, `.text.trap`
+  each on a 64-byte boundary in that order, `.bss.stack` before `.bss`,
+  the program exits 33 through what `.text.init` computed; the harness
+  reads the section list, the addresses, the load address and the symbol
+  placement, and requires `readelf -a` to raise nothing.
+  `examples/kernel.oli` now carries `examples/x86_64-kernel.oli-target`
+  instead of `-- load:`, and its image lists `.text.boot .text .text.trap
+  .data .bss.boot .bss`.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 27,049 lines) into
+compiles its own source (`compiler/`, seventeen modules, 27,516 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,060,752 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,083,512 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

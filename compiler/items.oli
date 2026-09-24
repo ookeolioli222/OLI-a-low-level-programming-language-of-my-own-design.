@@ -88,6 +88,9 @@ layout Prog
     fstanding : u64
     loadaddr : u64
     objmode : u64
+    sectalign : u64
+    hasprof : u64
+    profsrc : view u8
     curhasres : u64
     curnever : u64
     curfallible : u64
@@ -133,6 +136,8 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.fstanding <- 0
     pg.loadaddr <- 4194304
     pg.objmode <- 0
+    pg.sectalign <- 1
+    pg.hasprof <- 0
     pg.curhasres <- 0
     pg.curnever <- 0
     pg.curfallible <- 0
@@ -1248,6 +1253,177 @@ proc parse_addr(src: view u8, start: u64) -> u64
     ret v
 end
 
+proc pragma_value(src: view u8, mark: view u8) -> view u8
+    -- The rest of the line after `mark` near the top of the program, or
+    -- an empty view.
+    i : u64 <- 0
+    while i + mark.len <= src.len
+        if i > 512
+            ret src[0..0]
+        end
+        if view_eq(src[i..i + mark.len], mark)
+            j : u64 <- i + mark.len
+            k : u64 <- j
+            while k < src.len
+                if src[k] == 10
+                    break
+                end
+                k <- k + 1
+            end
+            ret src[j..k]
+        end
+        i <- i + 1
+    end
+    ret src[0..0]
+end
+
+proc apply_profile(pg: rw ref Prog, z: zone, src: view u8)
+    -- `-- profile: PATH`: the target profile (FREESTANDING.md §2), a file
+    -- of `key = value` lines read like a module — its `load_address`,
+    -- `align_sections` and `sections` order apply; the other keys are
+    -- accepted and not needed yet.
+    permit os.syscall
+    path := pragma_value(src, "-- profile: ")
+    if path.len == 0
+        ret
+    end
+    txt := read_file(z, path, 1048576)
+    if txt.len == 0
+        put(2, "olic: profile not found: ")
+        put(2, path)
+        put(2, "\n")
+        os.syscall(60, 1)
+    end
+    pg.profsrc <- txt
+    pg.hasprof <- 1
+    la := profile_value(txt, "load_address")
+    if la.len > 0
+        pg.loadaddr <- parse_addr(la, 0)
+    end
+    al := profile_value(txt, "align_sections")
+    if al.len > 0
+        pg.sectalign <- parse_addr(al, 0)
+        if pg.sectalign == 0
+            pg.sectalign <- 1
+        end
+    end
+end
+
+proc profile_value(txt: view u8, key: view u8) -> view u8
+    -- The value of `key = value` in the profile: what follows the `=` and
+    -- the spaces after it, to the end of the line; empty when absent.
+    i : u64 <- 0
+    while i + key.len <= txt.len
+        atline : u64 <- 0
+        if i == 0
+            atline <- 1
+        elif txt[i - 1] == 10
+            atline <- 1
+        end
+        if atline == 1
+            if view_eq(txt[i..i + key.len], key)
+                j : u64 <- i + key.len
+                while j < txt.len
+                    if txt[j] == 32
+                        j <- j + 1
+                    elif txt[j] == 61
+                        j <- j + 1
+                    else
+                        break
+                    end
+                end
+                k : u64 <- j
+                while k < txt.len
+                    if txt[k] == 10
+                        break
+                    end
+                    k <- k + 1
+                end
+                ret txt[j..k]
+            end
+        end
+        i <- i + 1
+    end
+    ret txt[0..0]
+end
+
+proc profile_sect_index(pg: ref Prog, name: view u8) -> word
+    -- The position of a section name in the profile's `sections` list, or
+    -- -1: the list is `[".a", ".b", ...]`, the names quoted.
+    if pg.hasprof == 0
+        ret -1
+    end
+    lst := profile_value(pg.profsrc, "sections")
+    n : u64 <- 0
+    i : u64 <- 0
+    while i < lst.len
+        if lst[i] == 34
+            j : u64 <- i + 1
+            while j < lst.len
+                if lst[j] == 34
+                    break
+                end
+                j <- j + 1
+            end
+            if view_eq(lst[i + 1..j], name)
+                ret word.bits(n)
+            end
+            n <- n + 1
+            i <- j + 1
+        else
+            i <- i + 1
+        end
+    end
+    ret -1
+end
+
+proc clause_section(pg: ref Prog, mi: u64, node: u64) -> view u8
+    -- The name a `section "..."` clause gives, without its quotes; empty
+    -- without one.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    k : u64 <- kid1(cx, node)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_SECTION
+                c := node_at(cx, kid1(cx, k))
+                s := tok_text(cx, c.t0)
+                if s.len >= 2
+                    e := s.len - 1
+                    ret s[1..e]
+                end
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    ret b[0..0]
+end
+
+proc proc_sect(pg: ref Prog, pi: u64) -> view u8
+    -- The code section of a procedure: its clause, or `.text`.
+    v := proc_at(pg, pi)
+    s := clause_section(pg, v.mod, v.node)
+    if s.len == 0
+        ret ".text"
+    end
+    ret s
+end
+
+proc static_sect(pg: ref Prog, vi: u64, init: u64) -> view u8
+    -- The section of a static in the writable segment: its clause, or
+    -- `.data` / `.bss`.
+    v := val_at(pg, vi)
+    s := clause_section(pg, v.mod, v.node)
+    if s.len == 0
+        if init == 1
+            ret ".data"
+        end
+        ret ".bss"
+    end
+    ret s
+end
+
 proc output_object(src: view u8) -> u64
     -- `-- output: object` near the top: a relocatable object file (ET_REL)
     -- for the system linker instead of an executable (ABI.md §6).
@@ -1303,6 +1479,7 @@ proc analyze(pg: rw ref Prog, z: zone, src: view u8)
     pg.fstanding <- target_freestanding(src)
     pg.loadaddr <- target_load(src)
     pg.objmode <- output_object(src)
+    apply_profile(pg, z, src)
     root := add_module(pg, z, src, "stdin")
     load_named(pg, z, "core")
     load_imports(pg, z, root)

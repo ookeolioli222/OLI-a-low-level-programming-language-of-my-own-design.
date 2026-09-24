@@ -2350,6 +2350,17 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
     end
 end
 
+proc pad_section(ob: rw ref Oir, pg: ref Prog, database: u64)
+    -- `int3` bytes up to the profile's section alignment, measured from the
+    -- start of the image (`database` is the load address plus the header).
+    if pg.sectalign <= 1
+        ret
+    end
+    while (database - ob.base + ob.ndata + ob.ncode) % pg.sectalign != 0
+        cb(ob, 204)
+    end
+end
+
 proc abs_kind(k: u64) -> word
     -- The fixes that are absolute addresses: read-only statics (2, 8), the
     -- writable segment (4, 6, 7) and procedures (5).
@@ -2388,24 +2399,39 @@ proc lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
     if tp >= 0
         mc.trapproc <- u64.bits(tp) + 1
     end
-    -- `section ".text.boot"` first: a freestanding image starts with it.
-    pass : u64 <- 0
-    while pass < 2
-        q : u64 <- 0
-        while q < ob.nproc
-            opq := oproc_at(ob, q)
-            if opq.boot == 1 - pass
+    -- The code section groups in the order `order_sections` settled —
+    -- `.text.boot` first, as a freestanding image must start with it — each
+    -- aligned to the profile's `align_sections` in the image, the trap
+    -- routine as `.text.trap` after them.
+    g : u64 <- 0
+    while g < ob.nsect
+        sg := sect_at(ob, g)
+        if sg.kind == 0
+            pad_section(ob, pg, database)
+            sg.start <- ob.ncode
+            q : u64 <- 0
+            while q < ob.nproc
+                opq := oproc_at(ob, q)
                 if opq.isextern == 0
-                    lower_proc(pg, ob, mc, q)
-                    opq.codeend <- ob.ncode
+                    if view_eq(proc_sect(pg, opq.pi), sect_name(ob, g))
+                        opq.sect <- g
+                        lower_proc(pg, ob, mc, q)
+                        opq.codeend <- ob.ncode
+                    end
                 end
+                q <- q + 1
             end
-            q <- q + 1
+            sg.size <- ob.ncode - sg.start
         end
-        pass <- pass + 1
+        g <- g + 1
     end
     if mc.ntrap > 0
+        pad_section(ob, pg, database)
+        gt := sect_add(ob, ".text.trap", 0)
+        st := sect_at(ob, gt)
+        st.start <- ob.ncode
         lower_trap_routine(ob, mc)
+        st.size <- ob.ncode - st.start
     end
     -- The writable segment starts on the page after the code (ABI.md §7):
     -- the same offset `compiler/elf.oli` writes it at, measured from the

@@ -24,8 +24,9 @@
 > The harness checks the image structurally — load address, entry, header
 > bytes at offset 176, port I/O and `cpuid` in the blocks, no system call
 > anywhere — and `qemu-system-x86_64 -kernel kernel.elf -serial stdio` runs
-> it. Not implemented: the profile *file* of §2, the section order beyond
-> `.text.boot`, `own`, the red-zone rule, and every library name
+> it. The profile *file* of §2 and the section order are real (stage 28:
+> `-- profile: PATH`, `load_address`, `align_sections`, `sections`). Not
+> implemented: `own`, the red-zone rule, and every library name
 > beyond `core.TrapKind`, `core.Site` and `core.CpuId`; `lib/core.oli` and
 > `lib/core/mem.oli` hold what is real. See `docs/LANGUAGE.md` §13 and
 > `docs/PROJECT_STATUS.md`.
@@ -76,6 +77,22 @@ Everything in the profile can also be given on the command line
 (`--load-address`, `--code-model`, `--entry`). The profile is the single
 place where "linker script" knowledge lives; Oli-- has no separate linker
 and no separate linker-script language.
+
+Implemented (stage 28, 2026-09-24): a `-- profile: PATH` line near the top of
+the program names the file, read relative to the working directory like
+`lib/`; a missing file stops the compilation. `load_address` (overriding
+`-- load:`), `align_sections` and `sections` apply. `sections` orders the
+*code* groups — every distinct `section` name on a procedure, `.text` for
+those without one, `.text.trap` for the trap routine last — and the zero
+statics' groups (`.bss`, `.bss.boot`, …), first the names the list gives in
+its order, then any other as first seen; each code group starts on an
+`align_sections` boundary (padding of `int3`), and each group has its own
+section header. The read-only data (`.rodata`, with `.text.boot` statics
+first) stays in front of the code — where a boot loader's header must be —
+and `.data` on the page after the code, whatever the list says; `entry`,
+`code_model`, `arch`, `os`, `red_zone` and `stack_probe` are read for what
+they document and not needed yet (`entry` is the `entry` clause).
+`tests/freestanding/profile.oli` and `examples/kernel.oli` each carry one.
 
 ## 3. Entry, stack, sections
 
