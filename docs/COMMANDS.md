@@ -301,12 +301,13 @@ port.u8[0x3F8] <- b                  -- runs: port I/O as an indexed place (`io.
 | `cpu.stack`, `cpu.frame`, `cpu.call`, `cpu.jump` | `cpu.control` | planned (`docs/design/0015-hardware-commands.md`) |
 | `cpu.id(leaf)` | — | planned |
 | `cpu.interrupts(on)` / `cpu.interrupts(off)` | `cpu.interrupt` | **runs**: one `sti` / `cli`, KERNEL (`tests/run/hw.oli`, `examples/kernel.oli`) |
-| `cpu.fence(order)`, `cpu.tsc()` | — | planned (V1) |
+| `cpu.fence(order)` | — | **runs**: `acquire` is `lfence`, `release` `sfence`, `acq_rel` and `seq_cst` `mfence`, `relaxed` nothing at run time (`tests/run/atomic.oli`) |
+| `cpu.tsc()` | — | planned (V1) |
 | `arch.x64.cr0/2/3/4/8` | `cpu.control` | **runs**: a place — read is one `mov rax, crN`, written with `<-` one `mov crN, rax`; cr3 is typed `physaddr`, the others `u64` (`tests/run/hw.oli`; the kernel example installs its page tables) |
 | `arch.x64.msr[n]`, `gdt`, `idt`, `tr`, `segments()` | `cpu.control` / `cpu.msr` | planned (V1) |
 | `port.u8/u16/u32[n]` | `io.port` | **runs**: `n` a `u16`; a read is one `in` at the width, zero-extended, a write one `out` — `hw.load port.uN %p` / `hw.store port.uN %p, %v` in the OIR, volatile, KERNEL, kept by every pass (`tests/run/hw.oli`; the kernel example programs COM1, the PICs and the PIT with them) |
 | the `port T` type, `port T (n)` | `io.port` | reserved (V1) |
-| `atomic.load/store/add/sub/and/or/xor/cas(ref, ..., order)` | — | planned (V1) |
+| `atomic.load/store/add/sub/and/or/xor/exchange/cas(ref, ..., order)` | — | **runs**: over a `ref T` / `rw ref T` to an integer of any width (`rw` for anything but `load`, `E0111`); `load` one move (signed re-extended), `store` one move or `xchg` for `seq_cst`, `add`/`sub` `lock xadd`, `exchange` `xchg`, `and`/`or`/`xor` a `lock cmpxchg` loop, `cas(ref, expected, desired, order) -> bool` `lock cmpxchg`; every read-modify-write answers the old value, wraps rather than traps, and is a full barrier; orders `relaxed acquire release acq_rel seq_cst` (`tests/run/atomic.oli`; `--explain` class ATOMIC) |
 | `machine x64 ... end` with `in`, `out`, `clobber` | `cpu.asm` | **runs**: `in REG <- e` loads the value before the block, `out REG -> place` stores the register after it, a callee-saved register the block names (rbx, r12–r15) is kept for the caller; `.label:` and jumps to it stay inside the block; port I/O (`in al\|ax\|eax, dx\|imm8`, `out dx\|imm8, al\|ax\|eax`), `mov SREG, ax`, `mov ax, SREG`, `mov ax, imm16`, `retfq`, `pushfq`/`popfq`, `int n`/`int3` and `lea r64, [.label]` per design 0023; any other 8/16-bit form is `E0900` |
 
 Every hardware access is volatile, cost class `KERNEL`, and will be listed by

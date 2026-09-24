@@ -233,8 +233,10 @@ rw mmio addr ref view own port be le
 wrap sat checked
 ```
 
-Reserved for later versions and rejected as names (`E0010`): `bit bits atomic
-thread generic const static volatile`. `extern proc f(params) [-> T]` declares
+Reserved for later versions and rejected as names (`E0010`): `bit bits
+thread generic const static volatile`; `atomic` names the commands
+`atomic.load/store/add/sub/and/or/xor/exchange/cas(ref, …, order)`
+(MACHINE_MODEL.md §5). `extern proc f(params) [-> T]` declares
 a procedure the linker resolves — a signature, no body, no `end` — and is
 allowed only in a program compiled with `-- output: object` (a relocatable
 file for `ld` or `cc`; ABI.md §6); in an executable it is `E0900`.

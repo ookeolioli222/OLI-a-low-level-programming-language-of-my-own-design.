@@ -515,7 +515,13 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
                         end
                     end
                 end
+                if view_eq(tok_text(cx, base.t0), "atomic")
+                    check_atomic(pg, mi, n)
+                end
                 if view_eq(tok_text(cx, base.t0), "cpu")
+                    if view_eq(tok_text(cx, callee.t0), "fence")
+                        check_fence(pg, mi, n)
+                    end
                     if view_eq(tok_text(cx, callee.t0), "interrupts")
                         -- `cpu.interrupts(on)` / `(off)`: `cpu.interrupt`.
                         need(pg, mi, "cpu.interrupt", base.t0)
@@ -541,6 +547,123 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
         check_expr(pg, mi, c)
         c <- sibling(cx, c)
     end
+end
+
+proc order_ok(t: view u8) -> word
+    if view_eq(t, "relaxed")
+        ret 1
+    end
+    if view_eq(t, "acquire")
+        ret 1
+    end
+    if view_eq(t, "release")
+        ret 1
+    end
+    if view_eq(t, "acq_rel")
+        ret 1
+    end
+    if view_eq(t, "seq_cst")
+        ret 1
+    end
+    ret 0
+end
+
+proc atomic_arity(m: view u8) -> u64
+    -- How many arguments each `atomic.*` takes, the order included; 0 for
+    -- a name that is not one.
+    if view_eq(m, "load")
+        ret 2
+    end
+    if view_eq(m, "store")
+        ret 3
+    end
+    if view_eq(m, "add")
+        ret 3
+    end
+    if view_eq(m, "sub")
+        ret 3
+    end
+    if view_eq(m, "and")
+        ret 3
+    end
+    if view_eq(m, "or")
+        ret 3
+    end
+    if view_eq(m, "xor")
+        ret 3
+    end
+    if view_eq(m, "exchange")
+        ret 3
+    end
+    if view_eq(m, "cas")
+        ret 4
+    end
+    ret 0
+end
+
+proc check_order_arg(pg: ref Prog, mi: u64, a: u64)
+    -- The last argument: one of the five orders, as a bare name.
+    cx := mod_ctx(pg, mi)
+    an := node_at(cx, a)
+    if an.kind == N_NAME
+        if order_ok(tok_text(cx, an.t0)) == 1
+            ret
+        end
+    end
+    sdiag(pg, mi, 900, first_tok(pg, mi, a))
+end
+
+proc check_atomic(pg: rw ref Prog, mi: u64, n: u64)
+    -- `atomic.OP(ref, …, order)`: a known operation with its arity, a ref
+    -- to an integer first (`rw` unless a load), the order last.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    callee := node_at(cx, kid1(cx, n))
+    m := tok_text(cx, callee.t0)
+    want := atomic_arity(m)
+    if want == 0
+        sdiag(pg, mi, 900, callee.t0)
+        ret
+    end
+    cnt : u64 <- 0
+    last : u64 <- 0
+    a : u64 <- kid2(cx, n)
+    while a != 0
+        cnt <- cnt + 1
+        last <- a
+        a <- sibling(cx, a)
+    end
+    if cnt != want
+        sdiag(pg, mi, 900, callee.t0)
+        ret
+    end
+    a0 := kid2(cx, n)
+    rt := ety(pg, mi, a0, b[0..0])
+    et := ref_elem(rt)
+    if int_bits(et) == 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, a0))
+        ret
+    end
+    if view_eq(m, "load") == 0
+        if starts_with(rt, "rw ") == 0
+            sdiag(pg, mi, 111, first_tok(pg, mi, a0))
+        end
+    end
+    check_order_arg(pg, mi, last)
+end
+
+proc check_fence(pg: rw ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    a := kid2(cx, n)
+    if a == 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, n))
+        ret
+    end
+    if sibling(cx, a) != 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, sibling(cx, a)))
+        ret
+    end
+    check_order_arg(pg, mi, a)
 end
 
 proc check_ints_arg(pg: ref Prog, mi: u64, n: u64)

@@ -1,0 +1,58 @@
+module atomic_test
+-- `atomic.OP(ref, …, order)` and `cpu.fence(order)` (MACHINE_MODEL.md §5):
+-- every read-modify-write answers the old value and is one lock-prefixed
+-- instruction (and/or/xor a compare-and-swap loop), a load one move, a
+-- sequentially consistent store an `xchg`, a fence one instruction; widths
+-- 8 to 64 bits, signed values re-extended, no overflow trap (the machine
+-- wraps). One thread checks the values; the harness finds the instructions
+-- with objdump. The exit status is the number of the check that failed; 42
+-- when every one held.
+
+counter : u64 <- 0
+
+proc start -> s32
+    entry
+    x : u64 <- 5
+    p := rw ref x
+    if atomic.add(p, 3, seq_cst) != 5 then ret 1
+    if x != 8 then ret 2
+    if atomic.sub(p, 2, acq_rel) != 8 then ret 3
+    if x != 6 then ret 4
+    if atomic.and(p, 4, relaxed) != 6 then ret 5
+    if x != 4 then ret 6
+    if atomic.or(p, 3, release) != 4 then ret 7
+    if x != 7 then ret 8
+    if atomic.xor(p, 5, acquire) != 7 then ret 9
+    if x != 2 then ret 10
+    if atomic.exchange(p, 40, seq_cst) != 2 then ret 11
+    if x != 40 then ret 12
+    if atomic.cas(p, 41, 50, seq_cst) then ret 13
+    if x != 40 then ret 14
+    if atomic.cas(p, 40, 50, seq_cst) == false then ret 15
+    if x != 50 then ret 16
+    atomic.store(p, 9, seq_cst)
+    if atomic.load(p, acquire) != 9 then ret 17
+    atomic.store(p, 10, release)
+    if atomic.load(p, seq_cst) != 10 then ret 18
+    c : u8 <- 250
+    pc := rw ref c
+    if atomic.add(pc, 10, seq_cst) != 250 then ret 19
+    if c != 4 then ret 20
+    s : s16 <- -3
+    ps := rw ref s
+    if atomic.add(ps, 1, seq_cst) != -3 then ret 21
+    if atomic.load(ps, relaxed) != -2 then ret 22
+    w : u32 <- 0xFFFFFFFF
+    pw := rw ref w
+    if atomic.add(pw, 1, seq_cst) != 0xFFFFFFFF then ret 23
+    if w != 0 then ret 24
+    if atomic.exchange(pw, 7, relaxed) != 0 then ret 25
+    g := rw ref counter
+    if atomic.add(g, 1, seq_cst) != 0 then ret 26
+    if counter != 1 then ret 27
+    cpu.fence(seq_cst)
+    cpu.fence(acquire)
+    cpu.fence(release)
+    cpu.fence(relaxed)
+    ret 42
+end

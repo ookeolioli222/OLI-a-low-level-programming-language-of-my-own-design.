@@ -866,6 +866,182 @@ proc lower_hwload(ob: rw ref Oir, mc: ref Mach, i: u64)
     st_val(ob, mc, R_AX, i)
 end
 
+-- Atomics (MACHINE_MODEL.md §5) ------------------------------------------------
+-- The address in rdi, the operand in rcx; every read-modify-write is a
+-- `lock`-prefixed instruction, so it is a full barrier whatever order was
+-- asked for; a load is one move (x86 loads are acquire), a store one move,
+-- or `xchg` when it must be sequentially consistent.
+
+proc at_width_prefix(ob: rw ref Oir, sz: u64)
+    -- The operand-size prefix (16-bit) or REX.W (64-bit) of a width.
+    if sz == 2
+        cb(ob, 102)
+    elif sz == 8
+        cb(ob, 72)
+    end
+end
+
+proc at_load_ax(ob: rw ref Oir, sz: u64)
+    -- rax <- [rdi] at the width, zero-extended.
+    if sz == 1
+        cb(ob, 15)
+        cb(ob, 182)
+        cb(ob, 7)
+    elif sz == 2
+        cb(ob, 15)
+        cb(ob, 183)
+        cb(ob, 7)
+    elif sz == 4
+        cb(ob, 139)
+        cb(ob, 7)
+    else
+        cb(ob, 72)
+        cb(ob, 139)
+        cb(ob, 7)
+    end
+end
+
+proc at_store_cx(ob: rw ref Oir, sz: u64)
+    -- [rdi] <- rcx at the width.
+    at_width_prefix(ob, sz)
+    if sz == 1
+        cb(ob, 136)
+    else
+        cb(ob, 137)
+    end
+    cb(ob, 15)
+end
+
+proc at_xchg_cx(ob: rw ref Oir, sz: u64)
+    -- xchg [rdi], rcx: locked by the machine itself.
+    at_width_prefix(ob, sz)
+    if sz == 1
+        cb(ob, 134)
+    else
+        cb(ob, 135)
+    end
+    cb(ob, 15)
+end
+
+proc at_xadd_cx(ob: rw ref Oir, sz: u64)
+    -- lock xadd [rdi], rcx: the old value comes back in rcx.
+    cb(ob, 240)
+    at_width_prefix(ob, sz)
+    cb(ob, 15)
+    if sz == 1
+        cb(ob, 192)
+    else
+        cb(ob, 193)
+    end
+    cb(ob, 15)
+end
+
+proc at_cmpxchg_dx(ob: rw ref Oir, sz: u64)
+    -- lock cmpxchg [rdi], rdx: rax is compared and, on a match, rdx stored;
+    -- ZF says which.
+    cb(ob, 240)
+    at_width_prefix(ob, sz)
+    cb(ob, 15)
+    if sz == 1
+        cb(ob, 176)
+    else
+        cb(ob, 177)
+    end
+    cb(ob, 23)
+end
+
+proc lower_atomic(ob: rw ref Oir, mc: ref Mach, i: u64)
+    ins := ins_at(ob, i)
+    kind := ins.bop
+    sz := ins.c % 16
+    sg := ins.c / 16
+    ld_val(ob, mc, R_DI, ins.a)
+    if kind == 0
+        at_load_ax(ob, sz)
+        if sg == 1
+            emit_extend(ob, sz * 8, 1)
+        end
+        st_val(ob, mc, R_AX, i)
+        ret
+    end
+    ld_val(ob, mc, R_CX, ins.b)
+    if kind == 1
+        if ins.w == 4
+            at_xchg_cx(ob, sz)
+        else
+            at_store_cx(ob, sz)
+        end
+        ret
+    end
+    if kind == 2
+        at_xadd_cx(ob, sz)
+        mov_rr(ob, R_AX, R_CX)
+    elif kind == 3
+        -- neg rcx, then add.
+        cb(ob, 72)
+        cb(ob, 247)
+        cb(ob, 217)
+        at_xadd_cx(ob, sz)
+        mov_rr(ob, R_AX, R_CX)
+    elif kind == 7
+        at_xchg_cx(ob, sz)
+        mov_rr(ob, R_AX, R_CX)
+    elif kind == 8
+        -- rax <- expected, rdx <- desired; the answer is whether it swapped.
+        mov_rr(ob, R_AX, R_CX)
+        ld_val(ob, mc, R_DX, ins.val)
+        at_cmpxchg_dx(ob, sz)
+        cb(ob, 15)
+        cb(ob, 148)
+        cb(ob, 192)
+        cb(ob, 15)
+        cb(ob, 182)
+        cb(ob, 192)
+        st_val(ob, mc, R_AX, i)
+        ret
+    else
+        -- and, or, xor: a compare-and-swap loop — rax the old value, rdx the
+        -- new one, back to the top while another writer got in between.
+        top := ob.ncode
+        at_load_ax(ob, sz)
+        cb(ob, 72)
+        cb(ob, 137)
+        cb(ob, 194)
+        cb(ob, 72)
+        if kind == 4
+            cb(ob, 33)
+        elif kind == 5
+            cb(ob, 9)
+        else
+            cb(ob, 49)
+        end
+        cb(ob, 202)
+        at_cmpxchg_dx(ob, sz)
+        cb(ob, 117)
+        cb(ob, (256 + top - (ob.ncode + 1)) % 256)
+    end
+    emit_extend(ob, sz * 8, sg)
+    st_val(ob, mc, R_AX, i)
+end
+
+proc lower_fence(ob: rw ref Oir, i: u64)
+    -- `cpu.fence`: `lfence` for acquire, `sfence` for release, `mfence` for
+    -- acq_rel and seq_cst; relaxed orders nothing at run time.
+    ins := ins_at(ob, i)
+    if ins.val == 0
+        ret
+    end
+    cb(ob, 15)
+    cb(ob, 174)
+    if ins.val == 1
+        cb(ob, 232)
+    elif ins.val == 2
+        cb(ob, 248)
+    else
+        cb(ob, 240)
+    end
+end
+
 proc cr_modrm(ob: rw ref Oir, r: u64, opcode: u64)
     -- `0f 20 /r` (`mov r64, crN`) or `0f 22 /r` (`mov crN, r64`) with rax as
     -- the register and crN in the reg field; cr8 needs REX.R.
@@ -1655,6 +1831,14 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_CRLOAD
         lower_crload(ob, mc, i)
+        ret
+    end
+    if op == O_ATOMIC
+        lower_atomic(ob, mc, i)
+        ret
+    end
+    if op == O_FENCE
+        lower_fence(ob, i)
         ret
     end
     if op == O_CRSTORE

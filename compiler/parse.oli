@@ -11,6 +11,8 @@ KW_PUB := 3
 KW_PROC := 4
 -- `extern proc` (ABI.md §6): a procedure the linker resolves.
 KW_EXTERN := 58
+-- `atomic.op(...)` (design 0015, MACHINE_MODEL.md §5): a namespace of commands.
+KW_ATOMIC := 56
 KW_PERMIT := 5
 KW_CALLS := 6
 KW_SECTION := 7
@@ -693,6 +695,12 @@ proc p_primary(cx: ref Ctx) -> u64
             ret p_hwplace(cx)
         end
         ret p_typestart(cx)
+    end
+    if at_kw(cx, KW_ATOMIC)
+        if tok_is_dot(cx, tpos(cx) + 1) == 1
+            -- `atomic.load(...)` and the rest: the word is a name here.
+            ret p_simple(cx, N_NAME)
+        end
     end
     if at_kw(cx, KW_BE)
         ret p_typestart(cx)
@@ -1988,10 +1996,24 @@ proc p_loopish(cx: ref Ctx) -> u64
     ret n3
 end
 
+proc reserved_stmt_word(cx: ref Ctx) -> word
+    -- A word reserved for a later version at the start of a statement —
+    -- except `atomic.` (a command), which is an expression statement.
+    if tsub(cx) <= KW_CHECKED
+        ret 0
+    end
+    if tsub(cx) == KW_ATOMIC
+        if tok_is_dot(cx, tpos(cx) + 1) == 1
+            ret 0
+        end
+    end
+    ret 1
+end
+
 proc p_stmt(cx: rw ref Ctx) -> u64
     cx.errmark <- cx.nerr
     if tkind(cx) == TK_KW
-        if tsub(cx) > KW_CHECKED
+        if reserved_stmt_word(cx) == 1
             -- A word reserved for a later version used as a name (E0010).
             diag_at(cx, 10, tpos(cx))
             rwtok := tpos(cx)

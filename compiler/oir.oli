@@ -167,6 +167,13 @@ O_HWSTORE := 40
 -- control register read into a value or written from one; `val` is N.
 O_CRLOAD := 41
 O_CRSTORE := 42
+-- `atomic.OP.W %addr, %v[, %d] ORDER` (MACHINE_MODEL.md §5): `bop` is the
+-- operation (0 load, 1 store, 2 add, 3 sub, 4 and, 5 or, 6 xor, 7 exchange,
+-- 8 cas), `c` the width in bytes plus 16 when signed, `w` the order, `val`
+-- the value swapped in by `cas`; the value is what was there. `cpu.fence
+-- ORDER` is a barrier alone.
+O_ATOMIC := 43
+O_FENCE := 44
 -- The arithmetic modes: plain arithmetic traps, `wrap` wraps, `sat` clamps,
 -- `checked` answers with a failure (design 0006).
 AM_TRAP := 0
@@ -673,6 +680,9 @@ proc op_uses_a(op: u64) -> word
     if op == O_CRSTORE
         ret 1
     end
+    if op == O_ATOMIC
+        ret 1
+    end
     if op == O_CHKB
         ret 1
     end
@@ -722,6 +732,9 @@ proc op_uses_b(op: u64) -> word
     if op == O_HWSTORE
         ret 1
     end
+    if op == O_ATOMIC
+        ret 1
+    end
     if op == O_CHKB
         ret 1
     end
@@ -748,6 +761,9 @@ end
 
 proc op_uses_val(op: u64) -> word
     if op == O_CHKR
+        ret 1
+    end
+    if op == O_ATOMIC
         ret 1
     end
     if op == O_ZRAW
@@ -1831,6 +1847,134 @@ proc gen_bytes(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ret r
 end
 
+proc atomic_kind(m: view u8) -> u64
+    if view_eq(m, "load")
+        ret 0
+    end
+    if view_eq(m, "store")
+        ret 1
+    end
+    if view_eq(m, "add")
+        ret 2
+    end
+    if view_eq(m, "sub")
+        ret 3
+    end
+    if view_eq(m, "and")
+        ret 4
+    end
+    if view_eq(m, "or")
+        ret 5
+    end
+    if view_eq(m, "xor")
+        ret 6
+    end
+    if view_eq(m, "exchange")
+        ret 7
+    end
+    ret 8
+end
+
+proc atomic_name(k: u64) -> view u8
+    if k == 0
+        ret "load"
+    end
+    if k == 1
+        ret "store"
+    end
+    if k == 2
+        ret "add"
+    end
+    if k == 3
+        ret "sub"
+    end
+    if k == 4
+        ret "and"
+    end
+    if k == 5
+        ret "or"
+    end
+    if k == 6
+        ret "xor"
+    end
+    if k == 7
+        ret "exchange"
+    end
+    ret "cas"
+end
+
+proc order_code(m: view u8) -> u64
+    if view_eq(m, "relaxed")
+        ret 0
+    end
+    if view_eq(m, "acquire")
+        ret 1
+    end
+    if view_eq(m, "release")
+        ret 2
+    end
+    if view_eq(m, "acq_rel")
+        ret 3
+    end
+    ret 4
+end
+
+proc order_name(o: u64) -> view u8
+    if o == 0
+        ret "relaxed"
+    end
+    if o == 1
+        ret "acquire"
+    end
+    if o == 2
+        ret "release"
+    end
+    if o == 3
+        ret "acq_rel"
+    end
+    ret "seq_cst"
+end
+
+proc gen_atomic(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `atomic.OP(ref, …, order)`: one instruction over the ref's address,
+    -- the value (the address again for a load), and, for `cas`, the value
+    -- swapped in; the checker settled the shape.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    kind := atomic_kind(tok_text(cx, cn.t0))
+    a0 := sibling(cx, ce)
+    et := ref_elem(ety(pg, mi, a0, b[0..0]))
+    nb := u64.bits(int_bits(et)) / 8
+    sg : u64 <- 0
+    if int_signed(et) == 1
+        sg <- 1
+    end
+    p := gen_expr(pg, ob, mi, a0, b[0..0])
+    v : u64 <- p
+    d : u64 <- p
+    a1 := sibling(cx, a0)
+    if kind >= 1
+        v <- gen_expr(pg, ob, mi, a1, et)
+        d <- v
+    end
+    if kind == 8
+        d <- gen_expr(pg, ob, mi, sibling(cx, a1), et)
+    end
+    last : u64 <- a0
+    while sibling(cx, last) != 0
+        last <- sibling(cx, last)
+    end
+    ln := node_at(cx, last)
+    i := emit_ins(ob, O_ATOMIC, p, v, nb + 16 * sg, d)
+    ins := ins_at(ob, i)
+    ins.bop <- kind
+    ins.w <- order_code(tok_text(cx, ln.t0))
+    ob.lastlen <- 0
+    ret i
+end
+
 proc gen_mmio(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `mem.mmio(T, a, n)`: the view (a, n) of device memory — no instruction
     -- of its own; what makes it `mmio` is every access through it, which
@@ -2003,6 +2147,16 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     if ck == CK_HALT
         emit_ins(ob, O_CPU, 0, 0, 0, 0)
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    if ck == CK_ATOMIC
+        ret gen_atomic(pg, ob, mi, n)
+    end
+    if ck == CK_FENCE
+        fa := sibling(cx, kid1(cx, n))
+        fan := node_at(cx, fa)
+        emit_ins(ob, O_FENCE, 0, 0, 0, order_code(tok_text(cx, fan.t0)))
         ob.lastlen <- 0
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end
@@ -2967,6 +3121,22 @@ proc gen_unop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -
             if sl >= 0
                 ob.lastlen <- 0
                 ret local_base(pg, ob, tok_text(cx, pn.t0))
+            end
+            if name_kind(pg, mi, arg) == 3
+                -- A static: its address in the writable or the read-only
+                -- segment.
+                svi := val_find(pg, tok_text(cx, pn.t0))
+                if svi >= 0
+                    ob.lastlen <- 0
+                    sdi := data_of(ob, u64.bits(svi))
+                    if sdi >= 0
+                        ret emit_ins(ob, O_DADDR, u64.bits(sdi), 0, 0, 0)
+                    end
+                    sri := rodata_of(ob, u64.bits(svi))
+                    if sri >= 0
+                        ret emit_ins(ob, O_SADDR, u64.bits(sri), 0, 0, 0)
+                    end
+                end
             end
         end
         if pn.kind == N_FIELD
@@ -5295,6 +5465,12 @@ proc oir_op_name(op: u64) -> view u8
     if op == O_CRSTORE
         ret "hw.store"
     end
+    if op == O_ATOMIC
+        ret "atomic"
+    end
+    if op == O_FENCE
+        ret "cpu.fence"
+    end
     if op == O_ZALLOC
         ret "zone.alloc"
     end
@@ -5629,6 +5805,11 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         pv(ob, pg, ins.a)
         ret
     end
+    if op == O_FENCE
+        put(1, "cpu.fence ")
+        put(1, order_name(ins.val))
+        ret
+    end
     if op == O_CHKB
         put(1, "check.bounds ")
         pv(ob, pg, ins.a)
@@ -5841,6 +6022,28 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     if op == O_CRLOAD
         put(1, "hw.load arch.x64.")
         put(1, cr_name(ins.val))
+        ret
+    end
+    if op == O_ATOMIC
+        put(1, "atomic.")
+        put(1, atomic_name(ins.bop))
+        put(1, ".")
+        put_uint(1, tmp, (ins.c % 16) * 8)
+        if ins.c >= 16
+            put(1, ".s")
+        end
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        if ins.bop >= 1
+            put(1, ", ")
+            pv(ob, pg, ins.b)
+        end
+        if ins.bop == 8
+            put(1, ", ")
+            pv(ob, pg, ins.val)
+        end
+        put(1, " ")
+        put(1, order_name(ins.w))
         ret
     end
     if op == O_ZALLOC

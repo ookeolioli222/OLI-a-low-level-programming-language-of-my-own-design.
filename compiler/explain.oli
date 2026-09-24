@@ -12,7 +12,7 @@ module olic.explain
 -- ZERO alone costs register moves and nothing else.
 
 LINE_MAX := 65536
-NCLASS := 9
+NCLASS := 10
 CL_ZERO := 0
 CL_CHECK := 1
 CL_STACK := 2
@@ -22,6 +22,7 @@ CL_CALL := 5
 CL_SYSCALL := 6
 CL_TRAP := 7
 CL_KERNEL := 8
+CL_ATOMIC := 9
 
 proc start -> s32
     entry
@@ -189,6 +190,12 @@ proc ins_class(ob: ref Oir, i: u64) -> u64
     if o == O_CRSTORE
         ret CL_KERNEL
     end
+    if o == O_ATOMIC
+        ret CL_ATOMIC
+    end
+    if o == O_FENCE
+        ret CL_ATOMIC
+    end
     if o == O_CPU
         if ins.val != 1
             -- `hlt`, `cli`, `sti`; `pause` is a hint, ZERO.
@@ -205,6 +212,9 @@ proc ins_class(ob: ref Oir, i: u64) -> u64
 end
 
 proc class_name(c: u64) -> view u8
+    if c == CL_ATOMIC
+        ret "ATOMIC"
+    end
     if c == CL_KERNEL
         ret "KERNEL"
     end

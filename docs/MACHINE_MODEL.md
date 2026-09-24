@@ -97,10 +97,17 @@ wants to recover uses `checked(..)`, `try_bytes`, or a fallible result.
 - `mmio` accesses are volatile: each is performed exactly once, in program order
   relative to other `mmio` accesses and to `cpu.fence()`.
 - Port I/O is volatile in the same sense.
-- Atomics (V1): `atomic.load/store/add/cas(ref rw T, ..., order)` with `relaxed`,
-  `acquire`, `release`, `acq_rel`, `seq_cst`; `cpu.fence(order)`. Lowering to
-  `lock`-prefixed instructions and `mfence`.
-- V0 defines only single-threaded execution.
+- Atomics (stage 25, run): `atomic.load/store/add/sub/and/or/xor/exchange/cas(rw ref T, ..., order)`
+  with `relaxed`, `acquire`, `release`, `acq_rel`, `seq_cst`; `cpu.fence(order)`.
+  On x86-64 a load is one move (acquire by the machine), a store one move or
+  `xchg` when `seq_cst`, every read-modify-write a `lock`-prefixed instruction
+  (`xadd`, `xchg`, `cmpxchg`, a `cmpxchg` loop for `and`/`or`/`xor`) and thus
+  a full barrier whatever order was asked for; `cpu.fence` is `lfence`,
+  `sfence` or `mfence`, nothing for `relaxed`. No pass removes, merges or
+  moves one; `--explain` bills each ATOMIC. A read-modify-write wraps at its
+  width rather than trapping.
+- Threads themselves are not a construct yet: atomics are what a kernel or a
+  program that starts threads through `os.syscall` needs to be correct.
 
 ## 6. Control transfer
 

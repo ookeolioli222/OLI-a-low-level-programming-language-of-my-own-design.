@@ -28,8 +28,8 @@ construct answers each system-programming requirement.
 | Requirement | Oli-- construct | Version |
 |-------------|-----------------|---------|
 | volatile memory | `mmio view T` from `mem.mmio(T, a, n)` — every element access is a volatile instruction, kept by every pass (**runs**); `mmio ref T` | V0 (view, intrinsic), V1 (ref) |
-| atomic operations | `atomic.load/store/add/sub/and/or/xor/cas(ref rw T, ..., order)` | V1 |
-| memory barriers | `cpu.fence(order)` → `mfence`/`lfence`/`sfence` | V1 |
+| atomic operations | `atomic.load/store/add/sub/and/or/xor/exchange/cas(rw ref T, ..., order)` — **runs**: lock-prefixed instructions, `xchg`, a `cmpxchg` loop for and/or/xor (`tests/run/atomic.oli`) | V0 |
+| memory barriers | `cpu.fence(order)` → `mfence`/`lfence`/`sfence` — **runs** | V0 |
 | interrupt handlers | `proc h(frame : ref core.x64.InterruptFrame)` with `calls interrupt` — **runs**: every general register pushed, `iretq` on return (`tests/run/interrupt.oli`, `examples/kernel.oli`) | V0 |
 | naked functions | `calls none` (body = one `machine` block) | V0 |
 | custom calling conventions | `calls sysv` (default), `calls none`, `calls interrupt`; `calls c` = alias of `sysv` | V0/V1 |

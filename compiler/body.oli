@@ -533,6 +533,20 @@ CK_AT := 13
 CK_PROC := 14
 CK_MMIO := 15
 CK_INTS := 16
+CK_ATOMIC := 17
+CK_FENCE := 18
+
+proc ref_elem(t: view u8) -> view u8
+    -- The `T` of `ref T` / `rw ref T`; empty for any other type.
+    s : view u8 <- t
+    if starts_with(s, "rw ")
+        s <- s[3..]
+    end
+    if starts_with(s, "ref ")
+        ret s[4..]
+    end
+    ret s[0..0]
+end
 
 proc mmio_elem_ok(t: view u8) -> word
     -- The element types `mem.mmio` takes: the unsigned widths.
@@ -638,7 +652,13 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
                     ret CK_SYSCALL
                 end
             end
+            if view_eq(bname, "atomic")
+                ret CK_ATOMIC
+            end
             if view_eq(bname, "cpu")
+                if view_eq(m, "fence")
+                    ret CK_FENCE
+                end
                 if view_eq(m, "interrupts")
                     ret CK_INTS
                 end
@@ -710,6 +730,9 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
     if ck == CK_INTS
         ret "(no value)"
     end
+    if ck == CK_FENCE
+        ret "(no value)"
+    end
     if ck == CK_COPY
         ret "(no value)"
     end
@@ -736,6 +759,22 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
             ret "u32"
         end
         ret "u64"
+    end
+    if ck == CK_ATOMIC
+        -- `atomic.store` answers nothing, `atomic.cas` whether it swapped,
+        -- the rest the element type of the ref they are given.
+        m2 := tok_text(cx, cn.t0)
+        if view_eq(m2, "store")
+            ret "(no value)"
+        end
+        if view_eq(m2, "cas")
+            ret "bool"
+        end
+        a0 := kid2(cx, n)
+        if a0 == 0
+            ret b[0..0]
+        end
+        ret ref_elem(ety(pg, mi, a0, b[0..0]))
     end
     if ck == CK_MMIO
         -- `mem.mmio(T, a, n)`: a writable view of device memory over `T`,
@@ -1568,6 +1607,20 @@ proc put_type_suffix(pg: ref Prog, mi: u64, n: u64, ty: view u8)
     put_region(pg, reg_of(pg, mi, n))
 end
 
+proc patomic_arg(pg: ref Prog, mi: u64, a: u64, want: view u8)
+    -- An order is a bare name; anything else is an expression at the
+    -- element type of the ref.
+    cx := mod_ctx(pg, mi)
+    an := node_at(cx, a)
+    if an.kind == N_NAME
+        if name_kind(pg, mi, a) == 0
+            put(1, tok_text(cx, an.t0))
+            ret
+        end
+    end
+    pexpr(pg, mi, a, want)
+end
+
 proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
     if ck == CK_SYSCALL
         put(1, "OsSyscall")
@@ -1603,6 +1656,15 @@ proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
     end
     if ck == CK_INTS
         put(1, "CpuInterrupts")
+        ret
+    end
+    if ck == CK_FENCE
+        put(1, "CpuFence")
+        ret
+    end
+    if ck == CK_ATOMIC
+        put(1, "Atomic.")
+        put(1, name)
         ret
     end
     if ck == CK_GET
@@ -1768,6 +1830,15 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
         elif ck == CK_INTS
             onn := node_at(cx, a2)
             put(1, tok_text(cx, onn.t0))
+        elif ck == CK_FENCE
+            fnn := node_at(cx, a2)
+            put(1, tok_text(cx, fnn.t0))
+        elif ck == CK_ATOMIC
+            if j == 0
+                patomic_arg(pg, mi, a2, b[0..0])
+            else
+                patomic_arg(pg, mi, a2, ref_elem(ety(pg, mi, kid2(cx, n), b[0..0])))
+            end
         elif ck == CK_PUT
             if j == 0
                 pexpr(pg, mi, a2, "rw view u8")
@@ -3036,6 +3107,14 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
         end
         ret
     end
+    if ck == CK_FENCE
+        ret
+    end
+    if ck == CK_ATOMIC
+        -- The ref, then the values at its element type, then the order.
+        tatomic(pg, mi, n)
+        ret
+    end
     mname := tok_text(cx, cn.t0)
     a2 : u64 <- kid2(cx, n)
     j : u64 <- 0
@@ -3060,6 +3139,32 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
         end
         j <- j + 1
         a2 <- sibling(cx, a2)
+    end
+end
+
+proc tatomic(pg: rw ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    a0 := kid2(cx, n)
+    if a0 == 0
+        ret
+    end
+    texpr(pg, mi, a0, b[0..0])
+    et := ref_elem(ety(pg, mi, a0, b[0..0]))
+    cnt : u64 <- 0
+    c : u64 <- a0
+    while c != 0
+        cnt <- cnt + 1
+        c <- sibling(cx, c)
+    end
+    a : u64 <- sibling(cx, a0)
+    j : u64 <- 1
+    while a != 0
+        if j + 1 < cnt
+            texpr(pg, mi, a, et)
+        end
+        j <- j + 1
+        a <- sibling(cx, a)
     end
 end
 

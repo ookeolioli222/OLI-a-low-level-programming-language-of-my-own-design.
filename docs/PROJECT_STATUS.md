@@ -1085,12 +1085,37 @@ constant in `.rodata`).
   alone, no C runtime, and exit 42. Cautions in ABI.md §2: C-facing
   parameters should be 64-bit types, and a view is two words.
 
+## Implemented in back-end stage 25 (2026-09-24): atomics and fences
+
+- **`atomic.load/store/add/sub/and/or/xor/exchange/cas(ref, …, order)`**
+  over a `ref T` / `rw ref T` to an integer of any width (`rw` for
+  anything but `load`, `E0111` otherwise; a known operation, its arity and
+  one of the five orders as a bare name, `E0900` otherwise). One OIR
+  instruction, `atomic.OP.W %addr, %v[, %desired] ORDER`, never removed or
+  merged, class ATOMIC in `--explain`. On x86-64: a load is one move with
+  a signed value re-extended; a store one move, or `xchg` for `seq_cst`;
+  `add`/`sub` `lock xadd` (the old value back), `exchange` `xchg`;
+  `and`/`or`/`xor` a `lock cmpxchg` loop; `cas` `lock cmpxchg` with
+  `sete`, answering `bool`. Every read-modify-write is a full barrier and
+  wraps at its width. **`cpu.fence(order)`** is `lfence`, `sfence` or
+  `mfence`, nothing for `relaxed`.
+- The parser lets `atomic.` start an expression or a statement although
+  `atomic` is a reserved word, and `ref`/`rw ref` of a static — refused
+  with `E0900` until now — is the static's address in `.data`, `.bss` or
+  `.rodata`.
+- `tests/run/atomic.oli` runs twenty-seven checks over u64, u8, s16 and
+  u32 places and a static; the harness counts each instruction form in
+  the disassembly, the eighteen atomics and four fences after the passes,
+  and the twenty-two ATOMIC lines of `--explain`. Threads are not a
+  construct: atomics are what a kernel, or a program starting threads
+  through `os.syscall`, needs to be correct.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 26,000 lines) into
+compiles its own source (`compiler/`, seventeen modules, 26,655 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,017,096 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,042,072 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,
