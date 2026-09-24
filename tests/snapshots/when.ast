@@ -1,0 +1,54 @@
+(module when_test
+  (when target.freestanding dropped
+    (proc answer () -> s32
+      (body
+        (ret (int 1)))))
+  (when-else taken
+    (proc answer () -> s32
+      (body
+        (ret (int 42)))))
+  (when target.os=="linux" taken
+    (proc bonus () -> u64
+      (body
+        (ret (int 0)))))
+  (when target.os!="linux" dropped
+    (proc bonus () -> u64
+      (body
+        (ret (int 7)))))
+  (when not target.hosted dropped
+    (proc extra () -> u64
+      (body
+        (expr (call (field (name cpu) halt)))
+        (ret (int 3)))))
+  (when-else taken
+    (proc extra () -> u64
+      (body
+        (ret (int 0)))))
+  (when target.arch=="x86_64" taken
+    (proc arch_ok () -> bool
+      (body
+        (ret (true)))))
+  (when-else dropped
+    (proc arch_ok () -> bool
+      (body
+        (ret (false)))))
+  (when target.object dropped
+    (proc obj () -> u64
+      (body
+        (ret (int 9)))))
+  (when-else taken
+    (proc obj () -> u64
+      (body
+        (ret (int 0)))))
+  (proc start () -> s32
+    (entry)
+    (body
+      (if-then (!= (call (name bonus)) (int 0))
+        (ret (int 1)))
+      (if-then (!= (call (name extra)) (int 0))
+        (ret (int 2)))
+      (if-then (== (call (name arch_ok)) (false))
+        (ret (int 3)))
+      (if-then (!= (call (name obj)) (int 0))
+        (ret (int 4)))
+      (ret (call (name answer))))))

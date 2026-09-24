@@ -1,0 +1,68 @@
+module when_test
+-- `when target.FACT … else … end` at declaration level (LANGUAGE.md §13):
+-- the target's facts — `freestanding`, `hosted`, `object`, `os`, `arch` —
+-- decide which declarations the program has; the other branch is parsed
+-- and dropped, so a hosted program may carry a freestanding half that
+-- would not type-check here. This one runs hosted on Linux: exit 42.
+
+when target.freestanding
+    proc answer() -> s32
+        ret 1
+    end
+else
+    proc answer() -> s32
+        ret 42
+    end
+end
+
+when target.os == "linux"
+    proc bonus() -> u64
+        ret 0
+    end
+end
+
+when target.os != "linux"
+    proc bonus() -> u64
+        ret 7
+    end
+end
+
+when not target.hosted
+    proc extra() -> u64
+        cpu.halt()
+        ret 3
+    end
+else
+    proc extra() -> u64
+        ret 0
+    end
+end
+
+when target.arch == "x86_64"
+    proc arch_ok() -> bool
+        ret true
+    end
+else
+    proc arch_ok() -> bool
+        ret false
+    end
+end
+
+when target.object
+    proc obj() -> u64
+        ret 9
+    end
+else
+    proc obj() -> u64
+        ret 0
+    end
+end
+
+proc start -> s32
+    entry
+    if bonus() != 0 then ret 1
+    if extra() != 0 then ret 2
+    if arch_ok() == false then ret 3
+    if obj() != 0 then ret 4
+    ret answer()
+end

@@ -1039,7 +1039,7 @@ cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.
 chmod +x build/show_ast
 ./build/oli1.bin < build/show_ast.oli > build/show_ast.again
 cmp build/show_ast build/show_ast.again || fail "show_ast build is not deterministic"
-for pair in "hello ../examples/hello.oli" "packet_demo ../examples/packet_demo.oli" "statements ../tests/parse/ok/statements.oli" "kernel_sketch ../tests/parse/ok/kernel_sketch.oli"; do
+for pair in "hello ../examples/hello.oli" "packet_demo ../examples/packet_demo.oli" "statements ../tests/parse/ok/statements.oli" "kernel_sketch ../tests/parse/ok/kernel_sketch.oli" "when ../tests/run/when.oli"; do
     set -- $pair
     ./build/show_ast < "$2" > build/$1.ast 2> build/ast.err || fail "parser: diagnostics for $2: $(cat build/ast.err)"
     cmp build/$1.ast ../tests/snapshots/$1.ast || fail "parser: $1 differs from tests/snapshots/$1.ast"
@@ -1456,6 +1456,15 @@ objdump -t build/fs_profile.elf | grep -q '\.bss\.stack.*profile\.stack$' || fai
 readelf -a build/fs_profile.elf > /dev/null 2> build/readelf.err || fail "profile: readelf -a rejects fs_profile.elf"
 [ ! -s build/readelf.err ] || fail "profile: readelf -a warns: $(head -1 build/readelf.err)"
 echo "ok: a target profile lays the image out - load_address, the order of sections, align_sections - and every code and zero-static section has its own header"
+# Conditional compilation (LANGUAGE.md 13): `when target.FACT ... else ... end`
+# at declaration level keeps one branch and drops the other; the hosted
+# program has six procedures and none that halts the CPU, the freestanding
+# one exits with its own answer.
+( cd .. && genesis/build/show_sema < tests/run/when.oli > genesis/build/when.sema 2>/dev/null ) || fail "when: show_sema"
+[ "$(grep -c '(proc when_test' build/when.sema)" = 6 ] || fail "when: the hosted program must have exactly its six taken procedures, has $(grep -c '(proc when_test' build/when.sema)"
+! grep -q 'CpuHalt' build/when.sema || fail "when: the freestanding branch must have been dropped"
+[ "$(grep -c ' dropped' build/when.ast)" = 5 ] || fail "when: --show-ast must show the five dropped branches"
+echo "ok: when target.freestanding/hosted/object/os/arch keeps one branch of declarations and drops the other, in the AST for --show-ast and nowhere else"
 
 # The reference program of the language documents runs: examples/packet_demo.oli
 # builds a packet in a zone, parses its header through a layout with a `be`

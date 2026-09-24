@@ -2683,6 +2683,10 @@ proc p_decl(cx: rw ref Ctx, mod: u64)
         end_line(cx)
         ret
     end
+    if at_kw(cx, KW_WHEN)
+        p_when_decl(cx, mod)
+        ret
+    end
     if at_ident(cx)
         add_kid(cx, mod, p_const(cx))
         cx.ndecl <- cx.ndecl + 1
@@ -2701,6 +2705,146 @@ proc p_decl(cx: rw ref Ctx, mod: u64)
     end
     diag_at(cx, 15, tpos(cx))
     end_line(cx)
+end
+
+proc p_when_decl(cx: rw ref Ctx, mod: u64)
+    -- `when target.FACT … [else …] end` at declaration level (LANGUAGE.md
+    -- §13): the facts of the target — `freestanding`, `hosted`, `object`,
+    -- `os == "…"`, `arch == "…"`, each with `not` or `!=` — decide which
+    -- branch's declarations the module has. Both branches are parsed; the
+    -- one dropped is kept for `--show-ast` and nothing else.
+    n := mk(cx, N_WHENDECL, tpos(cx))
+    adv(cx)
+    taken := p_target_cond(cx)
+    nd := node_at(cx, n)
+    nd.t1 <- tpos(cx)
+    nd.val <- taken
+    end_line(cx)
+    p_when_body(cx, n)
+    add_kid(cx, mod, n)
+    if at_kw(cx, KW_ELSE)
+        e := mk(cx, N_WHENDECL, tpos(cx))
+        adv(cx)
+        en := node_at(cx, e)
+        en.sub <- 1
+        en.t1 <- tpos(cx)
+        en.val <- 1 - taken
+        end_line(cx)
+        p_when_body(cx, e)
+        add_kid(cx, mod, e)
+    end
+    expect_end(cx)
+end
+
+proc p_when_body(cx: rw ref Ctx, parent: u64)
+    loop
+        skip_nl(cx)
+        p_docs(cx)
+        if tkind(cx) == TK_EOF
+            diag_at(cx, 11, tpos(cx))
+            ret
+        end
+        if at_kw(cx, KW_ELSE)
+            ret
+        end
+        if at_kw(cx, KW_END)
+            ret
+        end
+        p_decl(cx, parent)
+    end
+end
+
+proc unquoted(s: view u8) -> view u8
+    if s.len >= 2
+        if s[0] == 34
+            e := s.len - 1
+            ret s[1..e]
+        end
+    end
+    ret s
+end
+
+proc p_target_cond(cx: rw ref Ctx) -> u64
+    -- `[not] target.NAME [== "s" | != "s"]`, settled here from the facts
+    -- the target gave the context.
+    neg : u64 <- 0
+    if at_kw(cx, KW_NOT)
+        neg <- 1
+        adv(cx)
+    end
+    if view_eq(tok_text(cx, tpos(cx)), "target") == 0
+        diag_at(cx, 11, tpos(cx))
+        ret 0
+    end
+    adv(cx)
+    if at_op(cx, OP_DOT) == 0
+        diag_at(cx, 11, tpos(cx))
+        ret 0
+    end
+    adv(cx)
+    fact := tok_text(cx, tpos(cx))
+    adv(cx)
+    v : u64 <- 0
+    known : u64 <- 0
+    if view_eq(fact, "freestanding")
+        v <- cx.tfree
+        known <- 1
+    end
+    if view_eq(fact, "hosted")
+        v <- 1 - cx.tfree
+        known <- 1
+    end
+    if view_eq(fact, "object")
+        v <- cx.tobj
+        known <- 1
+    end
+    if at_op(cx, OP_EQ)
+        known <- p_target_eq(cx, fact, 0)
+        v <- cx.nolit
+    elif at_op(cx, OP_NE)
+        known <- p_target_eq(cx, fact, 1)
+        v <- cx.nolit
+    end
+    if known == 0
+        diag_at(cx, 11, tpos(cx))
+        ret 0
+    end
+    if neg == 1
+        v <- 1 - v
+    end
+    ret v
+end
+
+proc p_target_eq(cx: rw ref Ctx, fact: view u8, ne: u64) -> u64
+    -- `== "s"` / `!= "s"` against `target.os` or `target.arch`; the answer
+    -- travels in `cx.nolit` (a scratch word), the return says whether the
+    -- fact is one that can be compared.
+    adv(cx)
+    if tkind(cx) != TK_STR
+        diag_at(cx, 11, tpos(cx))
+        ret 0
+    end
+    want := unquoted(tok_text(cx, tpos(cx)))
+    adv(cx)
+    have : view u8 <- want
+    known : u64 <- 0
+    if view_eq(fact, "os")
+        have <- cx.tos
+        known <- 1
+    end
+    if view_eq(fact, "arch")
+        have <- cx.tarch
+        known <- 1
+    end
+    eq : u64 <- 0
+    if view_eq(have, want)
+        eq <- 1
+    end
+    if ne == 1
+        eq <- 1 - eq
+    end
+    cx.nolit <- eq
+    ret known
 end
 
 proc p_docs(cx: rw ref Ctx)

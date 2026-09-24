@@ -1239,12 +1239,31 @@ constant in `.rodata`).
   after the passes, and finds `cpuid`, `lidt` and the `call` to `main`
   in the kernel's code and the five hardware statements in its OIR.
 
+## Implemented in front-end stage 31 (2026-09-24): conditional compilation
+
+- **`when target.FACT … [else …] end` at declaration level.** The facts —
+  `freestanding`, `hosted`, `object` (with `not`), `os == "…"`, `arch ==
+  "…"` (with `!=`) — reach the parser from the pragmas and the profile
+  (`target.os` is the profile's `os`, else `none` freestanding and `linux`
+  hosted; `target.arch` the profile's `arch`, else `x86_64`), and the
+  parser settles the condition itself. Both branches are parsed into
+  `N_WHENDECL` nodes marked taken or dropped; item collection and the
+  import loader descend into a taken branch only, so a dropped branch
+  declares nothing and is never checked — a hosted program may carry a
+  freestanding half that would not type-check hosted, and vice versa.
+  `--show-ast` prints each branch with `taken` or `dropped`.
+- `tests/run/when.oli` (hosted) and `tests/freestanding/when_free.oli`
+  (freestanding, exiting 5 through a frameless entry) select opposite
+  branches of the same shape; the harness pins the AST (`when.ast`), the
+  six procedures of the hosted program's `.sema` form, the absence of the
+  dropped `cpu.halt`, and both runs.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 28,628 lines) into
+compiles its own source (`compiler/`, seventeen modules, 28,853 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,247,152 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,257,016 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

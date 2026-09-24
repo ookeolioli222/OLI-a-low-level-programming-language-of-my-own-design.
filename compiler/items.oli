@@ -212,11 +212,41 @@ proc add_module(pg: rw ref Prog, z: zone, src: view u8, file: view u8) -> u64
     lex_all(lx)
     ctx_init(cx, z, src, lx)
     cx.file <- file
+    cx.tfree <- pg.fstanding
+    cx.tobj <- pg.objmode
+    cx.tos <- target_os(pg)
+    cx.tarch <- target_arch(pg)
     m := p_module(cx)
     cx.root <- m
     pg.nerr <- pg.nerr + cx.nerr + lx.nerr + cx.nwarn
     pg.nmod <- i + 1
     ret i
+end
+
+proc target_os(pg: ref Prog) -> view u8
+    -- `target.os`: the profile's `os`, else `none` freestanding and `linux`
+    -- hosted.
+    if pg.hasprof == 1
+        v := profile_value(pg.profsrc, "os")
+        if v.len > 0
+            ret unquoted(v)
+        end
+    end
+    if pg.fstanding == 1
+        ret "none"
+    end
+    ret "linux"
+end
+
+proc target_arch(pg: ref Prog) -> view u8
+    -- `target.arch`: the profile's `arch`, else `x86_64` — the one target.
+    if pg.hasprof == 1
+        v := profile_value(pg.profsrc, "arch")
+        if v.len > 0
+            ret unquoted(v)
+        end
+    end
+    ret "x86_64"
 end
 
 proc module_named(pg: ref Prog, name: view u8) -> word
@@ -254,11 +284,22 @@ end
 
 proc load_imports(pg: ref Prog, z: zone, mi: u64)
     cx := mod_ctx(pg, mi)
-    k : u64 <- kid1(cx, cx.root)
+    load_imports_in(pg, z, mi, kid1(cx, cx.root))
+end
+
+proc load_imports_in(pg: ref Prog, z: zone, mi: u64, first: u64)
+    -- The imports among the declarations, those of a taken `when` too.
+    cx := mod_ctx(pg, mi)
+    k : u64 <- first
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_IMPORT
             load_named(pg, z, mod_text(cx, kn.t0, kn.t1))
+        end
+        if kn.kind == N_WHENDECL
+            if kn.val == 1
+                load_imports_in(pg, z, mi, kid1(cx, k))
+            end
         end
         k <- sibling(cx, k)
     end
@@ -601,10 +642,22 @@ end
 
 proc collect(pg: rw ref Prog, mi: u64)
     cx := mod_ctx(pg, mi)
-    k : u64 <- kid1(cx, cx.root)
+    collect_in(pg, mi, kid1(cx, cx.root))
+end
+
+proc collect_in(pg: rw ref Prog, mi: u64, first: u64)
+    -- The items among the declarations, those of a taken `when` too; a
+    -- dropped branch declares nothing.
+    cx := mod_ctx(pg, mi)
+    k : u64 <- first
     while k != 0
         kn := node_at(cx, k)
         kk := kn.kind
+        if kk == N_WHENDECL
+            if kn.val == 1
+                collect_in(pg, mi, kid1(cx, k))
+            end
+        end
         if kk == N_LAYOUT
             collect_layout(pg, mi, k)
         end

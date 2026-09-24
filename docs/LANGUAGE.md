@@ -731,7 +731,18 @@ Multiboot2 header is a static layout with an initialiser (`examples/kernel.oli`
 an `mmio` view from `mem.mmio` and reads `cpuid`; the harness checks the image
 structurally, QEMU runs it). A `-- profile: PATH` line names the target profile — load
 address, the order of the sections, their alignment (`docs/FREESTANDING.md`
-§2). See `docs/FREESTANDING.md` and
+§2).
+
+Conditional compilation (stage 31): at declaration level,
+`when target.FACT … [else …] end` keeps one branch of declarations and
+drops the other. The facts are `target.freestanding`, `target.hosted`,
+`target.object` (each also with `not`), and `target.os == "…"` /
+`target.arch == "…"` (also `!=`), where `os` is the profile's `os`, else
+`none` freestanding and `linux` hosted, and `arch` the profile's `arch`, else
+`x86_64`. Both branches are parsed — a syntax error anywhere is an error —
+but a dropped branch declares nothing and is not checked, so a hosted program
+may carry a freestanding half (`tests/run/when.oli`,
+`tests/freestanding/when_free.oli`). See `docs/FREESTANDING.md` and
 `docs/KERNEL_PROGRAMMING.md`; `tests/sema/ok/freestanding.oli` and
 `tests/parse/ok/kernel_sketch.oli` are the reference shapes.
 

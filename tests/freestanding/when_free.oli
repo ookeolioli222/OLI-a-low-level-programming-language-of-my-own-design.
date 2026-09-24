@@ -1,0 +1,62 @@
+-- target: freestanding
+module when_free
+-- The same `when` as tests/run/when.oli, freestanding: the other branches
+-- are the program's, and the process exits with what `answer` says.
+-- expect: exit 5
+proc start -> never
+    entry
+    calls none
+    section ".text.boot"
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stack.addr) + 4096)
+    cpu.frame <- addr u8 (0)
+    cpu.call(main)
+    loop
+        cpu.halt()
+    end
+end
+
+stack : [4096]u8
+
+when target.freestanding
+    proc answer() -> u64
+        ret 5
+    end
+else
+    proc answer() -> u64
+        ret 42
+    end
+end
+
+when target.os == "none"
+    proc bonus() -> u64
+        ret 0
+    end
+else
+    proc bonus() -> u64
+        os.syscall(60, 77)
+        ret 0
+    end
+end
+
+proc on_trap(_kind : core.TrapKind, _site : core.Site) -> never
+    permit cpu.asm
+    traps
+    machine x64
+        mov edi, 99
+        mov eax, 60
+        syscall
+        hlt
+    end
+end
+
+proc main -> never
+    permit cpu.asm
+    v := answer() + bonus()
+    machine x64
+        in rdi <- v
+        mov eax, 60
+        syscall
+        hlt
+    end
+end

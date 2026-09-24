@@ -30,6 +30,10 @@ N_FALSE := 21
 N_NONE := 22
 -- `port.u8[n]` (design 0015): an I/O port as a place; `val` is its width in bits.
 N_HWPLACE := 23
+-- `when target.FACT … [else …] end` at declaration level: `val` 1 when the
+-- branch is the program's, 0 when it was parsed and dropped; `sub` 1 for the
+-- `else` branch. (`N_WHEN` is the arm of a `case`.)
+N_WHENDECL := 24
 
 N_BIND := 50
 N_PLACE := 51
@@ -137,6 +141,10 @@ layout Ctx
     errmark : u64
     nwarn : u64
     root : u64
+    tfree : u64
+    tobj : u64
+    tos : view u8
+    tarch : view u8
 end
 
 proc ctx_init(cx: rw ref Ctx, z: zone, src: view u8, lx: ref Lex)
@@ -160,6 +168,10 @@ proc ctx_init(cx: rw ref Ctx, z: zone, src: view u8, lx: ref Lex)
     cx.errmark <- 0
     cx.nwarn <- 0
     cx.root <- 0
+    cx.tfree <- 0
+    cx.tobj <- 0
+    cx.tos <- "linux"
+    cx.tarch <- "x86_64"
 end
 
 proc ctx_new(z: zone, src: view u8, lx: ref Lex) -> rw ref Ctx
@@ -1294,6 +1306,22 @@ proc ps(cx: ref Ctx, n: u64, ind: u64)
     if k == N_IMPORT
         emit(cx, "(import ")
         emit_toks(cx, nd.t0, nd.t1)
+        emit(cx, ")")
+        ret
+    end
+    if k == N_WHENDECL
+        if nd.sub == 1
+            emit(cx, "(when-else")
+        else
+            emit(cx, "(when ")
+            emit_toks(cx, nd.t0 + 1, nd.t1)
+        end
+        if nd.val == 1
+            emit(cx, " taken")
+        else
+            emit(cx, " dropped")
+        end
+        pkids(cx, kid1(cx, n), ind + 2)
         emit(cx, ")")
         ret
     end
