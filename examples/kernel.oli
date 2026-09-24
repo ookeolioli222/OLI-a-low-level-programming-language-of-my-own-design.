@@ -4,19 +4,24 @@ module kernel
 import core.x64
 import core.x64.paging
 -- M3 (docs/FREESTANDING.md §8) and the first steps of M4: a flat kernel
--- image for QEMU or GRUB — a Multiboot2 header in `.text.boot`, its own
--- entry with no frame, its own stack, a line on COM1 through port places
--- (`port.u8[n] <- b`), the same line in the VGA text buffer through an
--- `mmio` view, `cpuid` through a machine block, an interrupt descriptor
+-- image for QEMU or GRUB — a Multiboot2 header and a Multiboot 1 header
+-- (the a.out kludge QEMU's `-kernel` needs) in `.text.boot`, an entry that is the 32-bit code a Multiboot loader
+-- jumps to (page tables and a GDT built by hand, long mode entered, a far
+-- jump to `start64`), then its own stack, a line on COM1 through port
+-- places (`port.u8[n] <- b`), the same line in the VGA text buffer through
+-- an `mmio` view, `cpuid` through a machine block, an interrupt descriptor
 -- table with `calls interrupt` handlers on vector 3 (reached by a software
 -- `int 3`) and vector 32 (the timer: the 8259 PICs remapped, the 8253 PIT at
 -- 100 Hz, `sti`), its own page tables (the first gigabyte identity-mapped
 -- in two-megabyte pages, `core.x64.paging`, installed with
--- `arch.x64.cr3 <- …`), a wait of one second in `hlt`, then `hlt` forever.
--- No system calls, no libc: nothing in the image but this program.
+-- `arch.x64.cr3 <- …`), a wait of one second in `hlt`, then a byte to
+-- QEMU's isa-debug-exit port (it exits with status 33; on a machine
+-- without that device the write goes nowhere) and `hlt` forever. No
+-- system calls, no libc: nothing in the image but this program.
 --
 --   bin/olic examples/kernel.oli -o kernel.elf
---   qemu-system-x86_64 -kernel kernel.elf -serial stdio -display none
+--   qemu-system-x86_64 -kernel kernel.elf -serial stdio -display none \
+--       -device isa-debug-exit,iobase=0x501,iosize=1
 
 layout Multiboot2
     magic : u32
@@ -52,11 +57,114 @@ pdpt : [512]u64
 pd : [512]u64
     align 4096
 
+-- The trampoline's own tables and descriptors: the first gigabyte in
+-- two-megabyte pages, a null, a 64-bit code and a data descriptor.
+boot_pml4 : [512]u64
+    align 4096
+
+boot_pdpt : [512]u64
+    align 4096
+
+boot_pd : [512]u64
+    align 4096
+
+gdt : [3]u64
+    align 8
+
+gdtr : core.x64.TablePointer
+
+proc mb1 -> never
+    -- The Multiboot 1 header QEMU's `-kernel` looks for (it loads no 64-bit
+    -- ELF by its program headers, so the a.out kludge, flags bit 16, tells
+    -- it directly: the file goes to 0x100000 — the profile's load address,
+    -- header_addr is this procedure — up to 2 MiB is the kernel's (.bss and
+    -- room), and the entry is `start`). Never called; GRUB takes either
+    -- this or the Multiboot2 header above with the ELF entry.
+    calls none
+    section ".text.boot"
+    permit cpu.asm
+    machine x64
+        bytes 0x02, 0xB0, 0xAD, 0x1B
+        bytes 0x00, 0x00, 0x01, 0x00
+        bytes 0xFE, 0x4F, 0x51, 0xE4
+        addr32 mb1
+        bytes 0x00, 0x00, 0x10, 0x00
+        bytes 0x00, 0x00, 0x00, 0x00
+        bytes 0x00, 0x00, 0x20, 0x00
+        addr32 start
+    end
+end
+
 proc start -> never
+    -- A Multiboot loader enters here in 32-bit protected mode, paging off,
+    -- flat segments. Written as the bytes of 32-bit instructions (the
+    -- encoder writes 64-bit code; `mov [static], r32`, a `jnz` to a label
+    -- and `addr32` are the same bytes in both modes): the page tables
+    -- filled, cr3, cr4.PAE, EFER.LME, the GDT and its pointer written,
+    -- cr0.PG|PE, then the far jump into the 64-bit `start64`.
     entry
     calls none
     section ".text.boot"
+    permit cpu.asm
+    machine x64
+        bytes 0xFA
+        bytes 0xB8
+        addr32 boot_pdpt
+        bytes 0x83, 0xC8, 0x03
+        mov [boot_pml4], eax
+        bytes 0xB8
+        addr32 boot_pd
+        bytes 0x83, 0xC8, 0x03
+        mov [boot_pdpt], eax
+        bytes 0xBF
+        addr32 boot_pd
+        bytes 0xBA, 0x83, 0x00, 0x00, 0x00
+        bytes 0xB9, 0x00, 0x02, 0x00, 0x00
+    .fill:
+        bytes 0x89, 0x17
+        bytes 0xC7, 0x47, 0x04, 0x00, 0x00, 0x00, 0x00
+        bytes 0x81, 0xC2, 0x00, 0x00, 0x20, 0x00
+        bytes 0x83, 0xC7, 0x08
+        bytes 0x49
+        jnz .fill
+        bytes 0xB8
+        addr32 boot_pml4
+        bytes 0x0F, 0x22, 0xD8
+        bytes 0x0F, 0x20, 0xE0
+        bytes 0x83, 0xC8, 0x20
+        bytes 0x0F, 0x22, 0xE0
+        bytes 0xB9, 0x80, 0x00, 0x00, 0xC0
+        bytes 0x0F, 0x32
+        bytes 0x0D, 0x00, 0x01, 0x00, 0x00
+        bytes 0x0F, 0x30
+        bytes 0xBF
+        addr32 gdt
+        bytes 0xC7, 0x47, 0x08, 0x00, 0x00, 0x00, 0x00
+        bytes 0xC7, 0x47, 0x0C, 0x00, 0x9A, 0x20, 0x00
+        bytes 0xC7, 0x47, 0x10, 0x00, 0x00, 0x00, 0x00
+        bytes 0xC7, 0x47, 0x14, 0x00, 0x92, 0x00, 0x00
+        bytes 0xBE
+        addr32 gdtr
+        bytes 0x66, 0xC7, 0x06, 0x17, 0x00
+        bytes 0x89, 0x7E, 0x02
+        bytes 0xC7, 0x46, 0x06, 0x00, 0x00, 0x00, 0x00
+        bytes 0x0F, 0x01, 0x16
+        bytes 0x0F, 0x20, 0xC0
+        bytes 0x0D, 0x01, 0x00, 0x00, 0x80
+        bytes 0x0F, 0x22, 0xC0
+        bytes 0xEA
+        addr32 start64
+        bytes 0x08, 0x00
+    end
+end
+
+proc start64 -> never
+    -- Long mode, cs = the trampoline's code descriptor: the data segments
+    -- from the same GDT, the stack, no frame, and `main`.
+    calls none
+    section ".text.boot"
     permit cpu.control, cpu.halt, memory.raw
+    arch.x64.segments(code: 0x08, data: 0x10)
     cpu.stack <- addr u8 (u64(stack.addr) + 16K)
     cpu.frame <- addr u8 (0)
     cpu.call(main)
@@ -169,9 +277,8 @@ proc serial_hex(v : u64)
 end
 
 proc set_gate(vector : uword, handler : u64)
-    -- An interrupt gate (type 0xE, present, ring 0) in the kernel code
-    -- segment the boot loader left in cs (Multiboot2: 0x08 is conventional
-    -- for a flat 64-bit segment set up by the loader's GDT).
+    -- An interrupt gate (type 0xE, present, ring 0) in the kernel's own
+    -- code segment, 0x08 of the GDT the trampoline built.
     idt[vector].offset_lo <- u16.wrap(handler)
     idt[vector].selector <- 8
     idt[vector].ist <- 0
@@ -235,6 +342,7 @@ proc main -> never
         cpu.halt()
     end
     serial_write("timer: 100 ticks\n")
+    outb(0x501, 0x10)
     loop
         cpu.halt()
     end

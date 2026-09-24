@@ -1317,12 +1317,59 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Booted (2026-09-24), stage 34: the Multiboot path of `examples/kernel.oli`
+
+- **`addr32 NAME`** in a `machine x64` block (design 0023): the four-byte
+  absolute address of a procedure (fix kind 9, `R_X86_64_32` in an object)
+  or a static (the kinds a `[static]` operand takes), as data.
+- **The kernel example boots.** `mb1` is a never-called procedure whose
+  block is a Multiboot 1 header with the a.out kludge (QEMU's `-kernel`
+  loads no 64-bit ELF by its program headers): header_addr `addr32 mb1`,
+  load_addr 0x100000, load_end 0 (the whole file), bss_end 0x200000, entry
+  `addr32 start`. `start` is the 32-bit trampoline — `bytes` for the 32-bit
+  instructions, `mov [static], r32`, `jnz .label` and `addr32` being the
+  same bytes in both modes: cli; the PML4 and PDPT entries; the page
+  directory filled with 512 two-megabyte pages in a loop; cr3; cr4.PAE;
+  EFER.LME through rdmsr/wrmsr; a GDT (null, 64-bit code 0x00209A00…,
+  data 0x00009200…) and its pointer written by hand and `lgdt`; cr0.PG|PE;
+  `jmp far 0x08:start64`. `start64` reloads every segment register with
+  `arch.x64.segments(code: 0x08, data: 0x10)` (stage 32), sets the stack
+  and frame and calls `main`. After its hundred timer ticks `main` writes
+  QEMU's isa-debug-exit port (0x501, value 0x10: exit status 33).
+- **Verified for real** with QEMU 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1,
+  TCG, 64 MiB, `-display none -nic none -serial file: -device
+  isa-debug-exit,iobase=0x501,iosize=1 -kernel kernel.elf`): exit status
+  33 and exactly these five lines on COM1 —
+
+  ```
+  Oli-- kernel
+  cpu: AuthenticAMD
+  int 3 at 00000000001018b1
+  back from int 3
+  timer: 100 ticks
+  ```
+
+  i.e. the trampoline entered long mode, the segments were reloaded from
+  the kernel's own GDT, `cpuid` ran, the IDT built by the kernel took a
+  software interrupt and returned, the PICs and the PIT delivered a hundred
+  interrupts to `on_timer`, and the kernel left through the port. (QEMU was
+  obtained as Debian packages unpacked under a scratch directory — no
+  installation — so it is not on this machine's path.)
+- The harness checks the Multiboot 1 header's bytes against the symbols,
+  the ELF entry, the trampoline's decoding with `objdump -M i386` (eighteen
+  instructions and the far jump to `start64`), and — when
+  `qemu-system-x86_64` is on the path or `OLI_QEMU` names it, with
+  `OLI_QEMU_BIOS`/`OLI_QEMU_DATA` for its firmware directories — boots the
+  image and pins the exit status and the five lines; otherwise it prints
+  `skipped: no qemu-system-x86_64 here` with the date of this run. The
+  audit's item #8 (a boot path a loader can take) is closed.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 29,499 lines) into
+compiles its own source (`compiler/`, seventeen modules, 29,541 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,284,744 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,286,896 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

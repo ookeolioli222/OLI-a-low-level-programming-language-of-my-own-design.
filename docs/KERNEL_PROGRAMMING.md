@@ -8,8 +8,9 @@ construct answers each system-programming requirement.
 > stages 14–15): a freestanding entry with no frame, its own stack, `traps`
 > with `core.Site`, zones `at`/`from`, `cpu.halt()`, `machine` blocks with
 > port I/O and control-register moves, `-- load:`, a Multiboot2 header as a
-> static in `.text.boot` — `examples/kernel.oli` is a bootable image whose
-> structure the harness checks. The "Version" column below is otherwise the
+> static in `.text.boot` — `examples/kernel.oli` is a bootable image: it
+> boots under QEMU (2026-09-24; §2 below), and the harness checks its
+> structure and, with QEMU present, its boot. The "Version" column below is otherwise the
 > plan, not the state: V1 and V2 rows report `E0900` (`feature not
 > implemented`) — `tests/sema/err/not_implemented.oli` pins that behaviour,
 > and `tests/parse/ok/kernel_sketch.oli` is checked to report `E0401` for
@@ -92,6 +93,61 @@ mb_header : Multiboot2Header := Multiboot2Header {
         end_tag_type: 0, end_tag_flags: 0, end_tag_size: 8 }
     section ".text.boot"
 ```
+
+### The boot trampoline (runs: QEMU 10.0.13, 2026-09-24)
+
+A Multiboot loader enters the kernel in 32-bit protected mode with paging
+off. The encoder writes 64-bit code, so the entry is a `machine` block of
+32-bit instructions spelled as `bytes` — `mov [static], r32`, a `jnz` to a
+label and `addr32 NAME` (the four-byte address of a procedure or a static,
+design 0023) are the same bytes in both modes:
+
+```oli
+proc start -> never
+    entry
+    calls none
+    section ".text.boot"
+    permit cpu.asm
+    machine x64
+        bytes 0xFA                       -- cli
+        bytes 0xB8                       -- mov eax, imm32 …
+        addr32 boot_pdpt                 --   … the PDPT's address
+        bytes 0x83, 0xC8, 0x03           -- or eax, present | writable
+        mov [boot_pml4], eax             -- the same bytes in 32-bit mode
+        …                                -- the PD: 512 two-megabyte pages
+        bytes 0x0F, 0x22, 0xD8           -- mov cr3, eax
+        …                                -- cr4.PAE, EFER.LME (rdmsr/wrmsr)
+        bytes 0x0F, 0x01, 0x16           -- lgdt [esi]: a null, a 64-bit code and a data descriptor, written by hand
+        …                                -- cr0.PG | PE
+        bytes 0xEA                       -- jmp far …
+        addr32 start64                   --   … 0x08:start64
+        bytes 0x08, 0x00
+    end
+end
+
+proc start64 -> never
+    calls none
+    section ".text.boot"
+    permit cpu.control, cpu.halt, memory.raw
+    arch.x64.segments(code: 0x08, data: 0x10)
+    cpu.stack <- addr u8 (u64(stack.addr) + 16K)
+    cpu.frame <- addr u8 (0)
+    cpu.call(main)
+    loop
+        cpu.halt()
+    end
+end
+```
+
+QEMU's `-kernel` loads no 64-bit ELF by its program headers, so beside the
+Multiboot2 header (a static) the image carries a Multiboot 1 header with
+the a.out kludge — `mb1`, a never-called procedure whose block is the
+twelve words of the header with `addr32 mb1` and `addr32 start` — telling
+the loader to put the file at 0x100000 and enter `start`. The run
+(`qemu-system-x86_64 -kernel kernel.elf -serial stdio -display none -device
+isa-debug-exit,iobase=0x501,iosize=1`) prints the kernel's five COM1 lines
+and exits with 33 when the kernel writes the debug-exit port after its
+hundred timer ticks.
 
 ### VGA text output through MMIO (runs)
 
@@ -180,6 +236,8 @@ Every step is visible: `--explain-cost kernel.oli` lists each `ZONE`, `KERNEL`,
 
 ## 5. Milestone 4 scope
 
-boot via Multiboot2 → own stack → serial + VGA output → `cpuid` → `hlt` loop.
-Then, one at a time: GDT, IDT + handlers, PIC/APIC timer, physical memory
-manager, paging, kernel heap, a cooperative scheduler.
+boot via Multiboot (**done, booted under QEMU 2026-09-24**) → own stack →
+serial + VGA output → `cpuid` → `hlt` loop — all in `examples/kernel.oli`,
+with the GDT (the trampoline's), the IDT and its handlers, the PIC and PIT
+timer and the page tables already there. Next, one at a time: a physical
+memory manager, a kernel heap, a cooperative scheduler.

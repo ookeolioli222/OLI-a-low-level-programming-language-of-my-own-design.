@@ -207,5 +207,15 @@ the COM1 port (`io.port`) and the VGA text buffer (`memory.mmio`), reads
 the VGA cells through `mem.mmio` — and beyond it the two 8259 PICs remapped,
 the 8253 PIT at 100 Hz, a `calls interrupt` handler on vector 32 counting
 ticks, `cpu.interrupts(on)` and a second of `hlt`.
-It is run under QEMU as a flat kernel (`-kernel` with a Multiboot2 header
-placed in `.text.boot` as a static `layout` with `section`).
+It boots under QEMU as a flat kernel (2026-09-24, QEMU 10.0.13): `-kernel`
+takes the Multiboot 1 header of `mb1` (the a.out kludge, because QEMU loads
+no 64-bit ELF by its program headers) — GRUB takes that or the Multiboot2
+header placed in `.text.boot` as a static `layout` with `section` — and
+enters `start` in 32-bit protected mode; `start` is a `machine` block of
+32-bit instructions written as `bytes` with `addr32` for the addresses it
+needs (page tables for the first gigabyte, cr3, cr4.PAE, EFER.LME, a GDT
+with a 64-bit code descriptor, cr0.PG) that far-jumps to `start64`, which
+reloads the segments with `arch.x64.segments`, sets the stack and calls
+`main`. The harness decodes the trampoline with `objdump -M i386` and, when
+`qemu-system-x86_64` is on the path (or `OLI_QEMU` names it), boots the
+image: five lines on COM1 and an exit through the isa-debug-exit device.

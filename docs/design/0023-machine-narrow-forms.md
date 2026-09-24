@@ -29,14 +29,19 @@ else that names a narrow register (E0900 otherwise):
 | `int imm8` / `int3` | `CD ib` / `CC` |
 | `lea r64, [.label]` | `48 8D /r` with `[rip + rel32]` to the label |
 | `bytes b, b, …` | the listed bytes, each 0..255 |
+| `addr32 NAME` | the four-byte absolute address of a procedure or a static, as data |
 
-The last four are not narrow forms. `pushfq`/`popfq`, `int` and `lea`
+The last five are not narrow forms. `pushfq`/`popfq`, `int` and `lea`
 entered the encoder with the interrupt work of M4 (a handler is tested in a
 hosted program by pushing the frame the CPU would push and jumping to it);
 `bytes` (2026-09-24) spells an instruction the encoder has no form for as
 its bytes, still under `permit cpu.asm` — a line with no byte, a negative
 or a value above 255 is E0900 (`tests/run/segments.oli` spells `mov eax, 42`
-so, and the harness compiles a refused one).
+so, and the harness compiles a refused one); `addr32 NAME` (2026-09-24) is
+what a 32-bit boot trampoline needs after a `mov r32, imm32` opcode byte,
+in a far jump and in a Multiboot header — the fixup is the same absolute
+32-bit address a `[static]` operand takes, or `R_X86_64_32` in an object
+(`examples/kernel.oli`, booted under QEMU).
 
 `in`/`out` directives (`in REG <- e`, `out REG -> place`) keep r64 and r32
 only: the accumulator's low byte is what the block computes from a value

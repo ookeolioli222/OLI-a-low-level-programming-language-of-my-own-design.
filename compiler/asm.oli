@@ -29,6 +29,7 @@ MF_PROC64 := 5
 MF_DATA64 := 6
 MF_DATA32 := 7
 MF_RO32 := 8
+MF_PROC32 := 9
 
 OK_REG := 1
 OK_IMM := 2
@@ -736,6 +737,9 @@ proc enc_instr(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> word
     if view_eq(m, "bytes")
         ret enc_bytes(cx, ob, n)
     end
+    if view_eq(m, "addr32")
+        ret enc_addr32(pg, ob, mi, n)
+    end
     c := read_operands(pg, ob, mi, n)
     if c < 0
         ret 0
@@ -957,6 +961,32 @@ proc acc_width(name: view u8) -> u64
     end
     if view_eq(name, "eax")
         ret 32
+    end
+    ret 0
+end
+
+proc enc_addr32(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> word
+    -- `addr32 NAME`: the four-byte absolute address of a procedure or a
+    -- static, as data (design 0023) — what a 32-bit boot trampoline needs
+    -- after a `mov r32, imm32` opcode byte and in its far jump.
+    c := read_operands(pg, ob, mi, n)
+    if c != 1
+        ret 0
+    end
+    o := opnd_at(ob, 0)
+    if o.kind == OK_PROC
+        note_fix(ob, ob.ncode, MF_PROC32, o.sym)
+        c32(ob, 0)
+        ret 1
+    end
+    if o.kind == OK_STATIC
+        if o.ro == 1
+            note_fix(ob, ob.ncode, MF_RO32, o.sym)
+        else
+            note_fix(ob, ob.ncode, MF_DATA32, o.sym)
+        end
+        c32(ob, 0)
+        ret 1
     end
     ret 0
 end

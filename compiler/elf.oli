@@ -926,6 +926,11 @@ proc build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
             op5 := oproc_at(ob, f.target)
             put_rela(rb, n, f.pos, 2 * 4294967296 + 1, op5.codepos)
             n <- n + 1
+        elif f.kind == 9
+            -- `addr32` of a procedure: `R_X86_64_32` against .text.
+            op9 := oproc_at(ob, f.target)
+            put_rela(rb, n, f.pos, 2 * 4294967296 + 10, op9.codepos)
+            n <- n + 1
         elif f.kind == 4
             data_rela(ob, rb, n, f)
             n <- n + 1

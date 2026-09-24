@@ -1507,12 +1507,15 @@ set +e; timeout 10 ./build/packet_demo.elf > build/packet_demo.out 2>&1; st=$?; 
 [ "$(wc -c < build/packet_demo.out)" = 19 ] || fail "packet_demo: the output is the verdict, the twelve-byte cpuid vendor and a newline"
 echo "ok: examples/packet_demo.oli - the reference program of the language documents - compiles and runs: zone, layout with a be field, choice failures, each, syscalls, machine block, raw address"
 
-# M3 (FREESTANDING.md 8): the kernel image. No emulator runs here, so the
-# image is checked structurally: linked at the address its `-- load:` line
-# names, the Multiboot2 header (a static layout with an initialiser, placed
-# in `.text.boot`) right after the ELF and program headers with the magic,
-# length and checksum the loader will verify, port I/O and cpuid in its
-# blocks, and not one system call in any procedure.
+# M3/M4 (FREESTANDING.md 8): the kernel image, checked structurally first:
+# linked at the address its profile names, the Multiboot2 header (a static
+# layout with an initialiser, placed in `.text.boot`) right after the ELF
+# and program headers with the magic, length and checksum the loader will
+# verify, the Multiboot 1 header of `mb1` (the a.out kludge QEMU's -kernel
+# needs) with the entry `start`, the 32-bit trampoline of `start` decoding
+# as the instructions that enter long mode, port I/O and cpuid in its
+# blocks, and not one system call in any procedure. Then, when QEMU is on
+# the path (or OLI_QEMU names it), the image is booted for real.
 ( cd .. && genesis/build/olic < examples/kernel.oli > genesis/build/kernel.elf 2> genesis/build/kernel.err ) || fail "kernel: olic could not compile examples/kernel.oli: $(head -1 build/kernel.err)"
 kentry=$(readelf -h build/kernel.elf | sed -n 's/.*Entry point address: *0x\([0-9a-f]*\).*/\1/p')
 ksize=$(readelf -lW build/kernel.elf | awk '$1=="LOAD"{print $5; exit}')
@@ -1527,7 +1530,7 @@ objdump -d --no-show-raw-insn build/kernel.elf > build/kernel.dis
 [ "$(grep -c 'out    %al,(%dx)' build/kernel.dis)" -ge 15 ] || fail "kernel: COM1, the two PICs and the PIT are written through port places, one out dx, al each ($(grep -c 'out    %al,(%dx)' build/kernel.dis) found)"
 [ "$(grep -c 'sti$' build/kernel.dis)" = 1 ] || fail "kernel: cpu.interrupts(on) must be one sti"
 [ "$(grep -c 'iretq' build/kernel.dis)" = 2 ] || fail "kernel: the int 3 and timer handlers must both end in iretq"
-[ "$(grep -c 'mov    %rax,%cr3' build/kernel.dis)" = 1 ] || fail "kernel: the page tables must be installed with one mov cr3, rax"
+[ "$(grep -c 'mov    %rax,%cr3' build/kernel.dis)" = 2 ] || fail "kernel: cr3 is written twice - the trampoline's tables and paging_init's"
 [ "$(grep -c 'mov    %cr3,%rax' build/kernel.dis)" = 1 ] || fail "kernel: cr3 must be read back once"
 grep -q 'cpuid' build/kernel.dis || fail "kernel: cpu.id(0) must be one cpuid"
 grep -q 'lidt   (%rax)' build/kernel.dis || fail "kernel: arch.x64.idt <- must be one lidt"
@@ -1545,6 +1548,53 @@ grep -q 'call core.x64.paging.identity_2m\|= call ' build/kernel.oir || fail "ke
 [ "$(od -An -tx1 -v build/kernel.elf | tr -d '\n' | grep -o '48 cf' | wc -l)" = 2 ] || fail "kernel: exactly two calls-interrupt handlers end in iretq"
 ( cd .. && genesis/build/explain < examples/kernel.oli > genesis/build/kernel.explain 2>/dev/null ) || fail "kernel: explain"
 [ "$(grep -c 'syscalls=0' build/kernel.explain)" = "$(grep -c '(proc ' build/kernel.explain)" ] || fail "kernel: a procedure of the kernel makes a system call"
+# The boot path: the Multiboot 1 header (magic, flags bit 16, checksum,
+# header_addr = mb1, load_addr 0x100000, load_end 0, bss_end 0x200000,
+# entry_addr = start) at `mb1`, and `start` read as 32-bit code.
+kmb1=$(nm build/kernel.elf | awk '$3=="kernel.mb1"{print $1}')
+kstart=$(nm build/kernel.elf | awk '$3=="kernel.start"{print $1}')
+kstart64=$(nm build/kernel.elf | awk '$3=="kernel.start64"{print $1}')
+[ -n "$kmb1" ] && [ -n "$kstart" ] && [ -n "$kstart64" ] || fail "kernel: mb1, start and start64 must be symbols"
+[ "$((0x$kmb1 % 4))" = 0 ] || fail "kernel: the Multiboot 1 header must be four-byte aligned"
+[ "$((0x$kmb1 - 0x100000))" -lt 8192 ] || fail "kernel: the Multiboot 1 header must lie in the first 8 KiB"
+mb1got=$(od -An -tx1 -j$((0x$kmb1 - 0x100000)) -N32 build/kernel.elf | tr -d ' \n')
+mb1want="02b0ad1b00000100fe4f51e4$(printf '%08x' 0x$kmb1 | sed 's/\(..\)\(..\)\(..\)\(..\)/\4\3\2\1/')000010000000000000002000$(printf '%08x' 0x$kstart | sed 's/\(..\)\(..\)\(..\)\(..\)/\4\3\2\1/')"
+[ "$mb1got" = "$mb1want" ] || fail "kernel: the Multiboot 1 header at mb1 is [$mb1got], want [$mb1want]"
+[ "$((0x$kentry))" = "$((0x$kstart))" ] || fail "kernel: the ELF entry must be start (the trampoline), is 0x$kentry"
+objdump -d -M i386 --no-show-raw-insn --start-address=0x$kstart --stop-address=0x$kstart64 build/kernel.elf > build/kernel.boot32
+for pin in 'cli$' 'mov    %eax,%cr3' 'mov    %cr4,%eax' 'or     $0x20,%eax' 'mov    %eax,%cr4' 'mov    $0xc0000080,%ecx' 'rdmsr' 'or     $0x100,%eax' 'wrmsr' 'movl   $0x209a00,0xc(%edi)' 'movl   $0x9200,0x14(%edi)' 'movw   $0x17,(%esi)' 'lgdtl  (%esi)' 'mov    %cr0,%eax' 'or     $0x80000001,%eax' 'mov    %eax,%cr0' 'add    $0x200000,%edx' 'mov    $0x200,%ecx'; do
+    grep -q "$pin" build/kernel.boot32 || fail "kernel: the 32-bit trampoline must contain [$pin]"
+done
+grep -q "ljmp   \$0x8,\$0x$(printf '%x' 0x$kstart64)$" build/kernel.boot32 || fail "kernel: the trampoline must far-jump to 0x8:start64"
+grep -q 'lretq' build/kernel.dis || fail "kernel: start64 must reload the segments (arch.x64.segments, lretq)"
+grep -q 'hw.cmd arch.x64.segments' build/kernel.oir || fail "kernel: start64 must reload the segments through the command"
+echo "ok: examples/kernel.oli carries a Multiboot 1 header (a.out kludge, entry start) at mb1 and start is a 32-bit trampoline - tables, cr3, PAE, EFER.LME, a GDT, cr0.PG - ending in ljmp 0x8:start64 (objdump -M i386)"
+# The boot itself. QEMU is not part of the toolchain; when it is present the
+# image is loaded by QEMU's Multiboot loader in 32-bit protected mode, the
+# kernel talks on COM1 and leaves through the isa-debug-exit device (status
+# 33). Without QEMU this step says so; the run of 2026-09-24 with QEMU
+# 10.0.13 is transcribed in docs/PROJECT_STATUS.md (stage 34).
+QEMU=${OLI_QEMU:-$(command -v qemu-system-x86_64 || true)}
+if [ -n "$QEMU" ]; then
+    qbios=""
+    [ -n "${OLI_QEMU_BIOS:-}" ] && qbios="-L $OLI_QEMU_BIOS"
+    [ -n "${OLI_QEMU_DATA:-}" ] && qbios="$qbios -L $OLI_QEMU_DATA"
+    rm -f build/kernel.serial
+    set +e
+    timeout 120 "$QEMU" $qbios -accel tcg -display none -nic none -no-reboot -m 64 -serial file:build/kernel.serial -device isa-debug-exit,iobase=0x501,iosize=1 -kernel build/kernel.elf > build/kernel.qemu 2>&1
+    st=$?
+    set -e
+    [ "$st" = 33 ] || fail "boot: qemu exited $st, want 33 (isa-debug-exit after the timer): $(head -2 build/kernel.qemu)"
+    [ "$(sed -n 1p build/kernel.serial)" = "Oli-- kernel" ] || fail "boot: the first serial line must be the greeting, is [$(sed -n 1p build/kernel.serial)]"
+    grep -q '^cpu: \(GenuineIntel\|AuthenticAMD\|other\)$' build/kernel.serial || fail "boot: the kernel must report its cpuid vendor on COM1"
+    grep -q '^int 3 at 00000000001[0-9a-f]\{5\}$' build/kernel.serial || fail "boot: the int 3 handler must report the return address"
+    grep -q '^back from int 3$' build/kernel.serial || fail "boot: the kernel must return from int 3"
+    grep -q '^timer: 100 ticks$' build/kernel.serial || fail "boot: the PIT must have ticked a hundred times"
+    [ "$(wc -l < build/kernel.serial)" = 5 ] || fail "boot: COM1 must carry exactly five lines, carries $(wc -l < build/kernel.serial)"
+    echo "ok: BOOT - $("$QEMU" -version | head -1 | sed 's/ (.*//') loads kernel.elf by its Multiboot header in 32-bit mode, the trampoline enters long mode, the kernel greets on COM1, reports cpuid, takes int 3 and 100 timer ticks, and exits through isa-debug-exit with 33"
+else
+    echo "skipped: no qemu-system-x86_64 here (set OLI_QEMU, and OLI_QEMU_BIOS/OLI_QEMU_DATA for its firmware) - the boot of examples/kernel.oli was verified with QEMU 10.0.13 on 2026-09-24, transcript in docs/PROJECT_STATUS.md"
+fi
 echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2 header at offset 176, COM1, the PICs and the PIT written through port places, cpuid, lidt and int 3 in its machine blocks, two calls-interrupt handlers ending in iretq, sti, and no system call anywhere (run it: qemu-system-x86_64 -kernel kernel.elf -serial stdio)"
 
 # Object files (ABI.md 6, `-- output: object`): a relocatable ELF with the

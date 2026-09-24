@@ -2591,6 +2591,10 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
             patch64(ob, f.pos, database + ob.ndata + op5.codepos)
         elif f.kind == 6
             patch64(ob, f.pos, mc.dbase + f.target)
+        elif f.kind == 9
+            -- `addr32 NAME` of a procedure: its absolute address in 32 bits.
+            op9 := oproc_at(ob, f.target)
+            patch32(ob, f.pos, database + ob.ndata + op9.codepos)
         else
             target : u64 <- 0
             if f.kind == 0
@@ -2629,7 +2633,7 @@ end
 
 proc abs_kind(k: u64) -> word
     -- The fixes that are absolute addresses: read-only statics (2, 8), the
-    -- writable segment (4, 6, 7) and procedures (5).
+    -- writable segment (4, 6, 7) and procedures (5, 9).
     if k == 2
         ret 1
     end
@@ -2646,6 +2650,9 @@ proc abs_kind(k: u64) -> word
         ret 1
     end
     if k == 8
+        ret 1
+    end
+    if k == 9
         ret 1
     end
     ret 0
