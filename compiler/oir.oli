@@ -187,13 +187,16 @@ O_MEMOP := 45
 -- (O_MSRRD, `a` the number); `hw.store arch.x64.msr %n, %v` (O_MSRWR);
 -- `hw.cmd cpu.id %leaf, %area` (O_CPUID: the four registers into the
 -- area, a `core.CpuId`); `hw.cmd cpu.call NAME` (O_HWCALL, `c` the
--- procedure). All volatile, class KERNEL.
+-- procedure); `hw.cmd arch.x64.segments %code, %data` (O_SEGS: `retfq`
+-- to the next instruction with the code selector, then ds, es, ss, fs and
+-- gs loaded with the data selector). All volatile, class KERNEL.
 O_HWRD := 46
 O_HWWR := 47
 O_MSRRD := 48
 O_MSRWR := 49
 O_CPUID := 50
 O_HWCALL := 51
+O_SEGS := 52
 -- The arithmetic modes: plain arithmetic traps, `wrap` wraps, `sat` clamps,
 -- `checked` answers with a failure (design 0006).
 AM_TRAP := 0
@@ -886,6 +889,9 @@ proc op_uses_a(op: u64) -> word
     if op == O_MSRWR
         ret 1
     end
+    if op == O_SEGS
+        ret 1
+    end
     if op == O_CPUID
         ret 1
     end
@@ -945,6 +951,9 @@ proc op_uses_b(op: u64) -> word
         ret 1
     end
     if op == O_MSRWR
+        ret 1
+    end
+    if op == O_SEGS
         ret 1
     end
     if op == O_CPUID
@@ -2517,6 +2526,9 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         ob.lastlen <- 0
         ret emit_ins(ob, O_HWRD, 0, 0, 0, 8)
     end
+    if ck == CK_SEGS
+        ret gen_segments(pg, ob, mi, n)
+    end
     if ck == CK_CPUCALL
         -- `cpu.call(p)`: a bare `call` to the procedure, for an entry with
         -- no frame of its own.
@@ -3077,6 +3089,12 @@ proc gen_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     m := tok_text(cx, nd.t0)
     base := kid1(cx, n)
     bn := node_at(cx, base)
+    if bn.kind == N_FIELD
+        -- `Name.field.offset` / `Name.field.size`: a constant.
+        if field_const_kind(pg, mi, n) > 0
+            ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
+        end
+    end
     if bn.kind == N_NAME
         if name_kind(pg, mi, base) == 0
             ci := val_find(pg, m)
@@ -5471,6 +5489,18 @@ proc hw_stmts_ok(pg: ref Prog, mi: u64, first: u64) -> word
     ret 1
 end
 
+proc gen_segments(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `arch.x64.segments(code, data)`: the two selectors as values, one
+    -- `hw.cmd` that reloads every segment register (design 0015).
+    cx := mod_ctx(pg, mi)
+    a1 := sibling(cx, kid1(cx, n))
+    cv := gen_expr(pg, ob, mi, a1, "u16")
+    dv := gen_expr(pg, ob, mi, sibling(cx, a1), "u16")
+    emit_ins(ob, O_SEGS, cv, dv, 0, 0)
+    ob.lastlen <- 0
+    ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+end
+
 proc hw_call_ok(pg: ref Prog, mi: u64, n: u64) -> word
     cx := mod_ctx(pg, mi)
     nd := node_at(cx, n)
@@ -5491,6 +5521,9 @@ proc hw_call_ok(pg: ref Prog, mi: u64, n: u64) -> word
         ret 1
     end
     if ck == CK_CPUJUMP
+        ret 1
+    end
+    if ck == CK_SEGS
         ret 1
     end
     ret 0
@@ -5954,6 +5987,9 @@ proc oir_op_name(op: u64) -> view u8
     if op == O_HWCALL
         ret "hw.cmd"
     end
+    if op == O_SEGS
+        ret "hw.cmd"
+    end
     if op == O_ZALLOC
         ret "zone.alloc"
     end
@@ -6313,6 +6349,13 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     end
     if op == O_CPUID
         put(1, "hw.cmd cpu.id ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_SEGS
+        put(1, "hw.cmd arch.x64.segments ")
         pv(ob, pg, ins.a)
         put(1, ", ")
         pv(ob, pg, ins.b)

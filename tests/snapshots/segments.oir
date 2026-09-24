@@ -1,0 +1,139 @@
+(oir
+  (proc start locals=5 entry
+    (bb0
+      %0 = const 0
+      %1 = const 0
+      %2 = cmp.ne %0, %1
+      branch %2, bb1, bb2)
+    (bb1 preds bb0
+      %4 = const 1
+      ret %4)
+    (bb2 preds bb0
+      %7 = const 8
+      %8 = const 8
+      %9 = cmp.ne %7, %8
+      branch %9, bb3, bb4)
+    (bb3 preds bb2
+      %11 = const 2
+      ret %11)
+    (bb4 preds bb2
+      %14 = const 16
+      %15 = const 16
+      %16 = cmp.ne %14, %15
+      branch %16, bb5, bb6)
+    (bb5 preds bb4
+      %18 = const 3
+      ret %18)
+    (bb6 preds bb4
+      %21 = const 1
+      %22 = const 1
+      %23 = cmp.ne %21, %22
+      branch %23, bb7, bb8)
+    (bb7 preds bb6
+      %25 = const 4
+      ret %25)
+    (bb8 preds bb6
+      %28 = const 8
+      %29 = const 8
+      %30 = cmp.ne %28, %29
+      branch %30, bb9, bb10)
+    (bb9 preds bb8
+      %32 = const 5
+      ret %32)
+    (bb10 preds bb8
+      %35 = const 24
+      %36 = const 24
+      %37 = cmp.ne %35, %36
+      branch %37, bb11, bb12)
+    (bb11 preds bb10
+      %39 = const 6
+      ret %39)
+    (bb12 preds bb10
+      %42 = const 4
+      %43 = const 4
+      %44 = cmp.ne %42, %43
+      branch %44, bb13, bb14)
+    (bb13 preds bb12
+      %46 = const 7
+      ret %46)
+    (bb14 preds bb12
+      %49 = const 8
+      %50 = const 4
+      %51 = const 4
+      %52 = add %50, %51
+      %53 = cmp.ne %49, %52
+      branch %53, bb15, bb16)
+    (bb15 preds bb14
+      %55 = const 8
+      ret %55)
+    (bb16 preds bb14
+      %58 = const 8
+      %59 = const 2
+      %60 = add %58, %59
+      store frame.0, %60
+      %62 = load frame.0
+      %63 = const 10
+      %64 = cmp.ne %62, %63
+      branch %64, bb17, bb18)
+    (bb17 preds bb16
+      %66 = const 9
+      ret %66)
+    (bb18 preds bb16
+      %69 = const 51
+      %70 = const 43
+      hw.cmd arch.x64.segments %69, %70
+      %72 = const 0
+      %73 = const 0
+      store frame.1, %73
+      %75 = const 0
+      store frame.2, %75
+      %77 = const 0
+      store frame.3, %77
+      machine x64
+      %80 = machine.out rax
+      store frame.1, %80
+      machine x64
+      %83 = machine.out rax
+      store frame.2, %83
+      machine x64
+      %86 = machine.out rax
+      store frame.3, %86
+      %88 = load frame.1
+      %89 = const 51
+      %90 = cmp.ne %88, %89
+      branch %90, bb19, bb20)
+    (bb19 preds bb18
+      %92 = const 10
+      ret %92)
+    (bb20 preds bb18
+      %95 = load frame.2
+      %96 = const 43
+      %97 = cmp.ne %95, %96
+      branch %97, bb21, bb22)
+    (bb21 preds bb20
+      %99 = const 11
+      ret %99)
+    (bb22 preds bb20
+      %102 = load frame.3
+      %103 = const 43
+      %104 = cmp.ne %102, %103
+      branch %104, bb23, bb24)
+    (bb23 preds bb22
+      %106 = const 12
+      ret %106)
+    (bb24 preds bb22
+      %109 = const 0
+      store frame.4, %109
+      machine x64
+      %112 = machine.out rax
+      store frame.4, %112
+      %114 = load frame.4
+      %115 = const 42
+      %116 = cmp.ne %114, %115
+      branch %116, bb25, bb26)
+    (bb25 preds bb24
+      %118 = const 13
+      ret %118)
+    (bb26 preds bb24
+      %121 = const 42
+      ret %121)))

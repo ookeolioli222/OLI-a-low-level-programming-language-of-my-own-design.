@@ -1141,7 +1141,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli" "atomic tests/run/atomic.oli" "memops tests/run/memops.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli" "atomic tests/run/atomic.oli" "memops tests/run/memops.oli" "segments tests/run/segments.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1150,7 +1150,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging,atomic,memops}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging,atomic,memops,segments}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1172,7 +1172,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging atomic memops; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging atomic memops segments; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1352,6 +1352,24 @@ done
 [ "$(grep -c 'ltr  *%' build/hw.dis)" = 1 ] || fail "hw: the task register must be written once (ltr)"
 [ "$(grep -c 'hw\.' build/hw.opt)" = 35 ] || fail "opt: hw.oli must keep its thirty-five hardware operations"
 echo "ok: port.u8/u16/u32[n] and port T values with .in()/.out() are one in/out each at the width, cpu.interrupts(off/on) one cli/sti, arch.x64.cr0/2/3/4 read and written one mov each, arch.x64.msr[n] rdmsr/wrmsr, arch.x64.gdt/idt lgdt/lidt, arch.x64.tr str/ltr, cpu.stack and cpu.frame moves, cpu.jump, cpu.id cpuid, cpu.tsc rdtsc, cpu.call a call (objdump on hw.elf); the passes keep every hardware access"
+# tests/run/segments.oli: arch.x64.segments(code, data) is the far return
+# and five segment loads, once each, executed for real under the selectors
+# a Linux process runs with and read back through the segment moves of
+# design 0023; a `bytes` line stands in the image as the bytes it lists;
+# Name.field.offset/size fold to constants before the OIR.
+objdump -d --no-show-raw-insn build/segments.elf > build/segments.dis
+for pin in 'lretq$=1' 'lea    0x3(%rip),%rax=1' 'mov    %ecx,%ds=1' 'mov    %ecx,%es=1' 'mov    %ecx,%ss=1' 'mov    %ecx,%fs=1' 'mov    %ecx,%gs=1' 'mov    %cs,%eax=1' 'mov    %ds,%eax=1' 'mov    %ss,%eax=1' 'mov    \$0x2a,%eax=1'; do
+    pat=${pin%=*}; want=${pin##*=}
+    [ "$(grep -c "$pat" build/segments.dis)" = "$want" ] || fail "segments: [$pat] must be $want times in segments.elf, is $(grep -c "$pat" build/segments.dis)"
+done
+[ "$(grep -c 'hw.cmd arch.x64.segments' build/segments.opt)" = 1 ] || fail "opt: segments.oli must keep its segment reload"
+! grep -q 'field' build/segments.oir || fail "oir: Name.field.offset and Name.field.size must fold to constants, not load a field"
+( cd .. && genesis/build/show_sema < tests/run/segments.oli > genesis/build/segments.sema 2>/dev/null ) || fail "segments: show_sema"
+grep -q '(intrinsic Segments (int 51):u16 (int 43):u16)' build/segments.sema || fail "segments: the command must type its two selectors u16"
+grep -q '(ne (int 16):? (int 16):?)' build/segments.sema || fail "segments: Pair.c.offset must be the constant 16 in the .sema form"
+( cd .. && genesis/build/explain < tests/run/segments.oli > genesis/build/segments.explain 2> genesis/build/explain.err ) || fail "explain: segments.oli: $(head -1 build/explain.err)"
+[ "$(grep -c 'KERNEL=1' build/segments.explain)" = 1 ] || fail "explain: segments.oli must bill exactly the segment reload KERNEL"
+echo "ok: arch.x64.segments(code, data) is lretq and five segment loads executed under a process's own selectors, bytes stands as listed, Name.field.offset/size are constants (objdump on segments.elf, .oir, .sema, --explain)"
 # Atomics (MACHINE_MODEL.md 5): every read-modify-write of tests/run/atomic.oli
 # is a lock-prefixed instruction at its width, and/or/xor a cmpxchg loop, a
 # sequentially consistent store an xchg, every fence its instruction; no
@@ -1575,6 +1593,15 @@ set -e
 [ "$st" = 1 ] || fail "back end: an eight-word syscall exited $st, want a refusal"
 grep -q 'E0900' build/s8.err || fail "back end: an eight-word syscall must report E0900"
 [ ! -s build/s8.elf ] || fail "back end: an eight-word syscall wrote a file"
+# A `bytes` line lists bytes and nothing else (design 0023): 256 is refused.
+printf 'module b9\nproc start -> s32\n    entry\n    permit cpu.asm\n    machine x64\n        bytes 0x90, 256\n    end\n    ret 0\nend\n' > build/b9.oli
+set +e
+( cd .. && genesis/build/olic < genesis/build/b9.oli > genesis/build/b9.elf 2> genesis/build/b9.err )
+st=$?
+set -e
+[ "$st" = 1 ] || fail "back end: bytes 256 exited $st, want a refusal"
+grep -q 'E0900' build/b9.err || fail "back end: a value above 255 in a bytes line must report E0900"
+[ ! -s build/b9.elf ] || fail "back end: a refused bytes line still wrote a file"
 grep -q 'E0900' build/nolower.err || fail "back end: an unlowered construct must report E0900"
 [ ! -s build/nolower.elf ] || fail "back end: a refused program still wrote a binary"
 echo "ok: a construct the back end cannot lower is E0900 and writes no file"

@@ -272,7 +272,7 @@ end
 
 proc hwplace_name(sub: u64) -> view u8
     -- The name of a hardware place by its `sub`: 2 msr, 3 stack, 4 frame,
-    -- 5 gdt, 6 idt, 7 tr.
+    -- 5 gdt, 6 idt, 7 tr, 8 the `segments` command.
     if sub == 2
         ret "arch.x64.msr"
     end
@@ -287,6 +287,9 @@ proc hwplace_name(sub: u64) -> view u8
     end
     if sub == 6
         ret "arch.x64.idt"
+    end
+    if sub == 8
+        ret "arch.x64.segments"
     end
     ret "arch.x64.tr"
 end
@@ -306,6 +309,9 @@ proc hwplace_type(sub: u64) -> view u8
     end
     if sub == 7
         ret "u16"
+    end
+    if sub == 8
+        ret "(no value)"
     end
     ret "ref core.x64.TablePointer"
 end

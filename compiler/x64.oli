@@ -1105,6 +1105,35 @@ proc lower_hwwr(ob: rw ref Oir, mc: ref Mach, i: u64)
     end
 end
 
+proc lower_segments(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `arch.x64.segments(code, data)`: the data selector in rcx, the code
+    -- selector pushed, then the address of the instruction after `retfq`
+    -- (`lea rax, [rip + 3]`, `push rax`, `retfq` = 48 CB), so that the far
+    -- return lands there with cs reloaded; then `mov ds|es|ss|fs|gs, cx`
+    -- (8E /r), the data selector into every other segment register.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_CX, ins.b)
+    ld_val(ob, mc, R_AX, ins.a)
+    cb(ob, 80)
+    cb(ob, 72)
+    cb(ob, 141)
+    cb(ob, 5)
+    c32(ob, 3)
+    cb(ob, 80)
+    cb(ob, 72)
+    cb(ob, 203)
+    cb(ob, 142)
+    cb(ob, 217)
+    cb(ob, 142)
+    cb(ob, 193)
+    cb(ob, 142)
+    cb(ob, 209)
+    cb(ob, 142)
+    cb(ob, 225)
+    cb(ob, 142)
+    cb(ob, 233)
+end
+
 proc lower_msrrd(ob: rw ref Oir, mc: ref Mach, i: u64)
     -- The number in ecx, `rdmsr`, the pair as one word.
     ins := ins_at(ob, i)
@@ -2041,6 +2070,10 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_CPUID
         lower_cpuid(ob, mc, i)
+        ret
+    end
+    if op == O_SEGS
+        lower_segments(ob, mc, i)
         ret
     end
     if op == O_HWCALL

@@ -5,15 +5,18 @@ proc g
 end
 proc main -> s32
     entry
+    permit cpu.control
     x : u8 <- 1
     x <~ 2
     _p := port u8 (0x3F8)
     _f : f32 := 1
     _v := mem.mmio(u16, 0xB8000, 10)
+    arch.x64.segments(0x33)
     ret s32(x)
 end
 -- expect: E0900 @ 1:13
 -- expect: E0401 @ 4:5
--- expect: E0900 @ 9:5
--- expect: E0900 @ 11:10
--- expect: E0401 @ 12:11
+-- expect: E0900 @ 10:5
+-- expect: E0900 @ 12:10
+-- expect: E0401 @ 13:11
+-- expect: E0900 @ 14:23

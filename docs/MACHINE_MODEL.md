@@ -51,7 +51,8 @@ signed and `uword` the unsigned word type; `addr T` is word-sized.
 | `never` | 0 | no value; control does not return |
 
 Layout of every type is **fixed and documented**; the compiler never reorders
-fields. `Layout.size`, `Layout.align` and `Layout.field.offset` are compile-time constants.
+fields. `Layout.size`, `Layout.align`, `Layout.field.offset` and `Layout.field.size`
+are compile-time constants (`tests/run/segments.oli`).
 
 ## 3. Operations and their lowering
 

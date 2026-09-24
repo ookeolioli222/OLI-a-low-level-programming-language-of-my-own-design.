@@ -333,7 +333,8 @@ layout GdtPointer packed
 end                     -- size 10, align 1
 ```
 
-`Name.size` and `Name.align` are compile-time constants; `Name.at(v)` makes a
+`Name.size`, `Name.align`, `Name.field.offset` and `Name.field.size` are
+compile-time constants; `Name.at(v)` makes a
 `ref Name` from a `view u8`, trapping when the view is too short or misaligned.
 
 ### 5.3 Conversions
@@ -395,7 +396,8 @@ boot_stack : [16K]u8              -- a static place, zero-filled
 
 `:=` at module level is a constant; `:` with `<-` or with no value is a static
 place. `section` and `align` clauses follow on their own lines. Constant
-expressions evaluate integers, `Name.size`, `Name.align` and other constants.
+expressions evaluate integers, `Name.size`, `Name.align`, `Name.field.offset`,
+`Name.field.size` and other constants.
 
 ### 6.3 `layout` **[runs]**
 
@@ -482,7 +484,7 @@ parameters. The name `main` has no special meaning.
 | `break` / `continue` | innermost loop only | **[runs]** |
 | `case` | `case e` … `when p` … `else` … `end`, exhaustive | **[runs]** for `ok`/`fail` |
 | `zone` | `zone z SIZE [at a] [from s]` … `end` | **[runs]** |
-| `machine` | `machine x64` … `end`, needs `permit cpu.asm`; `in REG <- e`, `out REG -> place`, `clobber`, `.label:`; assembled by `olic`'s own encoder, byte for byte the genesis assembler's subset | **[runs]** |
+| `machine` | `machine x64` … `end`, needs `permit cpu.asm`; `in REG <- e`, `out REG -> place`, `clobber`, `.label:`, `bytes b, …`; assembled by `olic`'s own encoder, byte for byte the genesis assembler's subset | **[runs]** |
 
 Control may not fall off the end of a procedure with a result (`E0230`); a
 statement after `ret`, `fail`, `break`, `continue` or a `never` call is
@@ -543,7 +545,8 @@ Point { x: 0, y: 0 }                      -- a layout literal
 ```
 
 Members: `v.addr`, `v.len` on a view; `r.field` on a ref or a layout place;
-`Name.size`, `Name.align`, `Name.at(v)` on a layout; `z.bytes(n)`,
+`Name.size`, `Name.align`, `Name.field.offset`, `Name.field.size`, `Name.at(v)`
+on a layout; `z.bytes(n)`,
 `z.try_bytes(n)`, `z.make(T)` on a zone.
 
 Arithmetic modes: `wrap(e)` **[runs]**, `sat(e)` **[runs]**, `checked(e)`

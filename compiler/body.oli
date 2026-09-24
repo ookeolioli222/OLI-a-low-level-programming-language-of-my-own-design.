@@ -562,6 +562,7 @@ CK_CPUID := 21
 CK_TSC := 22
 CK_CPUCALL := 23
 CK_CPUJUMP := 24
+CK_SEGS := 25
 
 proc ref_elem(t: view u8) -> view u8
     -- The `T` of `ref T` / `rw ref T`; empty for any other type.
@@ -664,6 +665,13 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
     cn := node_at(cx, ce)
     if cn.kind == N_NAME
         ret CK_PROC
+    end
+    if cn.kind == N_HWPLACE
+        -- `arch.x64.segments(code, data)`: the place is the command.
+        if cn.sub == 8
+            ret CK_SEGS
+        end
+        ret 0
     end
     if cn.kind != N_FIELD
         ret 0
@@ -794,6 +802,9 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
         ret "u64"
     end
     if ck == CK_CPUCALL
+        ret "(no value)"
+    end
+    if ck == CK_SEGS
         ret "(no value)"
     end
     if ck == CK_CPUJUMP
@@ -990,6 +1001,12 @@ proc field_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
     m := tok_text(cx, nd.t0)
     base := kid1(cx, n)
     bn := node_at(cx, base)
+    if bn.kind == N_FIELD
+        -- `Name.field.offset` / `Name.field.size`: a constant.
+        if field_const_kind(pg, mi, n) > 0
+            ret lit_type(pg, want)
+        end
+    end
     if bn.kind == N_NAME
         if name_kind(pg, mi, base) == 0
             if is_item_name(pg, cx, base)
@@ -1771,6 +1788,10 @@ proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
         put(1, "CpuCall")
         ret
     end
+    if ck == CK_SEGS
+        put(1, "Segments")
+        ret
+    end
     if ck == CK_CPUJUMP
         put(1, "CpuJump")
         ret
@@ -1964,6 +1985,8 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
         elif ck == CK_FENCE
             fnn := node_at(cx, a2)
             put(1, tok_text(cx, fnn.t0))
+        elif ck == CK_SEGS
+            pexpr(pg, mi, a2, "u16")
         elif ck == CK_CPUCALL
             cnn := node_at(cx, a2)
             put(1, tok_text(cx, cnn.t0))
@@ -2212,6 +2235,12 @@ proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
                 put(1, ")")
                 ret
             end
+        end
+        if field_const_kind(pg, mi, n) > 0
+            put(1, "(int ")
+            bnum(pg, const_value(pg, mi, n))
+            put(1, ")")
+            ret
         end
         basety := ety(pg, mi, base, b[0..0])
         fldt := field_type_text(pg, basety, m)
@@ -3271,6 +3300,14 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
         ret
     end
     if ck == CK_CPUCALL
+        ret
+    end
+    if ck == CK_SEGS
+        sa : u64 <- kid2(cx, n)
+        while sa != 0
+            texpr(pg, mi, sa, "u16")
+            sa <- sibling(cx, sa)
+        end
         ret
     end
     if ck == CK_CPUJUMP

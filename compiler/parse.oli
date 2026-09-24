@@ -606,7 +606,8 @@ end
 
 proc arch_kind(t: view u8) -> word
     -- `arch.x64.NAME`: 1 a control register, 2 `msr`, 5 `gdt`, 6 `idt`,
-    -- 7 `tr`; -1 for anything else.
+    -- 7 `tr`, 8 `segments` (a command: the call's arguments follow);
+    -- -1 for anything else.
     if cr_number(t) >= 0
         ret 1
     end
@@ -621,6 +622,9 @@ proc arch_kind(t: view u8) -> word
     end
     if view_eq(t, "tr")
         ret 7
+    end
+    if view_eq(t, "segments")
+        ret 8
     end
     ret -1
 end

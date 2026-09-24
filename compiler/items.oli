@@ -53,6 +53,7 @@ layout Fld
     mod : u64
     node : u64
     off : u64
+    size : u64
     variant : u64
 end
 
@@ -463,6 +464,7 @@ proc resolve_layout(pg: ref Prog, idx: u64)
         off := round_up(cursor, al)
         fr2 := fld_at(pg, it.first + f)
         fr2.off <- off
+        fr2.size <- sz
         cursor <- off + sz
         f <- f + 1
     end
@@ -513,6 +515,7 @@ proc resolve_choice(pg: ref Prog, idx: u64)
         off := round_up(cursor, a2)
         fr4 := fld_at(pg, it.first + g)
         fr4.off <- off
+        fr4.size <- sz
         cursor <- off + sz
         if cursor > size
             size <- cursor
@@ -558,6 +561,7 @@ proc add_fld(pg: rw ref Prog, mi: u64, node: u64, variant: u64)
     fr.mod <- mi
     fr.node <- node
     fr.off <- 0
+    fr.size <- 0
     fr.variant <- variant
     pg.nfld <- i + 1
 end
@@ -692,6 +696,83 @@ proc neg_image(v: u64) -> u64
     ret 18446744073709551615 - v + 1
 end
 
+proc item_field(pg: ref Prog, it: u64, fname: view u8) -> word
+    -- The index into `pg.flds` of the field `fname` of item `it`, or -1.
+    item := item_at(pg, it)
+    f : u64 <- 0
+    while f < item.nfld
+        fr := fld_at(pg, item.first + f)
+        fcx := mod_ctx(pg, fr.mod)
+        fn := node_at(fcx, fr.node)
+        if view_eq(tok_text(fcx, fn.t0), fname)
+            ret word.bits(item.first + f)
+        end
+        f <- f + 1
+    end
+    ret -1
+end
+
+proc field_const_kind(pg: ref Prog, mi: u64, n: u64) -> word
+    -- `Name.field.offset` (1) or `Name.field.size` (2): a member of a field
+    -- of a layout or a choice named through its item (MACHINE_MODEL.md 3);
+    -- 0 for any other node, and for a field the item does not have.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    if nd.kind != N_FIELD
+        ret 0
+    end
+    m := tok_text(cx, nd.t0)
+    k : word <- 0
+    if view_eq(m, "offset")
+        k <- 1
+    end
+    if view_eq(m, "size")
+        k <- 2
+    end
+    if k == 0
+        ret 0
+    end
+    base := node_at(cx, kid1(cx, n))
+    if base.kind != N_FIELD
+        ret 0
+    end
+    inner := node_at(cx, kid1(cx, kid1(cx, n)))
+    if inner.kind != N_NAME
+        ret 0
+    end
+    idx := item_find(pg, tok_text(cx, inner.t0))
+    if idx < 0
+        ret 0
+    end
+    resolve_item(pg, u64.bits(idx))
+    if item_field(pg, u64.bits(idx), tok_text(cx, base.t0)) < 0
+        ret 0
+    end
+    ret k
+end
+
+proc field_const(pg: ref Prog, mi: u64, n: u64) -> u64
+    -- The value of `Name.field.offset` / `Name.field.size`: the field's
+    -- byte offset in the item, or the size of its type.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    base := node_at(cx, kid1(cx, n))
+    inner := node_at(cx, kid1(cx, kid1(cx, n)))
+    idx := item_find(pg, tok_text(cx, inner.t0))
+    if idx < 0
+        ret 0
+    end
+    fi := item_field(pg, u64.bits(idx), tok_text(cx, base.t0))
+    if fi < 0
+        ret 0
+    end
+    fr := fld_at(pg, u64.bits(fi))
+    if view_eq(tok_text(cx, nd.t0), "size")
+        ret fr.size
+    end
+    ret fr.off
+end
+
 proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
     -- Integer constant expressions: literals, arithmetic, `Name.size`,
     -- `Name.align` and other constants of the same program.
@@ -753,6 +834,9 @@ proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
                     ret it.alignv
                 end
             end
+        end
+        if field_const_kind(pg, mi, n) > 0
+            ret field_const(pg, mi, n)
         end
         ret 0
     end

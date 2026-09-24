@@ -1,0 +1,58 @@
+(oir
+  (proc start locals=5 entry
+    (bb0
+      jump bb2)
+    (bb2 preds bb0
+      jump bb4)
+    (bb4 preds bb2
+      jump bb6)
+    (bb6 preds bb4
+      jump bb8)
+    (bb8 preds bb6
+      jump bb10)
+    (bb10 preds bb8
+      jump bb12)
+    (bb12 preds bb10
+      jump bb14)
+    (bb14 preds bb12
+      jump bb16)
+    (bb16 preds bb14
+      %36 = const 10
+      jump bb18)
+    (bb18 preds bb16
+      %40 = const 51
+      %41 = const 43
+      hw.cmd arch.x64.segments %40, %41
+      machine x64
+      %48 = machine.out rax
+      machine x64
+      %50 = machine.out rax
+      machine x64
+      %52 = machine.out rax
+      %54 = cmp.ne %48, %40
+      branch %54, bb19, bb20)
+    (bb19 preds bb18
+      ret %36)
+    (bb20 preds bb18
+      %57 = cmp.ne %50, %41
+      branch %57, bb21, bb22)
+    (bb21 preds bb20
+      %58 = const 11
+      ret %58)
+    (bb22 preds bb20
+      %60 = cmp.ne %52, %41
+      branch %60, bb23, bb24)
+    (bb23 preds bb22
+      %61 = const 12
+      ret %61)
+    (bb24 preds bb22
+      machine x64
+      %64 = machine.out rax
+      %65 = const 42
+      %66 = cmp.ne %64, %65
+      branch %66, bb25, bb26)
+    (bb25 preds bb24
+      %67 = const 13
+      ret %67)
+    (bb26 preds bb24
+      ret %65)))

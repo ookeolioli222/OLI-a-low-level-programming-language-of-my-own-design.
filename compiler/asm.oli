@@ -733,6 +733,9 @@ proc enc_instr(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> word
             ret 1
         end
     end
+    if view_eq(m, "bytes")
+        ret enc_bytes(cx, ob, n)
+    end
     c := read_operands(pg, ob, mi, n)
     if c < 0
         ret 0
@@ -956,6 +959,31 @@ proc acc_width(name: view u8) -> u64
         ret 32
     end
     ret 0
+end
+
+proc enc_bytes(cx: ref Ctx, ob: rw ref Oir, n: u64) -> word
+    -- `bytes b, b, …` (design 0023): the listed bytes as they stand, each
+    -- an integer 0..255; a line with none, a negative or a wider value is
+    -- E0900.
+    k : u64 <- kid1(cx, n)
+    if k == 0
+        ret 0
+    end
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind != N_INT
+            ret 0
+        end
+        if kn.sub == 1
+            ret 0
+        end
+        if kn.val > 255
+            ret 0
+        end
+        cb(ob, kn.val)
+        k <- sibling(cx, k)
+    end
+    ret 1
 end
 
 proc enc_port(cx: ref Ctx, ob: rw ref Oir, n: u64, isout: u64) -> word

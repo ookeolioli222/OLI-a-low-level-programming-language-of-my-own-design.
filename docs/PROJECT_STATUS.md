@@ -1258,12 +1258,43 @@ constant in `.rodata`).
   six procedures of the hosted program's `.sema` form, the absence of the
   dropped `cpu.halt`, and both runs.
 
+## Implemented in stage 32 (2026-09-24): field constants, `arch.x64.segments`, `bytes`
+
+- **`Name.field.offset` and `Name.field.size`** (MACHINE_MODEL.md §3) are
+  compile-time constants beside `Name.size` and `Name.align`, for a field
+  of a layout or of a choice variant: the typer gives them the literal's
+  type, the `.sema` form prints `(int N)`, the constant folder reads the
+  field record (which now carries the size of its type beside its offset)
+  and the OIR never loads a field for them. A field the item does not
+  have is the error it was.
+- **`arch.x64.segments(code, data)`** (design 0015) is a command on the
+  hardware place, under `cpu.control`: `hw.cmd arch.x64.segments %code,
+  %data` in the OIR, class KERNEL, never removed; lowered as the data
+  selector into rcx, the code selector pushed, `lea rax, [rip + 3]`,
+  `push rax`, `retfq` — the far return lands on the next instruction with
+  cs reloaded — then `mov ds|es|ss|fs|gs, cx`. Exactly two arguments,
+  typed `u16`, named or positional; anything else is E0900
+  (`tests/sema/err/not_implemented.oli`).
+- **`bytes b, b, …`** in a `machine x64` block (design 0023): the listed
+  bytes as they stand, each 0..255; a line with none, a negative or a
+  wider value is E0900 (the harness compiles one).
+- `tests/run/segments.oli` runs all three: the constants of a layout and a
+  choice checked against the ABI's offsets, the segment reload executed
+  under the selectors a Linux process already runs with (cs 0x33, data
+  0x2B, read back through `mov ax, cs|ds|ss` of design 0023), and a
+  `bytes` line spelling `mov eax, 42`. The harness pins the eleven
+  instructions by objdump, the `hw.cmd` kept through the passes, the
+  absence of any field load in the OIR, the `u16` typing of the selectors
+  in the `.sema` form and the KERNEL billing of `--explain`. Not runnable
+  here: the sequence with a kernel's own GDT (no QEMU); what runs is the
+  same bytes under the selectors of a process.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 28,853 lines) into
+compiles its own source (`compiler/`, seventeen modules, 29,118 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,257,016 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,267,856 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

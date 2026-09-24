@@ -1,0 +1,66 @@
+module segments
+-- Three small things a kernel needs beside design 0015's places: a field's
+-- offset and size as compile-time constants (`Name.field.offset`,
+-- `Name.field.size`, MACHINE_MODEL.md 3), `arch.x64.segments(code, data)`
+-- (the far return that reloads cs, then ds/es/ss/fs/gs from the data
+-- selector; here with the selectors a Linux process already runs under,
+-- 0x33 and 0x2B, so the sequence executes for real and the registers are
+-- read back through the segment moves of design 0023), and `bytes` in a
+-- machine block (design 0023: the bytes as they stand, here `mov eax, 42`).
+-- The exit status is the number of the check that failed; 42 when every
+-- one held.
+
+layout Pair
+    a : u8
+    b : u64
+    c : u16
+end
+
+choice Shape
+    dot
+    box { w : u32, h : u32 }
+end
+
+proc start -> s32
+    entry
+    permit cpu.control, cpu.asm
+    if Pair.a.offset != 0 then ret 1
+    if Pair.b.offset != 8 then ret 2
+    if Pair.c.offset != 16 then ret 3
+    if Pair.a.size != 1 then ret 4
+    if Pair.b.size != 8 then ret 5
+    if Pair.size != 24 then ret 6
+    if Shape.w.size != 4 then ret 7
+    if Shape.h.offset != Shape.w.offset + 4 then ret 8
+    n := Pair.b.offset + Pair.c.size
+    if n != 10 then ret 9
+    arch.x64.segments(code: 0x33, data: 0x2B)
+    csel : u64 <- 0
+    dsel : u64 <- 0
+    ssel : u64 <- 0
+    machine x64
+        xor rax, rax
+        mov ax, cs
+        out rax -> csel
+    end
+    machine x64
+        xor rax, rax
+        mov ax, ds
+        out rax -> dsel
+    end
+    machine x64
+        xor rax, rax
+        mov ax, ss
+        out rax -> ssel
+    end
+    if csel != 0x33 then ret 10
+    if dsel != 0x2B then ret 11
+    if ssel != 0x2B then ret 12
+    v : u64 <- 0
+    machine x64
+        bytes 0xB8, 0x2A, 0x00, 0x00, 0x00
+        out rax -> v
+    end
+    if v != 42 then ret 13
+    ret 42
+end

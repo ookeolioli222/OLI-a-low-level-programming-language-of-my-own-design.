@@ -1,0 +1,125 @@
+(oir
+  (proc start locals=5 entry
+    (bb0
+      %0 = const 0
+      %1 = const 0
+      %2 = cmp.ne %0, %1
+      branch %2, bb1, bb2)
+    (bb1 preds bb0
+      %3 = const 1
+      ret %3)
+    (bb2 preds bb0
+      %4 = const 8
+      %5 = const 8
+      %6 = cmp.ne %4, %5
+      branch %6, bb3, bb4)
+    (bb3 preds bb2
+      %7 = const 2
+      ret %7)
+    (bb4 preds bb2
+      %8 = const 16
+      %9 = const 16
+      %10 = cmp.ne %8, %9
+      branch %10, bb5, bb6)
+    (bb5 preds bb4
+      %11 = const 3
+      ret %11)
+    (bb6 preds bb4
+      %12 = const 1
+      %13 = const 1
+      %14 = cmp.ne %12, %13
+      branch %14, bb7, bb8)
+    (bb7 preds bb6
+      %15 = const 4
+      ret %15)
+    (bb8 preds bb6
+      %16 = const 8
+      %17 = const 8
+      %18 = cmp.ne %16, %17
+      branch %18, bb9, bb10)
+    (bb9 preds bb8
+      %19 = const 5
+      ret %19)
+    (bb10 preds bb8
+      %20 = const 24
+      %21 = const 24
+      %22 = cmp.ne %20, %21
+      branch %22, bb11, bb12)
+    (bb11 preds bb10
+      %23 = const 6
+      ret %23)
+    (bb12 preds bb10
+      %24 = const 4
+      %25 = const 4
+      %26 = cmp.ne %24, %25
+      branch %26, bb13, bb14)
+    (bb13 preds bb12
+      %27 = const 7
+      ret %27)
+    (bb14 preds bb12
+      %28 = const 8
+      %29 = const 4
+      %30 = const 4
+      %31 = add %29, %30
+      %32 = cmp.ne %28, %31
+      branch %32, bb15, bb16)
+    (bb15 preds bb14
+      %33 = const 8
+      ret %33)
+    (bb16 preds bb14
+      %34 = const 8
+      %35 = const 2
+      %36 = add %34, %35
+      %37 = const 10
+      %38 = cmp.ne %36, %37
+      branch %38, bb17, bb18)
+    (bb17 preds bb16
+      %39 = const 9
+      ret %39)
+    (bb18 preds bb16
+      %40 = const 51
+      %41 = const 43
+      hw.cmd arch.x64.segments %40, %41
+      %43 = const 0
+      %44 = const 0
+      %45 = const 0
+      %46 = const 0
+      machine x64
+      %48 = machine.out rax
+      machine x64
+      %50 = machine.out rax
+      machine x64
+      %52 = machine.out rax
+      %53 = const 51
+      %54 = cmp.ne %48, %53
+      branch %54, bb19, bb20)
+    (bb19 preds bb18
+      %55 = const 10
+      ret %55)
+    (bb20 preds bb18
+      %56 = const 43
+      %57 = cmp.ne %50, %56
+      branch %57, bb21, bb22)
+    (bb21 preds bb20
+      %58 = const 11
+      ret %58)
+    (bb22 preds bb20
+      %59 = const 43
+      %60 = cmp.ne %52, %59
+      branch %60, bb23, bb24)
+    (bb23 preds bb22
+      %61 = const 12
+      ret %61)
+    (bb24 preds bb22
+      %62 = const 0
+      machine x64
+      %64 = machine.out rax
+      %65 = const 42
+      %66 = cmp.ne %64, %65
+      branch %66, bb25, bb26)
+    (bb25 preds bb24
+      %67 = const 13
+      ret %67)
+    (bb26 preds bb24
+      %68 = const 42
+      ret %68)))
