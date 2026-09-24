@@ -5,11 +5,15 @@ module hw
 -- the OIR, one `in` or `out` each — and `cpu.interrupts(off)` / `(on)`
 -- under `permit cpu.interrupt`, `cli` / `sti`; the control registers
 -- `arch.x64.cr0/2/3/4` as places under `permit cpu.control`, one
--- `mov rax, crN` / `mov crN, rax` each, cr3 typed `physaddr`. A process may
+-- `mov rax, crN` / `mov crN, rax` each, cr3 typed `physaddr`; and the
+-- `port T` value type — `port u8 (n)`, a constant `COM1 : port u8` —
+-- with `p.in()` / `p.out(v)` as the same `in`/`out`. A process may
 -- touch none of these, so the accesses wait for a byte that never arrives
 -- on stdin (the harness gives /dev/null): what is pinned is the OIR, the
 -- machine code (objdump finds each instruction once) and the exit status,
 -- 42.
+
+COM1 : port u8 := 0x3F8
 
 proc probe(p : u16) -> u8
     permit io.port
@@ -39,6 +43,14 @@ proc start -> s32
         arch.x64.cr0 <- r0 | 0x10000
         arch.x64.cr4 <- r4
         if u64.bits(p) + r2 == 7 then ret 2
+        kb := port u8 (0x60)
+        ide := port u16 (0x1F0)
+        kb.out(1)
+        COM1.out(65)
+        x := kb.in()
+        ide.out(0x1234)
+        y := ide.in()
+        if u64(x) + u64(y) == 9 then ret 3
     end
     ret 42
 end

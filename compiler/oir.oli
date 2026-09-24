@@ -2040,6 +2040,31 @@ proc memop_name(k: u64) -> view u8
     ret "mem.secure_zero"
 end
 
+proc gen_port_in(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `p.in()` on a `port T` value: `hw.load port.uN %p` at the width of `T`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    base := kid1(cx, kid1(cx, n))
+    w := u64.bits(int_bits(port_elem(ety(pg, mi, base, b[0..0])))) / 8
+    pv := gen_expr(pg, ob, mi, base, b[0..0])
+    ob.lastlen <- 0
+    ret emit_ins(ob, O_HWLOAD, pv, w, 0, 0)
+end
+
+proc gen_port_out(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `p.out(v)`: `hw.store port.uN %p, %v`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    base := kid1(cx, kid1(cx, n))
+    et := port_elem(ety(pg, mi, base, b[0..0]))
+    w := u64.bits(int_bits(et)) / 8
+    pv := gen_expr(pg, ob, mi, base, b[0..0])
+    v := gen_expr(pg, ob, mi, sibling(cx, kid1(cx, n)), et)
+    emit_ins(ob, O_HWSTORE, pv, v, w, 0)
+    ob.lastlen <- 0
+    ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+end
+
 proc gen_mmio(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `mem.mmio(T, a, n)`: the view (a, n) of device memory — no instruction
     -- of its own; what makes it `mmio` is every access through it, which
@@ -2217,6 +2242,12 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     if ck == CK_ATOMIC
         ret gen_atomic(pg, ob, mi, n)
+    end
+    if ck == CK_PIN
+        ret gen_port_in(pg, ob, mi, n)
+    end
+    if ck == CK_POUT
+        ret gen_port_out(pg, ob, mi, n)
     end
     if memop_kind(ck) >= 0
         ret gen_memop(pg, ob, mi, n, u64.bits(memop_kind(ck)))
@@ -2453,6 +2484,9 @@ end
 
 proc layout_of(pg: ref Prog, t: view u8) -> word
     nm : view u8 <- t
+    if starts_with(nm, "mmio ")
+        nm <- nm[5..]
+    end
     if starts_with(nm, "rw ")
         nm <- nm[3..]
     end
@@ -2580,14 +2614,17 @@ proc gen_field_load(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- (a `be` one byte-swapped after the load, then re-extended), a view as
     -- its two words, a ref or an address as one word, and a layout held by
     -- value as the address of that part of the record.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    vol := u64.bits(is_mmio(ety(pg, mi, kid1(cx, n), b[0..0])))
     p := gen_field_addr(pg, ob, mi, n)
     ft0 := field_text(pg, pg.lastft)
     bo := byte_order(ft0)
     ft := native_int(ft0)
     if is_view_type(ft) == 1
-        a := emit_ins(ob, O_RLOAD, p, 8, 0, 0)
+        a := emit_ins(ob, O_RLOAD, p, 8, 0, vol)
         eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
-        ob.lastlen <- emit_ins(ob, O_RLOAD, addr_add(ob, p, eight), 8, 0, 0)
+        ob.lastlen <- emit_ins(ob, O_RLOAD, addr_add(ob, p, eight), 8, 0, vol)
         ret a
     end
     nb := int_bits(ft)
@@ -2598,24 +2635,28 @@ proc gen_field_load(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         end
         ob.lastlen <- 0
         if bo == 1
-            raw := emit_ins(ob, O_RLOAD, p, u64.bits(nb) / 8, 0, 0)
+            raw := emit_ins(ob, O_RLOAD, p, u64.bits(nb) / 8, 0, vol)
             sw := gen_bswap(ob, raw, u64.bits(nb))
             if sg == 1
                 ret emit_ins(ob, O_TRUNC, sw, u64.bits(nb), 1, 0)
             end
             ret sw
         end
-        ret emit_ins(ob, O_RLOAD, p, u64.bits(nb) / 8, sg, 0)
+        ret emit_ins(ob, O_RLOAD, p, u64.bits(nb) / 8, sg, vol)
     end
     if is_ref_type(ft) == 1
         ob.lastlen <- 0
-        ret emit_ins(ob, O_RLOAD, p, 8, 0, 0)
+        ret emit_ins(ob, O_RLOAD, p, 8, 0, vol)
     end
     if starts_with(unqual(ft), "addr ")
         ob.lastlen <- 0
-        ret emit_ins(ob, O_RLOAD, p, 8, 0, 0)
+        ret emit_ins(ob, O_RLOAD, p, 8, 0, vol)
     end
     if layout_of(pg, ft) >= 0
+        if vol == 1
+            -- A record inside device memory as a value: not lowered.
+            oir_err(ob, pg, mi, 900, n)
+        end
         ob.lastlen <- 0
         ret p
     end
@@ -2626,7 +2667,9 @@ end
 proc gen_store_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     -- `r.f <- x`, by the field's type: the same widths as the load.
     cx := mod_ctx(pg, mi)
+    b := pg.sbuf
     tgt := kid1(cx, n)
+    vol := u64.bits(is_mmio(ety(pg, mi, kid1(cx, tgt), b[0..0])))
     p := gen_field_addr(pg, ob, mi, tgt)
     fi := pg.lastft
     ft0 := field_text(pg, fi)
@@ -2640,22 +2683,22 @@ proc gen_store_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     end
     if is_view_type(ft) == 1
         ln := ob.lastlen
-        emit_ins(ob, O_RSTORE, p, v, 8, 0)
+        emit_ins(ob, O_RSTORE, p, v, 8, vol)
         eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
-        emit_ins(ob, O_RSTORE, addr_add(ob, p, eight), ln, 8, 0)
+        emit_ins(ob, O_RSTORE, addr_add(ob, p, eight), ln, 8, vol)
         ret
     end
     nb := int_bits(ft)
     if nb > 0
-        emit_ins(ob, O_RSTORE, p, v, u64.bits(nb) / 8, 0)
+        emit_ins(ob, O_RSTORE, p, v, u64.bits(nb) / 8, vol)
         ret
     end
     if is_ref_type(ft) == 1
-        emit_ins(ob, O_RSTORE, p, v, 8, 0)
+        emit_ins(ob, O_RSTORE, p, v, 8, vol)
         ret
     end
     if starts_with(unqual(ft), "addr ")
-        emit_ins(ob, O_RSTORE, p, v, 8, 0)
+        emit_ins(ob, O_RSTORE, p, v, 8, vol)
         ret
     end
     lp := layout_param(pg, ft)

@@ -472,9 +472,6 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
         if type_head_is(pg, mi, nd.t0, KW_ADDR)
             need(pg, mi, "memory.raw", nd.t0)
         end
-        if type_head_is(pg, mi, nd.t0, KW_PORT)
-            sdiag(pg, mi, 900, nd.t0)
-        end
     end
     if k == N_TYPEARG
         if type_head_is(pg, mi, nd.t0, KW_PORT)
@@ -496,6 +493,7 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
     if k == N_CALL
         callee := node_at(cx, kid1(cx, n))
         if callee.kind == N_FIELD
+            check_port_call(pg, mi, n)
             base := node_at(cx, kid1(cx, kid1(cx, n)))
             if base.kind == N_NAME
                 if view_eq(tok_text(cx, base.t0), "mem")
@@ -504,15 +502,6 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
                         -- capability; `T` one of the unsigned widths.
                         need(pg, mi, "memory.mmio", base.t0)
                         check_mmio_args(pg, mi, n)
-                    end
-                end
-                if view_eq(tok_text(cx, callee.t0), "at")
-                    av := kid2(cx, n)
-                    if av != 0
-                        if is_mmio(infer(pg, mi, av)) == 1
-                            -- A ref over device memory would drop `mmio`.
-                            sdiag(pg, mi, 900, callee.t0)
-                        end
                     end
                 end
                 if view_eq(tok_text(cx, base.t0), "atomic")
@@ -694,6 +683,38 @@ proc check_memop(pg: rw ref Prog, mi: u64, n: u64)
         if dt.len > 0
             sdiag(pg, mi, 111, first_tok(pg, mi, a0))
         end
+    end
+end
+
+proc check_port_call(pg: rw ref Prog, mi: u64, n: u64)
+    -- `p.in()` / `p.out(v)` on a `port T` value: `io.port`, and no argument
+    -- for `in`, exactly one for `out`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    callee := node_at(cx, kid1(cx, n))
+    m := tok_text(cx, callee.t0)
+    isin : u64 <- 0
+    if view_eq(m, "in")
+        isin <- 1
+    end
+    if isin == 0
+        if view_eq(m, "out") == 0
+            ret
+        end
+    end
+    bt := ety(pg, mi, kid1(cx, kid1(cx, n)), b[0..0])
+    if is_port_type(bt) == 0
+        ret
+    end
+    need(pg, mi, "io.port", callee.t0)
+    cnt : u64 <- 0
+    a : u64 <- kid2(cx, n)
+    while a != 0
+        cnt <- cnt + 1
+        a <- sibling(cx, a)
+    end
+    if cnt != 1 - isin
+        sdiag(pg, mi, 900, callee.t0)
     end
 end
 

@@ -1118,7 +1118,8 @@ for f in ../tests/sema/err/*.oli; do
 done
 ( cd .. && genesis/build/show_sema < tests/parse/ok/kernel_sketch.oli > /dev/null 2> genesis/build/chk.err ) || true
 grep -q 'E0401' build/chk.err || fail "checks: kernel_sketch must report the missing memory.raw permit"
-grep -q 'E0900' build/chk.err || fail "checks: kernel_sketch must report the V1 features it uses"
+grep -q 'E0200' build/chk.err || fail "checks: kernel_sketch must report its type mismatch"
+! grep -q 'E0900' build/chk.err || fail "checks: kernel_sketch uses nothing that is E0900 any more"
 for f in ../tests/sema/ok/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli; do
     ( cd .. && genesis/build/show_sema < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
 done
@@ -1272,10 +1273,10 @@ grep -q '(line [0-9]* .*ZONE=' build/zones.explain || fail "explain: an allocati
 # An access through an `mmio` view is in space mmio (OIR_SPEC 1.4): volatile,
 # so the passes keep every one - the unused load of tests/run/mmio.oli too -
 # and --explain bills each as KERNEL.
-[ "$(grep -c 'raw.load.[0-9]*.mmio' build/mmio.opt)" = 5 ] || fail "opt: mmio.oli must keep its five volatile loads, the unused one too"
-[ "$(grep -c 'raw.store.[0-9]*.mmio' build/mmio.opt)" = 4 ] || fail "opt: mmio.oli must keep its four volatile stores"
+[ "$(grep -c 'raw.load.[0-9]*.mmio' build/mmio.opt)" = 7 ] || fail "opt: mmio.oli must keep its seven volatile loads, the unused ones too"
+[ "$(grep -c 'raw.store.[0-9]*.mmio' build/mmio.opt)" = 5 ] || fail "opt: mmio.oli must keep its five volatile stores"
 ( cd .. && genesis/build/explain < tests/run/mmio.oli > genesis/build/mmio.explain 2> genesis/build/explain.err ) || fail "explain: mmio.oli: $(head -1 build/explain.err)"
-[ "$(grep -o 'KERNEL=1' build/mmio.explain | wc -l | tr -d ' ')" = 9 ] || fail "explain: mmio.oli must bill its nine volatile accesses as KERNEL"
+[ "$(grep -o 'KERNEL=1' build/mmio.explain | wc -l | tr -d ' ')" = 12 ] || fail "explain: mmio.oli must bill its twelve volatile accesses as KERNEL"
 echo "ok: --explain reports every procedure's frame, checks with their proofs, zones, calls, syscalls, the values the linear scan put in callee-saved registers, and the cost class of every line that produced an instruction"
 # Statics: an initialised one is bytes in the file, a zero one is memory past
 # it, and the image has the read+write segment ABI.md 7 asks for.
@@ -1343,11 +1344,12 @@ echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all fou
 # tests/run/hw.oli is exactly one instruction in the image, at its width,
 # found by binutils; a read is zero-extended to the canonical image.
 objdump -D -b binary -m i386:x86-64 --no-show-raw-insn build/hw.elf > build/hw.dis
-for pat in 'out    %al,(%dx)' 'out    %ax,(%dx)' 'out    %eax,(%dx)' 'in     (%dx),%al' 'in     (%dx),%ax' 'in     (%dx),%eax' 'cli$' 'sti$' 'movzwl %ax,%eax' 'mov    %rax,%cr3' 'mov    %cr3,%rax' 'mov    %cr0,%rax' 'mov    %rax,%cr0' 'mov    %cr2,%rax' 'mov    %cr4,%rax' 'mov    %rax,%cr4'; do
-    [ "$(grep -c "$pat" build/hw.dis)" = 1 ] || fail "hw: [$pat] must be exactly once in hw.elf, is $(grep -c "$pat" build/hw.dis)"
+for pin in 'out    %al,(%dx)=3' 'out    %ax,(%dx)=2' 'out    %eax,(%dx)=1' 'in     (%dx),%al=2' 'in     (%dx),%ax=2' 'in     (%dx),%eax=1' 'cli$=1' 'sti$=1' 'movzwl %ax,%eax=2' 'mov    %rax,%cr3=1' 'mov    %cr3,%rax=1' 'mov    %cr0,%rax=1' 'mov    %rax,%cr0=1' 'mov    %cr2,%rax=1' 'mov    %cr4,%rax=1' 'mov    %rax,%cr4=1'; do
+    pat=${pin%=*}; want=${pin##*=}
+    [ "$(grep -c "$pat" build/hw.dis)" = "$want" ] || fail "hw: [$pat] must be $want times in hw.elf, is $(grep -c "$pat" build/hw.dis)"
 done
-[ "$(grep -c 'hw\.' build/hw.opt)" = 13 ] || fail "opt: hw.oli must keep its six port accesses and seven control-register accesses"
-echo "ok: port.u8/u16/u32[n] read and written are one in/out each at the width, cpu.interrupts(off/on) one cli/sti, arch.x64.cr0/2/3/4 read and written one mov each (objdump on hw.elf); the passes keep every hardware access"
+[ "$(grep -c 'hw\.' build/hw.opt)" = 18 ] || fail "opt: hw.oli must keep its eleven port accesses and seven control-register accesses"
+echo "ok: port.u8/u16/u32[n] and port T values with .in()/.out() are one in/out each at the width, cpu.interrupts(off/on) one cli/sti, arch.x64.cr0/2/3/4 read and written one mov each (objdump on hw.elf); the passes keep every hardware access"
 # Atomics (MACHINE_MODEL.md 5): every read-modify-write of tests/run/atomic.oli
 # is a lock-prefixed instruction at its width, and/or/xor a cmpxchg loop, a
 # sequentially consistent store an xchg, every fence its instruction; no

@@ -21,6 +21,11 @@ crashes.
 `physaddr + addr` is a type error. `mmio` is a type modifier, not a statement-level
 `volatile` cast, so it cannot be forgotten at one access site.
 
+Implemented in `olic` (2026-09-24): `physaddr`, `addr T`, `mmio view T` /
+`mmio rw view T` (`mem.mmio`), `mmio ref T` / `mmio rw ref T` (`Name.at` over an
+`mmio` view), `port T` (`port T (n)`, `p.in()`, `p.out(v)`) and the place form
+`port.u8/u16/u32[n]`; `tests/run/mmio.oli`, `tests/run/hw.oli`.
+
 ## Advantages
 - The compiler catches the classic "used a physical address as a pointer" bug.
 - Volatility is a property of the memory, not of each access.

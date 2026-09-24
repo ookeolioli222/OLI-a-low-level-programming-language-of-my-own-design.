@@ -1129,12 +1129,39 @@ constant in `.rodata`).
   `std` and `cld` of the image and the eight operations after the passes.
   Nothing of `mem.*` is `E0900` now.
 
+## Implemented in back-end stage 27 (2026-09-24): `mmio ref T` and the `port T` type
+
+- **`Name.at(v)` over an `mmio` view** answers `mmio rw ref Name` (or
+  `mmio ref Name`): the mark stays, `layout_of` and the field typing read
+  through it, and every field load or store through such a ref is
+  `raw.load/store.T.mmio` — volatile, KERNEL — including a `be`/`le`
+  field's raw load and a view field's two words. A record held by value
+  inside device memory (`r.sub` where `sub` is a layout) is `E0900`: read
+  as plain memory it would lose the mark.
+- **`port T` as a value**: `port u8 (0x3F8)` converts a sixteen-bit port
+  number into a `port u8`, a constant `COM1 : port u8 := 0x3F8`, a local or
+  a parameter holds one, and `p.in()` / `p.out(v)` under `permit io.port`
+  are the same `hw.load port.uN %p` / `hw.store port.uN %p, %v` as the
+  place form — one `in`/`out` at the width of `T`. Literals meeting a
+  `port T` context settle as `u16`.
+- `tests/run/mmio.oli` (fourteen checks now) writes and reads a `Reg`
+  layout through `Reg.at` over the byte view of the frame array and keeps
+  an unused volatile field load; `tests/run/hw.oli` drives a `port u8`, a
+  `port u16` and the constant `COM1` (behind the byte that never arrives),
+  and the harness counts every `in`/`out` form (three `out dx, al`, two of
+  the rest each), the eighteen hardware operations after the passes and
+  the twelve KERNEL lines of `mmio.oli`. `tests/sema/err/not_implemented.oli`
+  no longer expects `E0900` for `port u8 (…)`, and
+  `tests/parse/ok/kernel_sketch.oli` — the reference kernel sketch of the
+  documents — reports only its intended `E0401` and `E0200`: nothing in it
+  is `E0900` any more.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 26,895 lines) into
+compiles its own source (`compiler/`, seventeen modules, 27,049 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,051,272 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,060,752 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

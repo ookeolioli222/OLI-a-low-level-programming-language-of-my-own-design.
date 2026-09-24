@@ -389,7 +389,28 @@ proc lit_type(pg: ref Prog, want: view u8) -> view u8
     if addr_kind(want) > 0
         ret "uword"
     end
+    if is_port_type(want) == 1
+        -- A port number is sixteen bits.
+        ret "u16"
+    end
     ret b[0..0]
+end
+
+proc is_port_type(t: view u8) -> word
+    -- `port T`: an I/O port of the width of `T`, as a value (design 0012).
+    if starts_with(unqual(t), "port ")
+        ret 1
+    end
+    ret 0
+end
+
+proc port_elem(t: view u8) -> view u8
+    -- The `T` of `port T`.
+    s := unqual(t)
+    if starts_with(s, "port ")
+        ret s[5..]
+    end
+    ret s[0..0]
 end
 
 proc native_int(t: view u8) -> view u8
@@ -535,6 +556,8 @@ CK_MMIO := 15
 CK_INTS := 16
 CK_ATOMIC := 17
 CK_FENCE := 18
+CK_PIN := 19
+CK_POUT := 20
 
 proc ref_elem(t: view u8) -> view u8
     -- The `T` of `ref T` / `rw ref T`; empty for any other type.
@@ -710,6 +733,18 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
     if view_eq(m, "make")
         ret CK_MAKE
     end
+    if view_eq(m, "in")
+        sb1 := pg.sbuf
+        if is_port_type(ety(pg, mi, kid1(cx, ce), sb1[0..0])) == 1
+            ret CK_PIN
+        end
+    end
+    if view_eq(m, "out")
+        sb2 := pg.sbuf
+        if is_port_type(ety(pg, mi, kid1(cx, ce), sb2[0..0])) == 1
+            ret CK_POUT
+        end
+    end
     ret CK_PROC
 end
 
@@ -731,6 +766,9 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
         ret "(no value)"
     end
     if ck == CK_FENCE
+        ret "(no value)"
+    end
+    if ck == CK_POUT
         ret "(no value)"
     end
     if ck == CK_COPY
@@ -804,9 +842,21 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
         arg := node_at(cx, kid2(cx, n))
         ret mk_type(pg, "rw ref ", tok_text(cx, arg.t0))
     end
+    if ck == CK_PIN
+        -- `p.in()`: the width of the port.
+        ret port_elem(ety(pg, mi, kid1(cx, ce), b[0..0]))
+    end
     if ck == CK_AT
         bn := node_at(cx, kid1(cx, ce))
         vt := ety(pg, mi, kid2(cx, n), b[0..0])
+        if is_mmio(vt) == 1
+            -- A ref over device memory keeps the mark: every field access
+            -- through it is volatile.
+            if starts_with(vt, "mmio rw ")
+                ret mk_type(pg, "mmio rw ref ", tok_text(cx, bn.t0))
+            end
+            ret mk_type(pg, "mmio ref ", tok_text(cx, bn.t0))
+        end
         if starts_with(vt, "rw ")
             ret mk_type(pg, "rw ref ", tok_text(cx, bn.t0))
         end
@@ -1524,6 +1574,9 @@ proc conv_operand_want(pg: ref Prog, mi: u64, arg: u64, dst: view u8) -> view u8
     if addr_kind(dst) > 0
         ret "uword"
     end
+    if is_port_type(dst) == 1
+        ret "u16"
+    end
     if untyped_int_expr(pg, mi, arg) == 1
         ret dst
     end
@@ -1662,6 +1715,14 @@ proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
         put(1, "CpuFence")
         ret
     end
+    if ck == CK_PIN
+        put(1, "PortIn")
+        ret
+    end
+    if ck == CK_POUT
+        put(1, "PortOut")
+        ret
+    end
     if ck == CK_ATOMIC
         put(1, "Atomic.")
         put(1, name)
@@ -1765,6 +1826,20 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
         put(1, " ")
         mk := node_at(cx, kid2(cx, n))
         put(1, tok_text(cx, mk.t0))
+        put(1, ")")
+        ret
+    end
+    if ck == CK_PIN
+        put(1, "(port-in ")
+        pexpr(pg, mi, kid1(cx, ce), b[0..0])
+        put(1, ")")
+        ret
+    end
+    if ck == CK_POUT
+        put(1, "(port-out ")
+        pexpr(pg, mi, kid1(cx, ce), b[0..0])
+        put(1, " ")
+        pexpr(pg, mi, kid2(cx, n), port_elem(ety(pg, mi, kid1(cx, ce), b[0..0])))
         put(1, ")")
         ret
     end
@@ -3120,6 +3195,18 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
         ret
     end
     if ck == CK_FENCE
+        ret
+    end
+    if ck == CK_PIN
+        texpr(pg, mi, kid1(cx, ce), b[0..0])
+        ret
+    end
+    if ck == CK_POUT
+        texpr(pg, mi, kid1(cx, ce), b[0..0])
+        pa := kid2(cx, n)
+        if pa != 0
+            texpr(pg, mi, pa, port_elem(ety(pg, mi, kid1(cx, ce), b[0..0])))
+        end
         ret
     end
     if memop_kind(ck) >= 0

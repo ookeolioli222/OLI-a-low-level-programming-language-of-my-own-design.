@@ -3,12 +3,13 @@
   (static 1 len=25)
   (static 2 len=27)
   (static 3 len=27)
+  (static 4 len=27)
   (proc probe locals=1
     (bb0
       %0 = param 0
       %1 = hw.load port.u8 %0
       ret %1))
-  (proc start locals=9 temps=1 entry
+  (proc start locals=13 temps=1 entry
     (bb0
       %0 = addr.of frame.0
       %1 = const 1
@@ -43,7 +44,7 @@
       %24 = syscall/4
       %25 = const 1
       %26 = cmp.eq.s %24, %25
-      branch %26, bb4, bb9)
+      branch %26, bb4, bb11)
     (bb4 preds bb3
       cpu.interrupts off
       %28 = const 0
@@ -100,7 +101,30 @@
       %70 = const 2
       ret %70)
     (bb8 preds bb6
-      jump bb9)
-    (bb9 preds bb3 bb8
-      %71 = const 42
-      ret %71)))
+      %71 = const 96
+      %72 = const 496
+      %73 = const 1
+      hw.store port.u8 %71, %73
+      %75 = const 0
+      %76 = const 1016
+      %77 = const 65
+      hw.store port.u8 %76, %77
+      %79 = const 0
+      %80 = hw.load port.u8 %71
+      %81 = const 4660
+      hw.store port.u16 %72, %81
+      %83 = const 0
+      %84 = hw.load port.u16 %72
+      %85 = add %80, %84
+      check.overflow %85
+      %86 = const 9
+      %87 = cmp.eq %85, %86
+      branch %87, bb9, bb10)
+    (bb9 preds bb8
+      %88 = const 3
+      ret %88)
+    (bb10 preds bb8
+      jump bb11)
+    (bb11 preds bb3 bb10
+      %89 = const 42
+      ret %89)))

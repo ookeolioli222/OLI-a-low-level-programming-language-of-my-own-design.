@@ -19,6 +19,10 @@
   (static 17 removed)
   (static 18 removed)
   (static 19 removed)
+  (static 20 removed)
+  (static 21 len=29)
+  (static 22 removed)
+  (static 23 removed)
   (proc fill locals=3
     (bb0
       %0 = param 0
@@ -67,7 +71,7 @@
       jump bb1)
     (bb3 preds bb1
       ret %4))
-  (proc start locals=6 temps=1 entry
+  (proc start locals=8 temps=1 entry
     (bb0
       %0 = addr.of frame.1
       %1 = const 2
@@ -196,5 +200,39 @@
       ; check.bounds %151 -- removed: proof(constant)
       %155 = add %17, %1
       %156 = raw.load.16.mmio %155
-      %157 = const 42
-      ret %157)))
+      ; check.bounds %157 -- removed: proof(constant)
+      %160 = add %17, %2
+      ; check.bounds %162 -- removed: proof(constant)
+      check.align %160, 4
+      %166 = const 287454020
+      raw.store.32.mmio %160, %166
+      ; check.bounds %170 -- removed: proof(constant)
+      %175 = raw.load.16 %17
+      %176 = const 13124
+      %177 = cmp.ne %175, %176
+      branch %177, bb26, bb27)
+    (bb26 preds bb25
+      %178 = const 12
+      ret %178)
+    (bb27 preds bb25
+      ; check.bounds %181 -- removed: proof(constant)
+      %185 = add %0, %1
+      %186 = raw.load.16 %185
+      %187 = const 4386
+      %188 = cmp.ne %186, %187
+      branch %188, bb28, bb29)
+    (bb28 preds bb27
+      %189 = const 13
+      ret %189)
+    (bb29 preds bb27
+      %191 = add %160, %96
+      %192 = raw.load.32.mmio %191
+      %193 = const 11206665
+      %194 = cmp.ne %192, %193
+      branch %194, bb30, bb31)
+    (bb30 preds bb29
+      ret %69)
+    (bb31 preds bb29
+      %196 = raw.load.32.mmio %160
+      %197 = const 42
+      ret %197)))

@@ -303,10 +303,10 @@ left at the end of a line is `E0032`.
 | `none` | the empty type; `T or none` is the optional `T` | **[runs]** |
 | `never` | the bottom type: the procedure does not return | **[parses]** |
 | `zone` | 8 bytes, a zone handle | **[runs]** |
-| `port T` | an I/O port as a value (V1); port I/O itself runs as the place `port.u8[n]` under `permit io.port` (§13) | **[parses]** |
+| `port T` | an I/O port as a value — `port u8 (0x3F8)`, `p.in()`, `p.out(v)` under `permit io.port` — beside the place `port.u8[n]` (§13) | **[runs]** |
 | `be T` / `le T` | an integer with a fixed byte order; a `be` field is swapped on load and store | **[runs]** |
 | `mmio view T` / `mmio rw view T` | memory-mapped I/O: every element access volatile; never dropped by a conversion (`E0200`); made by `mem.mmio` under `permit memory.mmio` | **[runs]** |
-| `mmio ref T` | a ref into device memory | **[parses]** |
+| `mmio ref T` / `mmio rw ref T` | a ref into device memory from `Name.at` over an `mmio` view: every field access volatile | **[runs]** |
 | `own T` | reserved in V0: parsed, rejected by the checker (`E0900`) | **[parses]** |
 
 `or` binds loosest in a type: `ref Header or E` is `(ref Header) or E`.

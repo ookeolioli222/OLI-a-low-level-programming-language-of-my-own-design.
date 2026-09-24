@@ -3,10 +3,16 @@ module mmio
 -- element access through it is a volatile load or store — `raw.load.T.mmio`
 -- / `raw.store.T.mmio` in the OIR, kept by every pass, class KERNEL in
 -- `--explain` — and bounds-checked like any view. `mmio` is never dropped: a
--- procedure that takes the view says so in its parameter's type. Here the
--- "device" is an array in the frame, so the stores can be read back through
--- the array. The exit status is the number of the check that failed; 42
+-- procedure that takes the view says so in its parameter's type, and
+-- `Name.at` over it gives an `mmio rw ref Name` whose fields are volatile
+-- too. Here the "device" is an array in the frame, so the stores can be
+-- read back through the array. The exit status is the number of the check that failed; 42
 -- when every one held.
+
+layout Reg
+    ctl : u32
+    data : u32
+end
 
 proc fill(v : mmio rw view u16, x : u16)
     i : uword <- 0
@@ -51,5 +57,11 @@ proc start -> s32
     b[6] <- 0xAB
     if buf[3] != 0xAB then ret 11
     _x := m[1]
+    r := Reg.at(b[..8])
+    r.ctl <- 0x11223344
+    if buf[0] != 0x3344 then ret 12
+    if buf[1] != 0x1122 then ret 13
+    if r.data != 0x00AB0009 then ret 14
+    _y := r.ctl
     ret 42
 end

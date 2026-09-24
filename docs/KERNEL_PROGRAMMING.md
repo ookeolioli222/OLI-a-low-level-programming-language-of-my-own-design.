@@ -12,9 +12,10 @@ construct answers each system-programming requirement.
 > structure the harness checks. The "Version" column below is otherwise the
 > plan, not the state: V1 and V2 rows report `E0900` (`feature not
 > implemented`) — `tests/sema/err/not_implemented.oli` pins that behaviour,
-> and `tests/parse/ok/kernel_sketch.oli` is checked to report `E0900` for
-> `port u8 (…)` and `E0401` for the raw-address conversion it performs
-> without `permit memory.raw`. `calls interrupt` handlers run (stage 17):
+> and `tests/parse/ok/kernel_sketch.oli` is checked to report `E0401` for
+> the raw-address conversion it performs without `permit memory.raw` and
+> `E0200` for its mixed boolean expression — nothing in it is `E0900` any
+> more. `calls interrupt` handlers run (stage 17):
 > `lib/core/x64.oli` holds `InterruptFrame`, `IdtGate` and `TablePointer`;
 > `mem.mmio` runs (stage 20): `mmio rw view T` with every element access a
 > volatile load or store (`tests/run/mmio.oli`; `examples/kernel.oli` writes
@@ -27,7 +28,7 @@ construct answers each system-programming requirement.
 
 | Requirement | Oli-- construct | Version |
 |-------------|-----------------|---------|
-| volatile memory | `mmio view T` from `mem.mmio(T, a, n)` — every element access is a volatile instruction, kept by every pass (**runs**); `mmio ref T` | V0 (view, intrinsic), V1 (ref) |
+| volatile memory | `mmio view T` from `mem.mmio(T, a, n)` and `mmio ref T` from `Name.at` over it — every element or field access is a volatile instruction, kept by every pass (**runs**) | V0 |
 | atomic operations | `atomic.load/store/add/sub/and/or/xor/exchange/cas(rw ref T, ..., order)` — **runs**: lock-prefixed instructions, `xchg`, a `cmpxchg` loop for and/or/xor (`tests/run/atomic.oli`) | V0 |
 | memory barriers | `cpu.fence(order)` → `mfence`/`lfence`/`sfence` — **runs** | V0 |
 | interrupt handlers | `proc h(frame : ref core.x64.InterruptFrame)` with `calls interrupt` — **runs**: every general register pushed, `iretq` on return (`tests/run/interrupt.oli`, `examples/kernel.oli`) | V0 |
@@ -42,7 +43,7 @@ construct answers each system-programming requirement.
 | physical memory | `physaddr` type; `zone ... at`; `memory.raw` | V0 |
 | virtual memory | `addr T` is a virtual address; `core.x64.paging` (`lib/core/x64/paging.oli`): entry flags, `make_entry`, `entry_target`, the four indices and two offsets, `identity_2m` — **runs** (`tests/run/paging.oli`); `arch.x64.cr3 <- physaddr(u64(pml4.addr))` in the kernel example | V0 |
 | MMIO | `mmio` views from `mem.mmio` + `memory.mmio` capability | V0 (**runs**) |
-| port I/O | `port.u8/u16/u32[n]` as a place under `io.port` — **runs**: one `in` or `out` each, volatile (`tests/run/hw.oli`; the kernel example programs COM1, the 8259 PICs and the 8253 PIT with them); the `port T` value type, `p.in()`, `p.out(v)` | V0 (place), V1 (type) |
+| port I/O | `port.u8/u16/u32[n]` as a place, and the `port T` value type with `p.in()` / `p.out(v)`, under `io.port` — **runs**: one `in` or `out` each, volatile (`tests/run/hw.oli`; the kernel example programs COM1, the 8259 PICs and the 8253 PIT with them) | V0 |
 | syscalls | `os.syscall` (hosted programs); a kernel *implements* syscalls with `calls interrupt` or a `machine` `syscall` entry stub | V0 / V1 |
 | page tables | `core.x64.paging` over `[512]u64` statics aligned 4096, installed through `arch.x64.cr3` | V0 (**runs**, structurally in the kernel) |
 | SIMD registers | `machine` blocks in V0; native vector types in V2 | V0 / V2 |

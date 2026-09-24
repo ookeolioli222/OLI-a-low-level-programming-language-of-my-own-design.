@@ -279,7 +279,7 @@ check they remove is printed with its proof by `--show-oir=opt`.
 | `mem.secure_zero(dst)` | zero that no pass may delete (wipes a secret): one OIR instruction no pass removes, `rep stosb` | — | COPY | **runs** |
 | `mem.get_u16/32/64`, `get_be*`, `get_le*` | read an integer of a given width and endianness from a view: `check.range` that the view holds it (`bounds`), one load, a byte swap for `be` | — | CHECK | **runs** (`tests/run/bytes.oli`) |
 | `mem.put_u16/32/64`, `put_be*`, `put_le*` | write one, the same way | — | CHECK | **runs** |
-| `mem.mmio(T, a, n)` | a view of device memory, `mmio rw view T` (`T` one of `u8`…`u64`, `a` and `n` `uword`); every `v[i]` read or write through it is one volatile load or store (`raw.load.T.mmio` / `raw.store.T.mmio`: no pass removes, merges or reorders it) after the bounds check any view carries; `v[a..b]`, `.len`, `.addr` as for any view; `mmio` is never dropped (`E0200` where a plain view is wanted) | `memory.mmio` | KERNEL | **runs** (`tests/run/mmio.oli`, `examples/kernel.oli`); `each` and `Name.at` over it are E0900 |
+| `mem.mmio(T, a, n)` | a view of device memory, `mmio rw view T` (`T` one of `u8`…`u64`, `a` and `n` `uword`); every `v[i]` read or write through it is one volatile load or store (`raw.load.T.mmio` / `raw.store.T.mmio`: no pass removes, merges or reorders it) after the bounds check any view carries; `v[a..b]`, `.len`, `.addr` as for any view; `Name.at(v)` gives an `mmio rw ref Name` whose fields are volatile too; `mmio` is never dropped (`E0200` where a plain view is wanted) | `memory.mmio` | KERNEL | **runs** (`tests/run/mmio.oli`, `examples/kernel.oli`); `each` over it is E0900 |
 
 ---
 
@@ -306,7 +306,7 @@ port.u8[0x3F8] <- b                  -- runs: port I/O as an indexed place (`io.
 | `arch.x64.cr0/2/3/4/8` | `cpu.control` | **runs**: a place — read is one `mov rax, crN`, written with `<-` one `mov crN, rax`; cr3 is typed `physaddr`, the others `u64` (`tests/run/hw.oli`; the kernel example installs its page tables) |
 | `arch.x64.msr[n]`, `gdt`, `idt`, `tr`, `segments()` | `cpu.control` / `cpu.msr` | planned (V1) |
 | `port.u8/u16/u32[n]` | `io.port` | **runs**: `n` a `u16`; a read is one `in` at the width, zero-extended, a write one `out` — `hw.load port.uN %p` / `hw.store port.uN %p, %v` in the OIR, volatile, KERNEL, kept by every pass (`tests/run/hw.oli`; the kernel example programs COM1, the PICs and the PIT with them) |
-| the `port T` type, `port T (n)` | `io.port` | reserved (V1) |
+| `port T (n)`, the `port T` type, `p.in()`, `p.out(v)` | `io.port` | **runs**: a port number as a value of the width of `T` (u8/u16/u32) — a constant `COM1 : port u8 := 0x3F8`, a local, a parameter; `p.in()` one `in`, `p.out(v)` one `out`, the same `hw.load`/`hw.store` as the place form (`tests/run/hw.oli`) |
 | `atomic.load/store/add/sub/and/or/xor/exchange/cas(ref, ..., order)` | — | **runs**: over a `ref T` / `rw ref T` to an integer of any width (`rw` for anything but `load`, `E0111`); `load` one move (signed re-extended), `store` one move or `xchg` for `seq_cst`, `add`/`sub` `lock xadd`, `exchange` `xchg`, `and`/`or`/`xor` a `lock cmpxchg` loop, `cas(ref, expected, desired, order) -> bool` `lock cmpxchg`; every read-modify-write answers the old value, wraps rather than traps, and is a full barrier; orders `relaxed acquire release acq_rel seq_cst` (`tests/run/atomic.oli`; `--explain` class ATOMIC) |
 | `machine x64 ... end` with `in`, `out`, `clobber` | `cpu.asm` | **runs**: `in REG <- e` loads the value before the block, `out REG -> place` stores the register after it, a callee-saved register the block names (rbx, r12–r15) is kept for the caller; `.label:` and jumps to it stay inside the block; port I/O (`in al\|ax\|eax, dx\|imm8`, `out dx\|imm8, al\|ax\|eax`), `mov SREG, ax`, `mov ax, SREG`, `mov ax, imm16`, `retfq`, `pushfq`/`popfq`, `int n`/`int3` and `lea r64, [.label]` per design 0023; any other 8/16-bit form is `E0900` |
 
@@ -336,7 +336,9 @@ Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 | `physaddr` | a physical address — never dereferenced; cannot mix with `addr` | analysed |
 | `be T` / `le T` | an integer stored big/little-endian, in a `layout` | **runs** |
 | `mmio view T` / `mmio rw view T` | a view of device memory: every element access volatile; made by `mem.mmio`, passed as a parameter, never converted to a plain view | **runs** |
-| `mmio ref T`, `port T`, `own T` | a ref into device memory, a port as a value (port I/O itself runs as the place `port.u8[n]`), ownership | reserved (V1) |
+| `mmio ref T` / `mmio rw ref T` | a ref into device memory, from `Name.at` over an `mmio` view: every field access through it volatile (`raw.load/store.T.mmio`), never dropped | **runs** (`tests/run/mmio.oli`) |
+| `port T` | an I/O port as a value; `p.in()` / `p.out(v)` | **runs** |
+| `own T` | ownership | reserved (V1) |
 | `f32 f64` | floating point | reserved (V2) |
 
 Type identity is nominal for `layout`/`choice`, structural for everything
@@ -381,7 +383,7 @@ tool).
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
 review that is:
-a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause`/`interrupts`/`fence`, the `port T` type and `port T (n)`, an `extern proc` in an executable (only an object file can carry an unresolved symbol), `each` and `Name.at` over an `mmio` view,
+a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause`/`interrupts`/`fence`, an `extern proc` in an executable (only an object file can carry an unresolved symbol), `each` over an `mmio` view and a record held by value inside device memory, `each` and `Name.at` over an `mmio` view,
 an `os.syscall` with more than seven words (the number and six
 arguments are all the registers a system call has) and aggregate constants (`NAME : [N]T := { … }` or a layout constant, which would live in `.rodata`; reading one is refused, and the harness probes that).
 The front end already checks all of them, so a program using them is

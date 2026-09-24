@@ -194,6 +194,9 @@ end
 proc field_type_text(pg: ref Prog, base: view u8, fname: view u8) -> view u8
     -- The type of a field of the layout or choice variant `base` names.
     nm : view u8 <- base
+    if starts_with(nm, "mmio ")
+        nm <- nm[5..]
+    end
     if starts_with(nm, "rw ")
         nm <- nm[3..]
     end

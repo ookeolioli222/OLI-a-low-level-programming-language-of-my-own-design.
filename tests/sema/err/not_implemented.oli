@@ -15,6 +15,5 @@ end
 -- expect: E0900 @ 1:13
 -- expect: E0401 @ 4:5
 -- expect: E0900 @ 9:5
--- expect: E0900 @ 10:11
 -- expect: E0900 @ 11:10
 -- expect: E0401 @ 12:11

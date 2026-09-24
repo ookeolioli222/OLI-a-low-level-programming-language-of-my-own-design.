@@ -19,6 +19,10 @@
   (static 17 len=25)
   (static 18 len=25)
   (static 19 len=25)
+  (static 20 len=25)
+  (static 21 len=29)
+  (static 22 len=25)
+  (static 23 len=25)
   (proc fill locals=3
     (bb0
       %0 = param 0
@@ -93,15 +97,15 @@
     (bb3 preds bb1
       %31 = load frame.2
       ret %31))
-  (proc start locals=6 temps=1 entry
+  (proc start locals=8 temps=1 entry
     (bb0
       %0 = addr.of frame.1
       %1 = const 2
       %2 = const 0
-      store frame.10, %2
+      store frame.12, %2
       jump bb1)
     (bb1 preds bb0 bb2
-      %5 = load frame.10
+      %5 = load frame.12
       %6 = cmp.lt %5, %1
       branch %6, bb2, bb3)
     (bb2 preds bb1
@@ -111,7 +115,7 @@
       raw.store.64 %10, %2
       %12 = const 1
       %13 = add %5, %12
-      store frame.10, %13
+      store frame.12, %13
       jump bb1)
     (bb3 preds bb1
       %17 = addr.of frame.1
@@ -338,5 +342,64 @@
       %227 = add %221, %226
       %228 = raw.load.16.mmio %227
       store frame.9, %228
-      %230 = const 42
-      ret %230)))
+      %230 = load frame.7
+      %231 = load frame.8
+      %232 = const 0
+      %233 = const 8
+      check.range %232, %233, %231
+      %235 = add %230, %232
+      %236 = sub %233, %232
+      %237 = const 0
+      %238 = const 8
+      check.range %237, %238, %236
+      check.align %235, 4
+      store frame.10, %235
+      %242 = load frame.10
+      %243 = const 287454020
+      raw.store.32.mmio %242, %243
+      %245 = addr.of frame.1
+      %246 = const 8
+      %247 = const 0
+      check.bounds %247, %246
+      %249 = const 2
+      %250 = mul %247, %249
+      %251 = add %245, %250
+      %252 = raw.load.16 %251
+      %253 = const 13124
+      %254 = cmp.ne %252, %253
+      branch %254, bb26, bb27)
+    (bb26 preds bb25
+      %256 = const 12
+      ret %256)
+    (bb27 preds bb25
+      %259 = addr.of frame.1
+      %260 = const 8
+      %261 = const 1
+      check.bounds %261, %260
+      %263 = const 2
+      %264 = mul %261, %263
+      %265 = add %259, %264
+      %266 = raw.load.16 %265
+      %267 = const 4386
+      %268 = cmp.ne %266, %267
+      branch %268, bb28, bb29)
+    (bb28 preds bb27
+      %270 = const 13
+      ret %270)
+    (bb29 preds bb27
+      %273 = load frame.10
+      %274 = const 4
+      %275 = add %273, %274
+      %276 = raw.load.32.mmio %275
+      %277 = const 11206665
+      %278 = cmp.ne %276, %277
+      branch %278, bb30, bb31)
+    (bb30 preds bb29
+      %280 = const 14
+      ret %280)
+    (bb31 preds bb29
+      %283 = load frame.10
+      %284 = raw.load.32.mmio %283
+      store frame.11, %284
+      %286 = const 42
+      ret %286)))

@@ -3,6 +3,7 @@
   (static 1 len=25)
   (static 2 len=27)
   (static 3 len=27)
+  (static 4 len=27)
   (proc probe locals=1
     (bb0
       %0 = param 0
@@ -10,15 +11,15 @@
       %2 = load frame.0
       %3 = hw.load port.u8 %2
       ret %3))
-  (proc start locals=9 temps=1 entry
+  (proc start locals=13 temps=1 entry
     (bb0
       %0 = addr.of frame.0
       %1 = const 1
       %2 = const 0
-      store frame.9, %2
+      store frame.13, %2
       jump bb1)
     (bb1 preds bb0 bb2
-      %5 = load frame.9
+      %5 = load frame.13
       %6 = cmp.lt %5, %1
       branch %6, bb2, bb3)
     (bb2 preds bb1
@@ -28,7 +29,7 @@
       raw.store.64 %10, %2
       %12 = const 1
       %13 = add %5, %12
-      store frame.9, %13
+      store frame.13, %13
       jump bb1)
     (bb3 preds bb1
       %17 = const 0
@@ -49,7 +50,7 @@
       %32 = load frame.1
       %33 = const 1
       %34 = cmp.eq.s %32, %33
-      branch %34, bb4, bb9)
+      branch %34, bb4, bb11)
     (bb4 preds bb3
       cpu.interrupts off
       %37 = const 0
@@ -120,7 +121,40 @@
       %97 = const 2
       ret %97)
     (bb8 preds bb6
-      jump bb9)
-    (bb9 preds bb3 bb8
-      %103 = const 42
-      ret %103)))
+      %100 = const 96
+      store frame.9, %100
+      %102 = const 496
+      store frame.10, %102
+      %104 = load frame.9
+      %105 = const 1
+      hw.store port.u8 %104, %105
+      %107 = const 0
+      %108 = const 1016
+      %109 = const 65
+      hw.store port.u8 %108, %109
+      %111 = const 0
+      %112 = load frame.9
+      %113 = hw.load port.u8 %112
+      store frame.11, %113
+      %115 = load frame.10
+      %116 = const 4660
+      hw.store port.u16 %115, %116
+      %118 = const 0
+      %119 = load frame.10
+      %120 = hw.load port.u16 %119
+      store frame.12, %120
+      %122 = load frame.11
+      %123 = load frame.12
+      %124 = add %122, %123
+      check.overflow %124
+      %125 = const 9
+      %126 = cmp.eq %124, %125
+      branch %126, bb9, bb10)
+    (bb9 preds bb8
+      %128 = const 3
+      ret %128)
+    (bb10 preds bb8
+      jump bb11)
+    (bb11 preds bb3 bb10
+      %134 = const 42
+      ret %134)))
