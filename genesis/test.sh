@@ -1344,12 +1344,14 @@ echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all fou
 # tests/run/hw.oli is exactly one instruction in the image, at its width,
 # found by binutils; a read is zero-extended to the canonical image.
 objdump -d --no-show-raw-insn build/hw.elf > build/hw.dis
-for pin in 'out    %al,(%dx)=3' 'out    %ax,(%dx)=2' 'out    %eax,(%dx)=1' 'in     (%dx),%al=2' 'in     (%dx),%ax=2' 'in     (%dx),%eax=1' 'cli$=1' 'sti$=1' 'movzwl %ax,%eax=2' 'mov    %rax,%cr3=1' 'mov    %cr3,%rax=1' 'mov    %cr0,%rax=1' 'mov    %rax,%cr0=1' 'mov    %cr2,%rax=1' 'mov    %cr4,%rax=1' 'mov    %rax,%cr4=1'; do
+for pin in 'out    %al,(%dx)=3' 'out    %ax,(%dx)=2' 'out    %eax,(%dx)=1' 'in     (%dx),%al=2' 'in     (%dx),%ax=2' 'in     (%dx),%eax=1' 'cli$=1' 'sti$=1' 'movzwl %ax,%eax=3' 'mov    %rax,%cr3=1' 'mov    %cr3,%rax=1' 'mov    %cr0,%rax=1' 'mov    %rax,%cr0=1' 'mov    %cr2,%rax=1' 'mov    %cr4,%rax=1' 'mov    %rax,%cr4=1' 'rdmsr=1' 'wrmsr=1' 'lgdt   (%rax)=1' 'lidt   (%rax)=1' 'mov    %rsp,%rax=2' 'mov    %rax,%rsp=1' 'mov    %rbp,%rax=2' 'mov    %rax,%rbp=1' 'jmp    \*%rax=1' 'cpuid=1' 'rdtsc=2' '<hw.nop_proc>$=1'; do
     pat=${pin%=*}; want=${pin##*=}
     [ "$(grep -c "$pat" build/hw.dis)" = "$want" ] || fail "hw: [$pat] must be $want times in hw.elf, is $(grep -c "$pat" build/hw.dis)"
 done
-[ "$(grep -c 'hw\.' build/hw.opt)" = 18 ] || fail "opt: hw.oli must keep its eleven port accesses and seven control-register accesses"
-echo "ok: port.u8/u16/u32[n] and port T values with .in()/.out() are one in/out each at the width, cpu.interrupts(off/on) one cli/sti, arch.x64.cr0/2/3/4 read and written one mov each (objdump on hw.elf); the passes keep every hardware access"
+[ "$(grep -c 'str  *%' build/hw.dis)" = 1 ] || fail "hw: the task register must be read once (str)"
+[ "$(grep -c 'ltr  *%' build/hw.dis)" = 1 ] || fail "hw: the task register must be written once (ltr)"
+[ "$(grep -c 'hw\.' build/hw.opt)" = 35 ] || fail "opt: hw.oli must keep its thirty-five hardware operations"
+echo "ok: port.u8/u16/u32[n] and port T values with .in()/.out() are one in/out each at the width, cpu.interrupts(off/on) one cli/sti, arch.x64.cr0/2/3/4 read and written one mov each, arch.x64.msr[n] rdmsr/wrmsr, arch.x64.gdt/idt lgdt/lidt, arch.x64.tr str/ltr, cpu.stack and cpu.frame moves, cpu.jump, cpu.id cpuid, cpu.tsc rdtsc, cpu.call a call (objdump on hw.elf); the passes keep every hardware access"
 # Atomics (MACHINE_MODEL.md 5): every read-modify-write of tests/run/atomic.oli
 # is a lock-prefixed instruction at its width, and/or/xor a cmpxchg loop, a
 # sequentially consistent store an xchg, every fence its instruction; no
@@ -1490,13 +1492,15 @@ objdump -d --no-show-raw-insn build/kernel.elf > build/kernel.dis
 [ "$(grep -c 'iretq' build/kernel.dis)" = 2 ] || fail "kernel: the int 3 and timer handlers must both end in iretq"
 [ "$(grep -c 'mov    %rax,%cr3' build/kernel.dis)" = 1 ] || fail "kernel: the page tables must be installed with one mov cr3, rax"
 [ "$(grep -c 'mov    %cr3,%rax' build/kernel.dis)" = 1 ] || fail "kernel: cr3 must be read back once"
-grep -q '0f a2' build/kernel.asm || fail "kernel: cpuid must be in its block"
+grep -q 'cpuid' build/kernel.dis || fail "kernel: cpu.id(0) must be one cpuid"
+grep -q 'lidt   (%rax)' build/kernel.dis || fail "kernel: arch.x64.idt <- must be one lidt"
+grep -q 'call.*<kernel.main>' build/kernel.dis || fail "kernel: cpu.call(main) must be one call in the frameless entry"
 grep -q '^    cd 03)' build/kernel.asm || fail "kernel: the software interrupt must be int 3"
-grep -q '0f 01 1c 25' build/kernel.asm || fail "kernel: the descriptor table must be loaded with lidt"
 ( cd .. && genesis/build/show_oir < examples/kernel.oli > genesis/build/kernel.oir 2>/dev/null ) || fail "kernel: show_oir"
 [ "$(grep -c 'raw.store.8.mmio' build/kernel.oir)" = 2 ] || fail "kernel: the VGA cells must be written through mem.mmio, volatile"
 [ "$(grep -c 'hw.store port.u8' build/kernel.oir)" = 15 ] || fail "kernel: fifteen port writes - COM1 setup and byte, ICW1-4 and the masks of two PICs, the PIT's mode and divisor, the EOI"
 [ "$(grep -c 'hw.store arch.x64.cr3' build/kernel.oir)" = 1 ] || fail "kernel: the page tables go into cr3 through a hardware place"
+[ "$(grep -c 'hw.store cpu.stack\|hw.store cpu.frame\|hw.cmd cpu.call main\|hw.store arch.x64.idt\|hw.cmd cpu.id' build/kernel.oir)" = 5 ] || fail "kernel: the entry, the IDT load and cpuid must be hardware statements in the OIR"
 nm build/kernel.elf | grep -q '^00000000001000b0 R kernel.header$' || fail "kernel: the Multiboot2 header must be the .rodata symbol kernel.header at 0x1000b0"
 [ "$(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text .text.trap .data .bss.boot .bss .symtab .strtab .shstrtab .debug_abbrev .debug_info .debug_line " ] || fail "kernel: the sections must follow examples/x86_64-kernel.oli-target: $(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
 nm build/kernel.elf | grep -q ' T core.x64.paging.identity_2m$' || fail "kernel: the pub procedures of core.x64.paging must be global symbols"

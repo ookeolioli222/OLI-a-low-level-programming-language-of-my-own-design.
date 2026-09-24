@@ -1208,12 +1208,43 @@ constant in `.rodata`).
   `readelf --debug-dump=line` to raise nothing. `ins_line` moved from
   `compiler/explain.oli` into `compiler/oir.oli`, where `olic` has it.
 
+## Implemented in back-end stage 30 (2026-09-24): the hardware commands of design 0015
+
+- **Places**: `cpu.stack` and `cpu.frame` (`addr u8`; `mov rax, rsp/rbp`,
+  `mov rsp/rbp, rax`), `arch.x64.msr[n]` (`u64` indexed by a `u32`;
+  `rdmsr`/`wrmsr`), `arch.x64.gdt` and `arch.x64.idt` (written with a
+  `ref core.x64.TablePointer`; `lgdt`/`lidt [rax]`; a read is `E0900`, there
+  being no `sgdt` in the plan), `arch.x64.tr` (`u16`; `str`/`ltr`). The
+  parser recognises `cpu.stack`/`cpu.frame` and `arch.x64.NAME[...]` as
+  places (`N_HWPLACE` with a kind), the checker asks for `cpu.control` or
+  `cpu.msr`. **Commands**: `cpu.id(leaf)` — `cpuid` with `ecx` zero, rbx
+  saved around it, the four registers into a fresh area that is a
+  `core.CpuId` by value; `cpu.tsc()` — `rdtsc` as one word; `cpu.call(p)`
+  — a bare `call` to the procedure named; `cpu.jump(a)` — `jmp rax`. Six
+  OIR instructions (`hw.load`, `hw.store`, `hw.cmd`), volatile, KERNEL.
+- **A `calls none` body may hold hardware statements** — those places
+  written, `cpu.call`, `cpu.jump`, `cpu.halt`, `cpu.pause`,
+  `cpu.interrupts`, `loop`s of them, machine blocks without `in`/`out` —
+  and its values are allocated to the callee-saved registers alone: a
+  value that would need a frame slot is `E0900`, since there is no frame.
+  `examples/kernel.oli` now starts exactly as design 0015 proposed
+  (`cpu.stack <- …`, `cpu.frame <- …`, `cpu.call(main)`, `cpu.halt()`),
+  loads its IDT with `arch.x64.idt <- ref idtr` and reads its vendor with
+  `cpu.id(0)`; three machine blocks remain (`int 3` and the two handler
+  addresses).
+- `tests/run/hw.oli` runs `cpu.id(0)`, `cpu.tsc()` twice, reads the stack
+  and frame pointers and calls a procedure through `cpu.call`, and holds
+  the privileged forms behind the byte that never arrives; the harness
+  counts every instruction form and the thirty-five hardware operations
+  after the passes, and finds `cpuid`, `lidt` and the `call` to `main`
+  in the kernel's code and the five hardware statements in its OIR.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 27,903 lines) into
+compiles its own source (`compiler/`, seventeen modules, 28,628 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,218,056 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,247,152 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

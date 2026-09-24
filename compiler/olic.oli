@@ -46,6 +46,9 @@ proc start -> s32
         end
         mc := mach_new(z)
         lower_all(pg, ob, mc, ob.base + hdr_size(ob))
+        if pg.nerr > 0
+            ret 1
+        end
         if pg.objmode == 1
             -- `-- output: object`: a relocatable file for the linker.
             write_object(pg, ob, mc, z)

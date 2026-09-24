@@ -1335,6 +1335,12 @@ proc removable(ob: ref Oir, i: u64) -> word
     if ins.op == O_CRLOAD
         ret 0
     end
+    if ins.op == O_HWRD
+        ret 0
+    end
+    if ins.op == O_MSRRD
+        ret 0
+    end
     if ins.op == O_ATOMIC
         -- A read-modify-write, a store or a load with an order: the access
         -- is the point whatever reads the answer.

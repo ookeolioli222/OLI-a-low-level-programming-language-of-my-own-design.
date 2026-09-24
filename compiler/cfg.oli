@@ -420,6 +420,18 @@ proc defines_value(op: u64) -> word
     if op == O_MEMOP
         ret 0
     end
+    if op == O_HWWR
+        ret 0
+    end
+    if op == O_MSRWR
+        ret 0
+    end
+    if op == O_CPUID
+        ret 0
+    end
+    if op == O_HWCALL
+        ret 0
+    end
     if op == O_CHKB
         ret 0
     end

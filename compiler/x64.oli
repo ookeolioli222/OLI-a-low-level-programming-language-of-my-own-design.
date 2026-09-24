@@ -1035,6 +1035,128 @@ proc lower_atomic(ob: rw ref Oir, mc: ref Mach, i: u64)
     st_val(ob, mc, R_AX, i)
 end
 
+-- The hardware places and commands of design 0015 -------------------------------
+
+proc edx_eax_to_rax(ob: rw ref Oir)
+    -- `shl rdx, 32; or rax, rdx`: the edx:eax pair as one word.
+    cb(ob, 72)
+    cb(ob, 193)
+    cb(ob, 226)
+    cb(ob, 32)
+    cb(ob, 72)
+    cb(ob, 9)
+    cb(ob, 208)
+end
+
+proc lower_hwrd(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `mov rax, rsp` / `mov rax, rbp` / `str ax` + zero-extend / `rdtsc`.
+    ins := ins_at(ob, i)
+    if ins.val == 3
+        cb(ob, 72)
+        cb(ob, 137)
+        cb(ob, 224)
+    elif ins.val == 4
+        cb(ob, 72)
+        cb(ob, 137)
+        cb(ob, 232)
+    elif ins.val == 7
+        cb(ob, 15)
+        cb(ob, 0)
+        cb(ob, 200)
+        cb(ob, 15)
+        cb(ob, 183)
+        cb(ob, 192)
+    else
+        cb(ob, 15)
+        cb(ob, 49)
+        edx_eax_to_rax(ob)
+    end
+    st_val(ob, mc, R_AX, i)
+end
+
+proc lower_hwwr(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- The value in rax, then `mov rsp, rax` / `mov rbp, rax` / `lgdt [rax]`
+    -- / `lidt [rax]` / `ltr ax` / `jmp rax`.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_AX, ins.a)
+    if ins.val == 3
+        cb(ob, 72)
+        cb(ob, 137)
+        cb(ob, 196)
+    elif ins.val == 4
+        cb(ob, 72)
+        cb(ob, 137)
+        cb(ob, 197)
+    elif ins.val == 5
+        cb(ob, 15)
+        cb(ob, 1)
+        cb(ob, 16)
+    elif ins.val == 6
+        cb(ob, 15)
+        cb(ob, 1)
+        cb(ob, 24)
+    elif ins.val == 7
+        cb(ob, 15)
+        cb(ob, 0)
+        cb(ob, 216)
+    else
+        cb(ob, 255)
+        cb(ob, 224)
+    end
+end
+
+proc lower_msrrd(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- The number in ecx, `rdmsr`, the pair as one word.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_CX, ins.a)
+    cb(ob, 15)
+    cb(ob, 50)
+    edx_eax_to_rax(ob)
+    st_val(ob, mc, R_AX, i)
+end
+
+proc lower_msrwr(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- The number in ecx, the value split into edx:eax, `wrmsr`.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_CX, ins.a)
+    ld_val(ob, mc, R_AX, ins.b)
+    cb(ob, 72)
+    cb(ob, 137)
+    cb(ob, 194)
+    cb(ob, 72)
+    cb(ob, 193)
+    cb(ob, 234)
+    cb(ob, 32)
+    cb(ob, 15)
+    cb(ob, 48)
+end
+
+proc lower_cpuid(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- The leaf in eax, ecx zero, `cpuid`, the four registers into the area
+    -- rdi points at (a `core.CpuId`); rbx, which `cpuid` writes and the
+    -- allocator owns, is saved around it.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_DI, ins.b)
+    ld_val(ob, mc, R_AX, ins.a)
+    cb(ob, 83)
+    cb(ob, 49)
+    cb(ob, 201)
+    cb(ob, 15)
+    cb(ob, 162)
+    cb(ob, 137)
+    cb(ob, 7)
+    cb(ob, 137)
+    cb(ob, 95)
+    cb(ob, 4)
+    cb(ob, 137)
+    cb(ob, 79)
+    cb(ob, 8)
+    cb(ob, 137)
+    cb(ob, 87)
+    cb(ob, 12)
+    cb(ob, 91)
+end
+
 proc lower_memop(ob: rw ref Oir, mc: ref Mach, i: u64)
     -- `mem.copy`: rdi, rsi, rcx and `rep movsb` — forwards when the
     -- destination is not above the source, else from the last byte down
@@ -1901,6 +2023,32 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         lower_memop(ob, mc, i)
         ret
     end
+    if op == O_HWRD
+        lower_hwrd(ob, mc, i)
+        ret
+    end
+    if op == O_HWWR
+        lower_hwwr(ob, mc, i)
+        ret
+    end
+    if op == O_MSRRD
+        lower_msrrd(ob, mc, i)
+        ret
+    end
+    if op == O_MSRWR
+        lower_msrwr(ob, mc, i)
+        ret
+    end
+    if op == O_CPUID
+        lower_cpuid(ob, mc, i)
+        ret
+    end
+    if op == O_HWCALL
+        cb(ob, 232)
+        add_fix(mc, ob.ncode, 0, ins.c)
+        c32(ob, 0)
+        ret
+    end
     if op == O_CRSTORE
         lower_crstore(ob, mc, i)
         ret
@@ -2234,7 +2382,15 @@ proc lower_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
     end
     if op.nocalls == 1
         -- `calls none`: no prologue, no frame, no saved registers — the
-        -- machine blocks of the body are the whole procedure.
+        -- machine blocks and hardware statements of the body are the whole
+        -- procedure, their values in the callee-saved registers alone: a
+        -- value that would need a frame slot is refused (E0900), since
+        -- there is no frame.
+        alloc_proc(ob, mc, op)
+        if none_spills(ob, mc, op) == 1
+            pv0 := proc_at(pg, op.pi)
+            oir_err(ob, pg, op.mi, 900, pv0.node)
+        end
         b0 : u64 <- op.bfirst
         while b0 < mc.curlast
             if live_blk(ob, b0) == 1
@@ -2314,6 +2470,27 @@ proc note_proc_line(pg: ref Prog, ob: ref Oir, mc: rw ref Mach, op: ref OProc)
     mc.nline <- mc.nline + 1
     mc.lastline <- t.line
     mc.lastmi <- v.mod
+end
+
+proc none_spills(ob: ref Oir, mc: ref Mach, op: ref OProc) -> word
+    -- Whether a value of a frameless procedure was given a slot: one that
+    -- is read after its definition and holds no register.
+    v : u64 <- op.first
+    last := op.first + op.n
+    while v < last
+        ins := ins_at(ob, v)
+        if ins.op != O_DEAD
+            if defines_value(ins.op) == 1
+                if cell_get(mc.iend, v) > v
+                    if val_reg(mc, v) < 0
+                        ret 1
+                    end
+                end
+            end
+        end
+        v <- v + 1
+    end
+    ret 0
 end
 
 proc lower_blk(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, b: u64)

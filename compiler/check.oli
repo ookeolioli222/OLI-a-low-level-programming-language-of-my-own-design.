@@ -457,12 +457,16 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
         need(pg, mi, "memory.raw", nd.t0)
     end
     if k == N_HWPLACE
-        -- An I/O port, read or written: `io.port`; a control register:
-        -- `cpu.control` (design 0015).
-        if nd.sub == 1
-            need(pg, mi, "cpu.control", nd.t0)
-        else
+        -- An I/O port, read or written: `io.port`; a control register, the
+        -- stack and frame pointers, the descriptor tables and the task
+        -- register: `cpu.control`; a model-specific register: `cpu.msr`
+        -- (design 0015).
+        if nd.sub == 0
             need(pg, mi, "io.port", nd.t0)
+        elif nd.sub == 2
+            need(pg, mi, "cpu.msr", nd.t0)
+        else
+            need(pg, mi, "cpu.control", nd.t0)
         end
     end
     if k == N_LIT
@@ -513,6 +517,22 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
                 if view_eq(tok_text(cx, base.t0), "cpu")
                     if view_eq(tok_text(cx, callee.t0), "fence")
                         check_fence(pg, mi, n)
+                    end
+                    if view_eq(tok_text(cx, callee.t0), "call")
+                        need(pg, mi, "cpu.control", base.t0)
+                        check_cpu_call(pg, mi, n)
+                    end
+                    if view_eq(tok_text(cx, callee.t0), "jump")
+                        need(pg, mi, "cpu.control", base.t0)
+                        check_one_arg(pg, mi, n)
+                    end
+                    if view_eq(tok_text(cx, callee.t0), "id")
+                        check_one_arg(pg, mi, n)
+                    end
+                    if view_eq(tok_text(cx, callee.t0), "tsc")
+                        if kid2(cx, n) != 0
+                            sdiag(pg, mi, 900, callee.t0)
+                        end
                     end
                     if view_eq(tok_text(cx, callee.t0), "interrupts")
                         -- `cpu.interrupts(on)` / `(off)`: `cpu.interrupt`.
@@ -715,6 +735,43 @@ proc check_port_call(pg: rw ref Prog, mi: u64, n: u64)
     end
     if cnt != 1 - isin
         sdiag(pg, mi, 900, callee.t0)
+    end
+end
+
+proc check_one_arg(pg: rw ref Prog, mi: u64, n: u64)
+    cx := mod_ctx(pg, mi)
+    callee := node_at(cx, kid1(cx, n))
+    a := kid2(cx, n)
+    if a == 0
+        sdiag(pg, mi, 900, callee.t0)
+        ret
+    end
+    if sibling(cx, a) != 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, sibling(cx, a)))
+    end
+end
+
+proc check_cpu_call(pg: rw ref Prog, mi: u64, n: u64)
+    -- `cpu.call(p)`: exactly one argument, the name of a procedure.
+    cx := mod_ctx(pg, mi)
+    callee := node_at(cx, kid1(cx, n))
+    a := kid2(cx, n)
+    if a == 0
+        sdiag(pg, mi, 900, callee.t0)
+        ret
+    end
+    an := node_at(cx, a)
+    ok : u64 <- 0
+    if an.kind == N_NAME
+        if proc_find(pg, tok_text(cx, an.t0)) >= 0
+            ok <- 1
+        end
+    end
+    if ok == 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, a))
+    end
+    if sibling(cx, a) != 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, sibling(cx, a)))
     end
 end
 

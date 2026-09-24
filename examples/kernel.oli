@@ -56,12 +56,12 @@ proc start -> never
     entry
     calls none
     section ".text.boot"
-    permit cpu.asm
-    machine x64
-        lea rsp, [stack + 16K]
-        xor ebp, ebp
-        call kernel.main
-        hlt
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stack.addr) + 16K)
+    cpu.frame <- addr u8 (0)
+    cpu.call(main)
+    loop
+        cpu.halt()
     end
 end
 
@@ -182,7 +182,7 @@ proc set_gate(vector : uword, handler : u64)
 end
 
 proc install_idt()
-    permit cpu.asm, cpu.interrupt
+    permit cpu.asm, cpu.interrupt, cpu.control
     h : u64 <- 0
     machine x64
         mov rax, on_int3
@@ -197,21 +197,12 @@ proc install_idt()
     set_gate(32, t)
     idtr.limit <- 256 * 16 - 1
     idtr.base <- u64(idt.addr)
-    machine x64
-        lidt [idtr]
-    end
+    arch.x64.idt <- ref idtr
 end
 
 proc cpu_vendor_word() -> u32
-    permit cpu.asm
-    b : u32 <- 0
-    machine x64
-        in eax <- 0
-        cpuid
-        out ebx -> b
-        clobber ecx, edx
-    end
-    ret b
+    id := cpu.id(0)
+    ret id.b
 end
 
 proc main -> never

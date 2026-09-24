@@ -187,6 +187,24 @@ proc ins_class(ob: ref Oir, i: u64) -> u64
     if o == O_MEMOP
         ret CL_COPY
     end
+    if o == O_HWRD
+        ret CL_KERNEL
+    end
+    if o == O_HWWR
+        ret CL_KERNEL
+    end
+    if o == O_MSRRD
+        ret CL_KERNEL
+    end
+    if o == O_MSRWR
+        ret CL_KERNEL
+    end
+    if o == O_CPUID
+        ret CL_KERNEL
+    end
+    if o == O_HWCALL
+        ret CL_KERNEL
+    end
     if o == O_CPU
         if ins.val != 1
             -- `hlt`, `cli`, `sti`; `pause` is a hint, ZERO.

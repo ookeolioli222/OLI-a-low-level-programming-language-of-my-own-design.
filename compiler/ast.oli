@@ -258,6 +258,46 @@ proc cr_name(r: u64) -> view u8
     ret "cr3"
 end
 
+proc hwplace_name(sub: u64) -> view u8
+    -- The name of a hardware place by its `sub`: 2 msr, 3 stack, 4 frame,
+    -- 5 gdt, 6 idt, 7 tr.
+    if sub == 2
+        ret "arch.x64.msr"
+    end
+    if sub == 3
+        ret "cpu.stack"
+    end
+    if sub == 4
+        ret "cpu.frame"
+    end
+    if sub == 5
+        ret "arch.x64.gdt"
+    end
+    if sub == 6
+        ret "arch.x64.idt"
+    end
+    ret "arch.x64.tr"
+end
+
+proc hwplace_type(sub: u64) -> view u8
+    -- What each hardware place holds: `msr` a u64, the stack and frame
+    -- pointers addresses, the descriptor tables a `ref core.x64.TablePointer`
+    -- (written only), `tr` a u16.
+    if sub == 2
+        ret "u64"
+    end
+    if sub == 3
+        ret "addr u8"
+    end
+    if sub == 4
+        ret "addr u8"
+    end
+    if sub == 7
+        ret "u16"
+    end
+    ret "ref core.x64.TablePointer"
+end
+
 proc cr_type(r: u64) -> view u8
     -- cr3 holds the physical address of the page tables (design 0012); the
     -- others are bit sets.
@@ -645,6 +685,16 @@ proc pe(cx: ref Ctx, n: u64)
         if nd.sub == 1
             emit(cx, "(arch.x64.")
             emit(cx, cr_name(nd.val))
+            emit(cx, ")")
+            ret
+        end
+        if nd.sub >= 2
+            emit(cx, "(")
+            emit(cx, hwplace_name(nd.sub))
+            if nd.sub == 2
+                emit(cx, " ")
+                pe(cx, kid1(cx, n))
+            end
             emit(cx, ")")
             ret
         end

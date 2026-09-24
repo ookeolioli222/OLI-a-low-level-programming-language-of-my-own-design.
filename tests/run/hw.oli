@@ -1,4 +1,5 @@
 module hw
+import core.x64
 -- Port I/O as indexed places and the interrupt flag as a command (design
 -- 0015): `port.u8[n]`, `port.u16[n]`, `port.u32[n]` read and written under
 -- `permit io.port` — `hw.load port.uN %p` / `hw.store port.uN %p, %v` in
@@ -7,13 +8,20 @@ module hw
 -- `arch.x64.cr0/2/3/4` as places under `permit cpu.control`, one
 -- `mov rax, crN` / `mov crN, rax` each, cr3 typed `physaddr`; and the
 -- `port T` value type — `port u8 (n)`, a constant `COM1 : port u8` —
--- with `p.in()` / `p.out(v)` as the same `in`/`out`. A process may
+-- with `p.in()` / `p.out(v)` as the same `in`/`out`; `arch.x64.msr[n]`,
+-- `arch.x64.gdt`/`idt` (written with a `ref core.x64.TablePointer`),
+-- `arch.x64.tr`, `cpu.stack` and `cpu.frame` as places, `cpu.jump`; and,
+-- run for real, `cpu.id(0)`, `cpu.tsc()`, the stack and frame pointers
+-- read, `cpu.call` of a procedure. A process may
 -- touch none of these, so the accesses wait for a byte that never arrives
 -- on stdin (the harness gives /dev/null): what is pinned is the OIR, the
 -- machine code (objdump finds each instruction once) and the exit status,
 -- 42.
 
 COM1 : port u8 := 0x3F8
+
+proc nop_proc()
+end
 
 proc probe(p : u16) -> u8
     permit io.port
@@ -22,7 +30,7 @@ end
 
 proc start -> s32
     entry
-    permit os.syscall, io.port, cpu.interrupt, cpu.control
+    permit os.syscall, io.port, cpu.interrupt, cpu.control, cpu.msr, memory.raw
     buf : [1]u8
     n := os.syscall(0, 0, buf[..].addr, 1)
     if n == 1
@@ -51,6 +59,24 @@ proc start -> s32
         ide.out(0x1234)
         y := ide.in()
         if u64(x) + u64(y) == 9 then ret 3
+        arch.x64.msr[0xC0000080] <- arch.x64.msr[0xC0000080]
+        arch.x64.tr <- arch.x64.tr
+        tp : core.x64.TablePointer <- core.x64.TablePointer { limit: 0, base: 0 }
+        arch.x64.gdt <- ref tp
+        arch.x64.idt <- ref tp
+        cpu.stack <- cpu.stack
+        cpu.frame <- cpu.frame
+        cpu.jump(addr u8 (0))
     end
+    id := cpu.id(0)
+    if id.a == 0 then ret 4
+    t1 := cpu.tsc()
+    t2 := cpu.tsc()
+    if t2 < t1 then ret 5
+    sp := cpu.stack
+    if u64.bits(sp) == 0 then ret 6
+    fp := cpu.frame
+    if u64.bits(sp) >= u64.bits(fp) then ret 7
+    cpu.call(nop_proc)
     ret 42
 end

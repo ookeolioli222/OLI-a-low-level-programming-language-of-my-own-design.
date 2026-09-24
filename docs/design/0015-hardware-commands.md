@@ -108,7 +108,7 @@ rejects any `hw.*` not covered by a permit.
 |---------|---------------------|
 | V0 (Phase 2a, before OIR is frozen) | `cpu.stack`, `cpu.frame`, `cpu.call`, `cpu.jump`, `cpu.halt`, `cpu.pause`, `cpu.id` |
 | V1 | `cpu.interrupts`, `cpu.fence`, `cpu.tsc`, `arch.x64.cr*`, `arch.x64.msr[]`, `arch.x64.gdt/idt/tr`, `arch.x64.segments`, `port.u8/u16/u32[]`, `mem.mmio`, `atomic.*` |
-| **implemented in `olic`** (2026-09-24) | `cpu.halt`, `cpu.pause`, `cpu.interrupts(on/off)`, `port.u8/u16/u32[n]` (read and written, `hw.load`/`hw.store`, one `in`/`out` each), `arch.x64.cr0/2/3/4/8` (read and written, one `mov` each, cr3 typed `physaddr`), `mem.mmio` — `tests/run/hw.oli`, `tests/run/mmio.oli`, `examples/kernel.oli` |
+| **implemented in `olic`** (2026-09-24) | `cpu.halt`, `cpu.pause`, `cpu.interrupts(on/off)`, `cpu.fence`, `cpu.id(leaf)` (`cpuid` into a `core.CpuId`), `cpu.tsc()`, `cpu.stack`/`cpu.frame` (read and written), `cpu.call(p)`, `cpu.jump(a)`, `port.u8/u16/u32[n]` (read and written, `hw.load`/`hw.store`, one `in`/`out` each), `arch.x64.cr0/2/3/4/8` (read and written, one `mov` each, cr3 typed `physaddr`), `arch.x64.msr[n]` (`rdmsr`/`wrmsr`), `arch.x64.gdt`/`idt` (written, `lgdt`/`lidt`), `arch.x64.tr` (`str`/`ltr`), `mem.mmio`, `atomic.*` — `tests/run/hw.oli`, `tests/run/mmio.oli`, `tests/run/atomic.oli`, `examples/kernel.oli`, whose entry is the "proposed" form above, verbatim but for `addr u8 (…)` around the stack's address. Still planned: `arch.x64.segments`, a read of the descriptor tables |
 
 ## Advantages
 - The kernel examples in `docs/KERNEL_PROGRAMMING.md` become pure Oli--; the

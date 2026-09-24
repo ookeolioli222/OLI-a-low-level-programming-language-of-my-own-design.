@@ -298,13 +298,17 @@ port.u8[0x3F8] <- b                  -- runs: port I/O as an indexed place (`io.
 
 | Command | Permit | Status |
 |---------|--------|--------|
-| `cpu.stack`, `cpu.frame`, `cpu.call`, `cpu.jump` | `cpu.control` | planned (`docs/design/0015-hardware-commands.md`) |
-| `cpu.id(leaf)` | — | planned |
+| `cpu.stack`, `cpu.frame` | `cpu.control` | **runs**: places typed `addr u8` — read one `mov rax, rsp/rbp`, written with `<-` one `mov rsp/rbp, rax`; what a `calls none` entry installs its stack with (`examples/kernel.oli`) |
+| `cpu.call(p)`, `cpu.jump(a)` | `cpu.control` | **runs**: a bare `call` to the procedure named / `jmp rax` to the `addr u8` given, for a frameless entry (`tests/run/hw.oli`, `examples/kernel.oli`) |
+| `cpu.id(leaf)` | — | **runs**: `cpuid` with `ecx` zero, the four registers as a `core.CpuId { a, b, c, d }` by value; rbx saved around it (`tests/run/hw.oli` runs it, the kernel example reads its vendor with it) |
 | `cpu.interrupts(on)` / `cpu.interrupts(off)` | `cpu.interrupt` | **runs**: one `sti` / `cli`, KERNEL (`tests/run/hw.oli`, `examples/kernel.oli`) |
 | `cpu.fence(order)` | — | **runs**: `acquire` is `lfence`, `release` `sfence`, `acq_rel` and `seq_cst` `mfence`, `relaxed` nothing at run time (`tests/run/atomic.oli`) |
-| `cpu.tsc()` | — | planned (V1) |
+| `cpu.tsc()` | — | **runs**: `rdtsc`, the pair as one `u64` |
 | `arch.x64.cr0/2/3/4/8` | `cpu.control` | **runs**: a place — read is one `mov rax, crN`, written with `<-` one `mov crN, rax`; cr3 is typed `physaddr`, the others `u64` (`tests/run/hw.oli`; the kernel example installs its page tables) |
-| `arch.x64.msr[n]`, `gdt`, `idt`, `tr`, `segments()` | `cpu.control` / `cpu.msr` | planned (V1) |
+| `arch.x64.msr[n]` | `cpu.msr` | **runs**: a `u64` place indexed by a `u32` — `rdmsr` / `wrmsr` |
+| `arch.x64.gdt`, `arch.x64.idt` | `cpu.control` | **runs**: written with a `ref core.x64.TablePointer` — `lgdt [rax]` / `lidt [rax]` (the kernel example installs its IDT so); not readable (no `sgdt`, E0900) |
+| `arch.x64.tr` | `cpu.control` | **runs**: a `u16` place — `str` / `ltr` |
+| `arch.x64.segments()` | `cpu.control` | planned (V1) |
 | `port.u8/u16/u32[n]` | `io.port` | **runs**: `n` a `u16`; a read is one `in` at the width, zero-extended, a write one `out` — `hw.load port.uN %p` / `hw.store port.uN %p, %v` in the OIR, volatile, KERNEL, kept by every pass (`tests/run/hw.oli`; the kernel example programs COM1, the PICs and the PIT with them) |
 | `port T (n)`, the `port T` type, `p.in()`, `p.out(v)` | `io.port` | **runs**: a port number as a value of the width of `T` (u8/u16/u32) — a constant `COM1 : port u8 := 0x3F8`, a local, a parameter; `p.in()` one `in`, `p.out(v)` one `out`, the same `hw.load`/`hw.store` as the place form (`tests/run/hw.oli`) |
 | `atomic.load/store/add/sub/and/or/xor/exchange/cas(ref, ..., order)` | — | **runs**: over a `ref T` / `rw ref T` to an integer of any width (`rw` for anything but `load`, `E0111`); `load` one move (signed re-extended), `store` one move or `xchg` for `seq_cst`, `add`/`sub` `lock xadd`, `exchange` `xchg`, `and`/`or`/`xor` a `lock cmpxchg` loop, `cas(ref, expected, desired, order) -> bool` `lock cmpxchg`; every read-modify-write answers the old value, wraps rather than traps, and is a full barrier; orders `relaxed acquire release acq_rel seq_cst` (`tests/run/atomic.oli`; `--explain` class ATOMIC) |
@@ -373,7 +377,7 @@ tool).
 | `--check` / `--check-syntax` | analyse / parse only | planned as flags; `show_sema`/`show_ast` with output discarded do it today |
 | `-- output: object` | a relocatable ELF (ET_REL) instead of an executable: the same sections at address 0, `.rela.text` (`R_X86_64_64`/`32S` for absolute addresses, `PLT32` per `extern` call), every procedure and static a symbol, an entry procedure also `_start`; no entry is required; links with `ld` or `cc -no-pie` (ABI.md §6) | **runs** |
 | `-- profile: PATH` | the target profile (FREESTANDING.md §2): `load_address`, `align_sections` and the order of `sections` apply; read relative to the working directory, a missing file stops the compilation | **runs** (`tests/freestanding/profile.oli`, `examples/kernel.oli`) |
-| `--freestanding` | target with no operating system, selected by a `-- target: freestanding` line at the top of the program: no `mmap` zones (`E0330`), no `os.syscall` (`E0401`), a `-> never` entry that is the first instruction of the image (`section ".text.boot"` first, no frame with `calls none`), `traps`, `cpu.halt()`; statics honour `align N`; a `-> never` body ends in `ud2`, never `ret`; `-- load: 0x100000` links and loads the image at that address (any address: the code names statics through 64-bit immediates; a `[static]` operand of a machine block needs the low or the top 2 GiB) | **runs** (`tests/run/freestanding.oli`, `tests/freestanding/`, `examples/kernel.oli` with its Multiboot2 header); the TOML profile file of FREESTANDING.md §2 is not read — its fields live in the source lines |
+| `--freestanding` | target with no operating system, selected by a `-- target: freestanding` line at the top of the program: no `mmap` zones (`E0330`), no `os.syscall` (`E0401`), a `-> never` entry that is the first instruction of the image (`section ".text.boot"` first, no frame with `calls none` — whose body is machine blocks without `in`/`out`, hardware statements (`cpu.stack <-`, `cpu.frame <-`, `cpu.call`, `cpu.jump`, `cpu.halt`, a descriptor table load) and `loop`s of those, their values in registers alone: a value that would need a frame slot is `E0900`), `traps`, `cpu.halt()`; statics honour `align N`; a `-> never` body ends in `ud2`, never `ret`; `-- load: 0x100000` links and loads the image at that address (any address: the code names statics through 64-bit immediates; a `[static]` operand of a machine block needs the low or the top 2 GiB) | **runs** (`tests/run/freestanding.oli`, `tests/freestanding/`, `examples/kernel.oli` with its Multiboot2 header); the TOML profile file of FREESTANDING.md §2 is not read — its fields live in the source lines |
 | `--lib DIR` | where imported modules are found | planned; `lib/` under the working directory today |
 | `oli new/build/run/test/fmt/check/bench/doc/package/fuzz` | the project tool | planned |
 | `./genesis/test.sh` | build the whole chain from 322 hand-written bytes and run every test, layers 0–5 | **runs** |
@@ -384,7 +388,7 @@ tool).
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
 review that is:
-a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause`/`interrupts`/`fence`, an `extern proc` in an executable (only an object file can carry an unresolved symbol), `each` over an `mmio` view and a record held by value inside device memory, `each` and `Name.at` over an `mmio` view,
+a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), `arch.x64.segments()`, a read of `arch.x64.gdt`/`idt`, a `calls none` body whose values would need a frame, an `extern proc` in an executable (only an object file can carry an unresolved symbol), `each` over an `mmio` view and a record held by value inside device memory, `each` and `Name.at` over an `mmio` view,
 an `os.syscall` with more than seven words (the number and six
 arguments are all the registers a system call has) and aggregate constants (`NAME : [N]T := { … }` or a layout constant, which would live in `.rodata`; reading one is refused, and the harness probes that).
 The front end already checks all of them, so a program using them is

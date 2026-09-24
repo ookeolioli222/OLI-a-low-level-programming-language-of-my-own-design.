@@ -179,6 +179,21 @@ O_FENCE := 44
 -- the destination address, `b` the source address or the byte (the
 -- destination again for zero), `val` the count. Never removed.
 O_MEMOP := 45
+-- The hardware places and commands of design 0015 beyond ports and control
+-- registers: `hw.load cpu.stack|cpu.frame|arch.x64.tr`, `hw.cmd cpu.tsc`
+-- (O_HWRD, `val` says which: 3 stack, 4 frame, 7 tr, 8 tsc); `hw.store
+-- cpu.stack|cpu.frame|arch.x64.gdt|idt|tr, %v`, `hw.cmd cpu.jump %v`
+-- (O_HWWR, `a` the value, `val` 3, 4, 5, 6, 7, 9); `hw.load arch.x64.msr %n`
+-- (O_MSRRD, `a` the number); `hw.store arch.x64.msr %n, %v` (O_MSRWR);
+-- `hw.cmd cpu.id %leaf, %area` (O_CPUID: the four registers into the
+-- area, a `core.CpuId`); `hw.cmd cpu.call NAME` (O_HWCALL, `c` the
+-- procedure). All volatile, class KERNEL.
+O_HWRD := 46
+O_HWWR := 47
+O_MSRRD := 48
+O_MSRWR := 49
+O_CPUID := 50
+O_HWCALL := 51
 -- The arithmetic modes: plain arithmetic traps, `wrap` wraps, `sat` clamps,
 -- `checked` answers with a failure (design 0006).
 AM_TRAP := 0
@@ -862,6 +877,18 @@ proc op_uses_a(op: u64) -> word
     if op == O_MEMOP
         ret 1
     end
+    if op == O_HWWR
+        ret 1
+    end
+    if op == O_MSRRD
+        ret 1
+    end
+    if op == O_MSRWR
+        ret 1
+    end
+    if op == O_CPUID
+        ret 1
+    end
     if op == O_CHKB
         ret 1
     end
@@ -915,6 +942,12 @@ proc op_uses_b(op: u64) -> word
         ret 1
     end
     if op == O_MEMOP
+        ret 1
+    end
+    if op == O_MSRWR
+        ret 1
+    end
+    if op == O_CPUID
         ret 1
     end
     if op == O_CHKB
@@ -1660,6 +1693,25 @@ proc gen_hwload(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         ob.lastlen <- 0
         ret emit_ins(ob, O_CRLOAD, 0, 0, 0, nd.val)
     end
+    if nd.sub == 2
+        -- `arch.x64.msr[n]`: `rdmsr`.
+        mn := gen_expr(pg, ob, mi, kid1(cx, n), "u32")
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_MSRRD, mn, 0, 0, 0)
+    end
+    if nd.sub >= 3
+        if nd.sub == 5
+            -- The descriptor tables are written, not read (no `sgdt`).
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        if nd.sub == 6
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_HWRD, 0, 0, 0, nd.sub)
+    end
     p := gen_expr(pg, ob, mi, kid1(cx, n), "u16")
     ob.lastlen <- 0
     ret emit_ins(ob, O_HWLOAD, p, nd.val / 8, 0, 0)
@@ -1674,6 +1726,19 @@ proc gen_store_hw(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
         -- `arch.x64.crN <- v`: `hw.store arch.x64.crN, %v`, one `mov crN, rax`.
         cv := gen_expr(pg, ob, mi, kid2(cx, n), cr_type(tn.val))
         emit_ins(ob, O_CRSTORE, cv, 0, 0, tn.val)
+        ret
+    end
+    if tn.sub == 2
+        -- `arch.x64.msr[n] <- v`: `wrmsr`.
+        mn := gen_expr(pg, ob, mi, kid1(cx, tgt), "u32")
+        mv := gen_expr(pg, ob, mi, kid2(cx, n), "u64")
+        emit_ins(ob, O_MSRWR, mn, mv, 0, 0)
+        ret
+    end
+    if tn.sub >= 3
+        -- The stack or frame pointer, a descriptor table, the task register.
+        hv := gen_expr(pg, ob, mi, kid2(cx, n), hwplace_type(tn.sub))
+        emit_ins(ob, O_HWWR, hv, 0, 0, tn.sub)
         ret
     end
     p := gen_expr(pg, ob, mi, kid1(cx, tgt), "u16")
@@ -2439,6 +2504,37 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     if ck == CK_PIN
         ret gen_port_in(pg, ob, mi, n)
+    end
+    if ck == CK_CPUID
+        -- `cpu.id(leaf)`: `cpuid` into a fresh area, a `core.CpuId` by value.
+        leaf := gen_expr(pg, ob, mi, sibling(cx, kid1(cx, n)), "u32")
+        area := tmp_area(ob, 16)
+        emit_ins(ob, O_CPUID, leaf, area, 0, 0)
+        ob.lastlen <- 0
+        ret area
+    end
+    if ck == CK_TSC
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_HWRD, 0, 0, 0, 8)
+    end
+    if ck == CK_CPUCALL
+        -- `cpu.call(p)`: a bare `call` to the procedure, for an entry with
+        -- no frame of its own.
+        cnn := node_at(cx, sibling(cx, kid1(cx, n)))
+        cpi := proc_find(pg, tok_text(cx, cnn.t0))
+        if cpi < 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        emit_ins(ob, O_HWCALL, 0, 0, u64.bits(cpi), 0)
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    if ck == CK_CPUJUMP
+        ja := gen_expr(pg, ob, mi, sibling(cx, kid1(cx, n)), "addr u8")
+        emit_ins(ob, O_HWWR, ja, 0, 0, 9)
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end
     if ck == CK_POUT
         ret gen_port_out(pg, ob, mi, n)
@@ -5311,34 +5407,93 @@ proc proc_traps(pg: ref Prog) -> word
 end
 
 proc body_is_machine(pg: ref Prog, mi: u64, node: u64) -> word
+    -- A `calls none` body (FREESTANDING.md §3): machine blocks without
+    -- `in`/`out`, hardware statements — a store into `cpu.stack`,
+    -- `cpu.frame`, a descriptor table or the task register, `cpu.call`,
+    -- `cpu.jump`, `cpu.halt`, `cpu.pause`, `cpu.interrupts` — and `loop`s
+    -- of those; nothing that needs a frame.
     cx := mod_ctx(pg, mi)
     k : u64 <- kid1(cx, node)
     while k != 0
         kn := node_at(cx, k)
         if kn.kind == N_BODY
-            s : u64 <- kid1(cx, k)
-            while s != 0
-                sn := node_at(cx, s)
-                if sn.kind != N_MACHINE
-                    ret 0
-                end
-                m : u64 <- kid1(cx, s)
-                while m != 0
-                    mn := node_at(cx, m)
-                    if mn.kind == N_MIN
-                        ret 0
-                    end
-                    if mn.kind == N_MOUT
-                        ret 0
-                    end
-                    m <- sibling(cx, m)
-                end
-                s <- sibling(cx, s)
+            if hw_stmts_ok(pg, mi, kid1(cx, k)) == 0
+                ret 0
             end
         end
         k <- sibling(cx, k)
     end
     ret 1
+end
+
+proc hw_stmts_ok(pg: ref Prog, mi: u64, first: u64) -> word
+    cx := mod_ctx(pg, mi)
+    s : u64 <- first
+    while s != 0
+        sn := node_at(cx, s)
+        if sn.kind == N_MACHINE
+            m : u64 <- kid1(cx, s)
+            while m != 0
+                mn := node_at(cx, m)
+                if mn.kind == N_MIN
+                    ret 0
+                end
+                if mn.kind == N_MOUT
+                    ret 0
+                end
+                m <- sibling(cx, m)
+            end
+        elif sn.kind == N_STORE
+            tn := node_at(cx, kid1(cx, s))
+            if tn.kind != N_HWPLACE
+                ret 0
+            end
+        elif sn.kind == N_EXPR
+            if hw_call_ok(pg, mi, kid1(cx, s)) == 0
+                ret 0
+            end
+        elif sn.kind == N_LOOP
+            b : u64 <- kid1(cx, s)
+            while b != 0
+                bn := node_at(cx, b)
+                if bn.kind == N_BODY
+                    if hw_stmts_ok(pg, mi, kid1(cx, b)) == 0
+                        ret 0
+                    end
+                end
+                b <- sibling(cx, b)
+            end
+        else
+            ret 0
+        end
+        s <- sibling(cx, s)
+    end
+    ret 1
+end
+
+proc hw_call_ok(pg: ref Prog, mi: u64, n: u64) -> word
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    if nd.kind != N_CALL
+        ret 0
+    end
+    ck := call_kind(pg, mi, n)
+    if ck == CK_HALT
+        ret 1
+    end
+    if ck == CK_PAUSE
+        ret 1
+    end
+    if ck == CK_INTS
+        ret 1
+    end
+    if ck == CK_CPUCALL
+        ret 1
+    end
+    if ck == CK_CPUJUMP
+        ret 1
+    end
+    ret 0
 end
 
 proc count_locals(pg: ref Prog) -> u64
@@ -5781,6 +5936,24 @@ proc oir_op_name(op: u64) -> view u8
     if op == O_MEMOP
         ret "mem"
     end
+    if op == O_HWRD
+        ret "hw.load"
+    end
+    if op == O_HWWR
+        ret "hw.store"
+    end
+    if op == O_MSRRD
+        ret "hw.load"
+    end
+    if op == O_MSRWR
+        ret "hw.store"
+    end
+    if op == O_CPUID
+        ret "hw.cmd"
+    end
+    if op == O_HWCALL
+        ret "hw.cmd"
+    end
     if op == O_ZALLOC
         ret "zone.alloc"
     end
@@ -6120,6 +6293,39 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         put(1, order_name(ins.val))
         ret
     end
+    if op == O_HWWR
+        if ins.val == 9
+            put(1, "hw.cmd cpu.jump ")
+        else
+            put(1, "hw.store ")
+            put(1, hwplace_name(ins.val))
+            put(1, ", ")
+        end
+        pv(ob, pg, ins.a)
+        ret
+    end
+    if op == O_MSRWR
+        put(1, "hw.store arch.x64.msr ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_CPUID
+        put(1, "hw.cmd cpu.id ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_HWCALL
+        put(1, "hw.cmd cpu.call ")
+        cpv := proc_at(pg, ins.c)
+        ccx := mod_ctx(pg, cpv.mod)
+        cnd := node_at(ccx, cpv.node)
+        put(1, tok_text(ccx, cnd.t0))
+        ret
+    end
     if op == O_MEMOP
         put(1, memop_name(ins.bop))
         put(1, " ")
@@ -6344,6 +6550,20 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     if op == O_CRLOAD
         put(1, "hw.load arch.x64.")
         put(1, cr_name(ins.val))
+        ret
+    end
+    if op == O_HWRD
+        if ins.val == 8
+            put(1, "hw.cmd cpu.tsc")
+        else
+            put(1, "hw.load ")
+            put(1, hwplace_name(ins.val))
+        end
+        ret
+    end
+    if op == O_MSRRD
+        put(1, "hw.load arch.x64.msr ")
+        pv(ob, pg, ins.a)
         ret
     end
     if op == O_ATOMIC

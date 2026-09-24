@@ -567,6 +567,96 @@ proc cr_place_follows(cx: ref Ctx) -> word
     ret tok_is_dot(cx, i + 3)
 end
 
+proc cpu_place_follows(cx: ref Ctx) -> word
+    -- `cpu.stack` / `cpu.frame`: the stack and frame pointers as places
+    -- (design 0015); `cpu.halt()` and the other commands stay calls.
+    i := tpos(cx)
+    if view_eq(tok_text(cx, i), "cpu") == 0
+        ret 0
+    end
+    if tok_is_dot(cx, i + 1) == 0
+        ret 0
+    end
+    m := tok_text(cx, i + 2)
+    if view_eq(m, "stack")
+        ret 1
+    end
+    if view_eq(m, "frame")
+        ret 1
+    end
+    ret 0
+end
+
+proc p_cpuplace(cx: ref Ctx) -> u64
+    -- `cpu.stack` is `sub` 3, `cpu.frame` `sub` 4.
+    n := mk(cx, N_HWPLACE, tpos(cx))
+    adv(cx)
+    adv(cx)
+    m := tok_text(cx, tpos(cx))
+    adv(cx)
+    nd := node_at(cx, n)
+    if view_eq(m, "stack")
+        nd.sub <- 3
+    else
+        nd.sub <- 4
+    end
+    nd.val <- 0
+    ret n
+end
+
+proc arch_kind(t: view u8) -> word
+    -- `arch.x64.NAME`: 1 a control register, 2 `msr`, 5 `gdt`, 6 `idt`,
+    -- 7 `tr`; -1 for anything else.
+    if cr_number(t) >= 0
+        ret 1
+    end
+    if view_eq(t, "msr")
+        ret 2
+    end
+    if view_eq(t, "gdt")
+        ret 5
+    end
+    if view_eq(t, "idt")
+        ret 6
+    end
+    if view_eq(t, "tr")
+        ret 7
+    end
+    ret -1
+end
+
+proc p_archplace(cx: ref Ctx) -> u64
+    -- `arch.x64.cr0/2/3/4/8` (`sub` 1, the register in `val`),
+    -- `arch.x64.msr[n]` (`sub` 2, the index a kid), `arch.x64.gdt` (5),
+    -- `arch.x64.idt` (6), `arch.x64.tr` (7).
+    n := mk(cx, N_HWPLACE, tpos(cx))
+    adv(cx)
+    adv(cx)
+    adv(cx)
+    adv(cx)
+    nm := tok_text(cx, tpos(cx))
+    k := arch_kind(nm)
+    if k < 0
+        diag_at(cx, 11, tpos(cx))
+        adv(cx)
+        ret n
+    end
+    nd := node_at(cx, n)
+    nd.sub <- u32.wrap(u64.bits(k))
+    if k == 1
+        nd.val <- u64.bits(cr_number(nm))
+    else
+        nd.val <- 0
+    end
+    adv(cx)
+    if k == 2
+        open_bracket(cx)
+        add_kid(cx, n, p_expr(cx))
+        close_bracket(cx, OP_RBRACK)
+    end
+    ret n
+end
+
 proc cr_number(t: view u8) -> word
     if view_eq(t, "cr0")
         ret 0
@@ -713,7 +803,10 @@ proc p_primary(cx: ref Ctx) -> u64
     end
     if at_ident(cx)
         if cr_place_follows(cx) == 1
-            ret p_crplace(cx)
+            ret p_archplace(cx)
+        end
+        if cpu_place_follows(cx) == 1
+            ret p_cpuplace(cx)
         end
         ret p_simple(cx, N_NAME)
     end

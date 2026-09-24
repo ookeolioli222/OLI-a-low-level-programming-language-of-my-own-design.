@@ -4,6 +4,9 @@
   (static 2 len=27)
   (static 3 len=27)
   (static 4 len=27)
+  (proc nop_proc locals=0
+    (bb0
+      ret))
   (proc probe locals=1
     (bb0
       %0 = param 0
@@ -11,15 +14,15 @@
       %2 = load frame.0
       %3 = hw.load port.u8 %2
       ret %3))
-  (proc start locals=13 temps=1 entry
+  (proc start locals=19 temps=5 entry
     (bb0
       %0 = addr.of frame.0
       %1 = const 1
       %2 = const 0
-      store frame.13, %2
+      store frame.21, %2
       jump bb1)
     (bb1 preds bb0 bb2
-      %5 = load frame.13
+      %5 = load frame.21
       %6 = cmp.lt %5, %1
       branch %6, bb2, bb3)
     (bb2 preds bb1
@@ -29,7 +32,7 @@
       raw.store.64 %10, %2
       %12 = const 1
       %13 = add %5, %12
-      store frame.13, %13
+      store frame.21, %13
       jump bb1)
     (bb3 preds bb1
       %17 = const 0
@@ -154,7 +157,98 @@
       %128 = const 3
       ret %128)
     (bb10 preds bb8
+      %131 = const 3221225600
+      %132 = const 3221225600
+      %133 = hw.load arch.x64.msr %132
+      hw.store arch.x64.msr %131, %133
+      %135 = hw.load arch.x64.tr
+      hw.store arch.x64.tr, %135
+      %137 = addr.of frame.23
+      %138 = const 0
+      raw.store.64 %137, %138
+      %140 = const 8
+      %141 = add %137, %140
+      raw.store.64 %141, %138
+      %143 = const 0
+      raw.store.16 %137, %143
+      %145 = const 0
+      %146 = const 2
+      %147 = add %137, %146
+      raw.store.64 %147, %145
+      %149 = addr.of frame.14
+      %150 = raw.load.64 %137
+      raw.store.64 %149, %150
+      %152 = const 8
+      %153 = add %137, %152
+      %154 = add %149, %152
+      %155 = raw.load.16 %153
+      raw.store.16 %154, %155
+      %157 = addr.of frame.14
+      hw.store arch.x64.gdt, %157
+      %159 = addr.of frame.14
+      hw.store arch.x64.idt, %159
+      %161 = hw.load cpu.stack
+      hw.store cpu.stack, %161
+      %163 = hw.load cpu.frame
+      hw.store cpu.frame, %163
+      %165 = const 0
+      hw.cmd cpu.jump %165
+      %167 = const 0
       jump bb11)
     (bb11 preds bb3 bb10
-      %134 = const 42
-      ret %134)))
+      %171 = const 0
+      %172 = addr.of frame.25
+      hw.cmd cpu.id %171, %172
+      %174 = addr.of frame.16
+      %175 = raw.load.64 %172
+      raw.store.64 %174, %175
+      %177 = const 8
+      %178 = add %172, %177
+      %179 = add %174, %177
+      %180 = raw.load.64 %178
+      raw.store.64 %179, %180
+      %182 = addr.of frame.16
+      %183 = raw.load.32 %182
+      %184 = const 0
+      %185 = cmp.eq %183, %184
+      branch %185, bb12, bb13)
+    (bb12 preds bb11
+      %187 = const 4
+      ret %187)
+    (bb13 preds bb11
+      %190 = hw.cmd cpu.tsc
+      store frame.17, %190
+      %192 = hw.cmd cpu.tsc
+      store frame.18, %192
+      %194 = load frame.18
+      %195 = load frame.17
+      %196 = cmp.lt %194, %195
+      branch %196, bb14, bb15)
+    (bb14 preds bb13
+      %198 = const 5
+      ret %198)
+    (bb15 preds bb13
+      %201 = hw.load cpu.stack
+      store frame.19, %201
+      %203 = load frame.19
+      %204 = const 0
+      %205 = cmp.eq %203, %204
+      branch %205, bb16, bb17)
+    (bb16 preds bb15
+      %207 = const 6
+      ret %207)
+    (bb17 preds bb15
+      %210 = hw.load cpu.frame
+      store frame.20, %210
+      %212 = load frame.19
+      %213 = load frame.20
+      %214 = cmp.ge %212, %213
+      branch %214, bb18, bb19)
+    (bb18 preds bb17
+      %216 = const 7
+      ret %216)
+    (bb19 preds bb17
+      hw.cmd cpu.call nop_proc
+      %220 = const 0
+      %221 = const 42
+      ret %221)))

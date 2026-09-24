@@ -125,8 +125,12 @@ end
 
 - `entry` marks the ELF entry symbol. There is exactly one per program.
 - `calls none` disables the prologue/epilogue; the body holds only hardware
-  statements (`cpu.stack <- …`, `cpu.call(...)`, `cpu.halt()`) and `machine` blocks —
-  the compiler cannot promise a valid stack, so no locals and no ordinary calls.
+  statements (`cpu.stack <- …`, `cpu.frame <- …`, `cpu.call(...)`, `cpu.jump(...)`,
+  `cpu.halt()`, a descriptor table load), `loop`s of those and `machine` blocks
+  without `in`/`out` — the compiler cannot promise a valid stack, so no locals
+  and no ordinary calls; the values of those statements live in the
+  callee-saved registers, and one that would need a frame slot is `E0900`
+  (stage 30, run: `examples/kernel.oli` starts so).
 - `section` places code or data in a named section; the profile decides the order.
 - `align N` on a static place or procedure sets its alignment.
 - `-> never` procedures never emit `ret`; the compiler verifies the body cannot fall through.

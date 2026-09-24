@@ -38,7 +38,7 @@ construct answers each system-programming requirement.
 | explicit alignment | `align N` on layouts, fields, statics, procedures, zone allocations | V0 |
 | bit fields | `bit` and `bits N` field types inside `packed` layouts | V1 |
 | CPU intrinsics | `cpu.halt`, `cpu.pause`, `cpu.cpuid`, `cpu.rdmsr/wrmsr`, `cpu.cr3`, `cpu.interrupts(on/off)`, `cpu.tsc`, `cpu.lgdt/lidt` | V0 (halt, pause), V1 (rest) |
-| hardware places and commands | `arch.x64.cr0/2/3/4/8 <- p` and read (**runs**), `port.u8[n] <- b` (**runs**), `cpu.halt/pause/interrupts` (**runs**); `cpu.stack <- a`, `cpu.call(p)`, `cpu.id(leaf)`, `arch.x64.gdt <- ref t`, `arch.x64.segments(...)` (design 0015) | V0 (runs), V1 (the rest) |
+| hardware places and commands | `arch.x64.cr0/2/3/4/8`, `arch.x64.msr[n]`, `arch.x64.gdt/idt <- ref t`, `arch.x64.tr`, `cpu.stack`, `cpu.frame`, `port.u8[n]`, `cpu.halt/pause/interrupts/fence`, `cpu.id(leaf)`, `cpu.tsc()`, `cpu.call(p)`, `cpu.jump(a)` — **run** (design 0015; `tests/run/hw.oli`, `examples/kernel.oli`); `arch.x64.segments(...)` | V0 (runs), V1 (`segments`) |
 | inline machine code | `machine x64 ... end` with `in`/`out`/`clobber`, assembled by `olic` — the escape hatch | V0 |
 | physical memory | `physaddr` type; `zone ... at`; `memory.raw` | V0 |
 | virtual memory | `addr T` is a virtual address; `core.x64.paging` (`lib/core/x64/paging.oli`): entry flags, `make_entry`, `entry_target`, the four indices and two offsets, `identity_2m` — **runs** (`tests/run/paging.oli`); `arch.x64.cr3 <- physaddr(u64(pml4.addr))` in the kernel example | V0 |
