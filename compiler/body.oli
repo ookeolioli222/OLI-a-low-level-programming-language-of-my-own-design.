@@ -1839,6 +1839,18 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
             else
                 patomic_arg(pg, mi, a2, ref_elem(ety(pg, mi, kid2(cx, n), b[0..0])))
             end
+        elif memop_kind(ck) >= 0
+            if j == 0
+                pexpr(pg, mi, a2, "rw view u8")
+            elif ck == CK_COPY
+                if j == 1
+                    pexpr(pg, mi, a2, "view u8")
+                else
+                    pexpr(pg, mi, a2, "uword")
+                end
+            else
+                pexpr(pg, mi, a2, "u8")
+            end
         elif ck == CK_PUT
             if j == 0
                 pexpr(pg, mi, a2, "rw view u8")
@@ -3110,6 +3122,10 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
     if ck == CK_FENCE
         ret
     end
+    if memop_kind(ck) >= 0
+        tmemop(pg, mi, n, ck)
+        ret
+    end
     if ck == CK_ATOMIC
         -- The ref, then the values at its element type, then the order.
         tatomic(pg, mi, n)
@@ -3139,6 +3155,47 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
         end
         j <- j + 1
         a2 <- sibling(cx, a2)
+    end
+end
+
+proc memop_kind(ck: word) -> word
+    -- 0 `mem.copy(dst, src, n)`, 1 `mem.set(dst, b)`, 2 `mem.zero(dst)`,
+    -- 3 `mem.secure_zero(dst)`; -1 for any other call.
+    if ck == CK_COPY
+        ret 0
+    end
+    if ck == CK_SET
+        ret 1
+    end
+    if ck == CK_ZERO
+        ret 2
+    end
+    if ck == CK_SECZERO
+        ret 3
+    end
+    ret -1
+end
+
+proc tmemop(pg: rw ref Prog, mi: u64, n: u64, ck: word)
+    -- The destination is a writable byte view; `copy` takes a source view
+    -- and a count, `set` a byte.
+    cx := mod_ctx(pg, mi)
+    a : u64 <- kid2(cx, n)
+    j : u64 <- 0
+    while a != 0
+        if j == 0
+            texpr(pg, mi, a, "rw view u8")
+        elif ck == CK_COPY
+            if j == 1
+                texpr(pg, mi, a, "view u8")
+            else
+                texpr(pg, mi, a, "uword")
+            end
+        else
+            texpr(pg, mi, a, "u8")
+        end
+        j <- j + 1
+        a <- sibling(cx, a)
     end
 end
 

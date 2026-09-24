@@ -1024,6 +1024,51 @@ proc lower_atomic(ob: rw ref Oir, mc: ref Mach, i: u64)
     st_val(ob, mc, R_AX, i)
 end
 
+proc lower_memop(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `mem.copy`: rdi, rsi, rcx and `rep movsb` — forwards when the
+    -- destination is not above the source, else from the last byte down
+    -- with the direction flag set and cleared again, so an overlap copies
+    -- right. `mem.set`/`zero`/`secure_zero`: al, rcx and `rep stosb`.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_DI, ins.a)
+    ld_val(ob, mc, R_CX, ins.val)
+    if ins.bop == 0
+        ld_val(ob, mc, R_SI, ins.b)
+        cb(ob, 72)
+        cb(ob, 57)
+        cb(ob, 247)
+        cb(ob, 118)
+        cb(ob, 16)
+        cb(ob, 72)
+        cb(ob, 141)
+        cb(ob, 116)
+        cb(ob, 14)
+        cb(ob, 255)
+        cb(ob, 72)
+        cb(ob, 141)
+        cb(ob, 124)
+        cb(ob, 15)
+        cb(ob, 255)
+        cb(ob, 253)
+        cb(ob, 243)
+        cb(ob, 164)
+        cb(ob, 252)
+        cb(ob, 235)
+        cb(ob, 2)
+        cb(ob, 243)
+        cb(ob, 164)
+        ret
+    end
+    if ins.bop == 1
+        ld_val(ob, mc, R_AX, ins.b)
+    else
+        cb(ob, 49)
+        cb(ob, 192)
+    end
+    cb(ob, 243)
+    cb(ob, 170)
+end
+
 proc lower_fence(ob: rw ref Oir, i: u64)
     -- `cpu.fence`: `lfence` for acquire, `sfence` for release, `mfence` for
     -- acq_rel and seq_cst; relaxed orders nothing at run time.
@@ -1839,6 +1884,10 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_FENCE
         lower_fence(ob, i)
+        ret
+    end
+    if op == O_MEMOP
+        lower_memop(ob, mc, i)
         ret
     end
     if op == O_CRSTORE

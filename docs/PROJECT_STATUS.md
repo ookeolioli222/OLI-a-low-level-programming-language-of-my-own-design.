@@ -1110,12 +1110,31 @@ constant in `.rodata`).
   construct: atomics are what a kernel, or a program starting threads
   through `os.syscall`, needs to be correct.
 
+## Implemented in back-end stage 26 (2026-09-24): `mem.copy`, `mem.set`, `mem.zero`, `mem.secure_zero`
+
+- **`mem.copy(dst, src, n)`** — `dst` a `rw view u8` (`E0111` otherwise),
+  `src` a `view u8`, `n` a `uword` — checks `n` against both views
+  (`check.range`, the `bounds` trap) and is one OIR instruction, `mem.copy
+  %dst, %src, %n`, lowered to `rep movsb`: forwards when the destination
+  does not lie above the source, else from the last byte down with the
+  direction flag set and cleared, so an overlap copies right.
+  **`mem.set(dst, b)`**, **`mem.zero(dst)`** and **`mem.secure_zero(dst)`**
+  fill the whole view with `rep stosb`; none of the four is ever removed by
+  a pass (`secure_zero` needs exactly that), and `--explain` bills them
+  COPY. The `.sema` form types the arguments as the intrinsics expect.
+- `tests/run/memops.oli` runs sixteen checks — a straight copy, an overlap
+  forwards and backwards, a copy of nothing, a fill, a zero and a secure
+  zero; `tests/run/trap/memcopy.oli` traps `bounds` on a count the
+  destination cannot hold. The harness counts the `rep movsb`, `rep stosb`,
+  `std` and `cld` of the image and the eight operations after the passes.
+  Nothing of `mem.*` is `E0900` now.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 26,655 lines) into
+compiles its own source (`compiler/`, seventeen modules, 26,895 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,042,072 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,051,272 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

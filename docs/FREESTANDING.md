@@ -170,10 +170,9 @@ A kernel imports `core` only. `olic --freestanding` rejects any import of `std`.
 1. No instruction sequence is emitted that the program did not write or that
    `--explain` does not list (prologues, checks, trap calls are listed).
 2. No symbol is required from outside the program: no libc, no `memcpy`
-   (`mem.copy` is generated inline or as an internal `core` procedure that is
-   part of the binary; the intrinsic itself is planned — `mem.copy`, `mem.set`,
-   `mem.zero` and `mem.secure_zero` are currently `E0900`; `mem.mmio` and the
-   `get_*`/`put_*` accessors run).
+   (`mem.copy` is `rep movsb` inline, `mem.set`/`zero`/`secure_zero` `rep
+   stosb` inline — stage 26; `mem.mmio` and the `get_*`/`put_*` accessors run
+   as well).
 3. No red-zone use, no stack probes, no TLS access, no floating point unless
    the program uses `f32`/`f64` (then SSE must be enabled by the program before use).
 4. The image is deterministic: identical input produces identical bytes.

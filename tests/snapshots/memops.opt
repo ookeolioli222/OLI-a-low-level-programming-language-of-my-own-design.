@@ -1,0 +1,260 @@
+(oir
+  (static 0 removed)
+  (static 1 len=27)
+  (static 2 removed)
+  (static 3 removed)
+  (static 4 removed)
+  (static 5 removed)
+  (static 6 removed)
+  (static 7 removed)
+  (static 8 removed)
+  (static 9 removed)
+  (static 10 removed)
+  (static 11 removed)
+  (static 12 removed)
+  (static 13 removed)
+  (static 14 removed)
+  (static 15 removed)
+  (static 16 removed)
+  (static 17 removed)
+  (static 18 removed)
+  (static 19 removed)
+  (static 20 removed)
+  (static 21 removed)
+  (static 22 removed)
+  (static 23 removed)
+  (static 24 removed)
+  (static 25 removed)
+  (static 26 removed)
+  (static 27 removed)
+  (proc start locals=4 temps=2 entry
+    (bb0
+      %0 = addr.of frame.1
+      %1 = const 2
+      %2 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %3 = phi [bb0 %2] [bb2 %10]
+      %4 = cmp.lt %3, %1
+      branch %4, bb2, bb3)
+    (bb2 preds bb1
+      %5 = const 8
+      %6 = mul %3, %5
+      %7 = add %0, %6
+      raw.store.64 %7, %2
+      %9 = const 1
+      %10 = add %3, %9
+      jump bb1)
+    (bb3 preds bb1
+      %11 = addr.of frame.3
+      jump bb4)
+    (bb4 preds bb3 bb5
+      %14 = phi [bb3 %2] [bb5 %21]
+      %15 = cmp.lt %14, %1
+      branch %15, bb5, bb6)
+    (bb5 preds bb4
+      %16 = const 8
+      %17 = mul %14, %16
+      %18 = add %11, %17
+      raw.store.64 %18, %2
+      %20 = const 1
+      %21 = add %14, %20
+      jump bb4)
+    (bb6 preds bb4
+      jump bb7)
+    (bb7 preds bb6 bb8
+      %23 = phi [bb6 %2] [bb8 %31]
+      %24 = const 16
+      %25 = cmp.lt %23, %24
+      branch %25, bb8, bb9)
+    (bb8 preds bb7
+      ; check.bounds %23 -- removed: proof(loop-bound)
+      %29 = add %0, %23
+      %30 = const 1
+      %31 = add %23, %30
+      check.overflow %31
+      %32 = trunc.8 %31
+      raw.store.8 %29, %32
+      ; check.bounds %36 -- removed: proof(dominance)
+      %37 = add %11, %23
+      raw.store.8 %37, %2
+      ; check.overflow %41 -- removed: proof(dominance)
+      jump bb7)
+    (bb9 preds bb7
+      ; check.bounds %44 -- removed: proof(constant)
+      %46 = add %11, %2
+      ; check.bounds %50 -- removed: proof(constant)
+      %52 = add %0, %2
+      ; check.bounds %55 -- removed: proof(constant)
+      ; check.bounds %55 -- removed: proof(constant)
+      mem.copy %46, %52, %24
+      ; check.bounds %62 -- removed: proof(constant)
+      %65 = raw.load.8 %46
+      %66 = const 1
+      %67 = cmp.ne %65, %66
+      branch %67, bb10, bb11)
+    (bb10 preds bb9
+      ret %66)
+    (bb11 preds bb9
+      %71 = const 15
+      ; check.bounds %71 -- removed: proof(constant)
+      %73 = add %11, %71
+      %74 = raw.load.8 %73
+      %76 = cmp.ne %74, %24
+      branch %76, bb12, bb13)
+    (bb12 preds bb11
+      ret %1)
+    (bb13 preds bb11
+      %80 = const 4
+      ; check.bounds %80 -- removed: proof(constant)
+      %82 = add %11, %80
+      %83 = const 12
+      ; check.bounds %86 -- removed: proof(constant)
+      %90 = const 8
+      ; check.bounds %91 -- removed: proof(constant)
+      ; check.bounds %91 -- removed: proof(constant)
+      mem.copy %82, %46, %90
+      ; check.bounds %98 -- removed: proof(constant)
+      %101 = raw.load.8 %82
+      %103 = cmp.ne %101, %66
+      branch %103, bb14, bb15)
+    (bb14 preds bb13
+      %104 = const 3
+      ret %104)
+    (bb15 preds bb13
+      %107 = const 11
+      ; check.bounds %107 -- removed: proof(constant)
+      %109 = add %11, %107
+      %110 = raw.load.8 %109
+      %112 = cmp.ne %110, %90
+      branch %112, bb16, bb17)
+    (bb16 preds bb15
+      ret %80)
+    (bb17 preds bb15
+      ; check.bounds %116 -- removed: proof(constant)
+      %118 = add %11, %83
+      %119 = raw.load.8 %118
+      %120 = const 13
+      %121 = cmp.ne %119, %120
+      branch %121, bb18, bb19)
+    (bb18 preds bb17
+      %122 = const 5
+      ret %122)
+    (bb19 preds bb17
+      ; check.bounds %125 -- removed: proof(constant)
+      ; check.bounds %131 -- removed: proof(constant)
+      %133 = add %0, %1
+      %134 = const 14
+      ; check.bounds %136 -- removed: proof(constant)
+      ; check.bounds %136 -- removed: proof(constant)
+      mem.copy %52, %133, %80
+      ; check.bounds %143 -- removed: proof(constant)
+      %146 = raw.load.8 %52
+      %147 = const 3
+      %148 = cmp.ne %146, %147
+      branch %148, bb20, bb21)
+    (bb20 preds bb19
+      %149 = const 6
+      ret %149)
+    (bb21 preds bb19
+      ; check.bounds %152 -- removed: proof(constant)
+      %154 = add %0, %147
+      %155 = raw.load.8 %154
+      %156 = const 6
+      %157 = cmp.ne %155, %156
+      branch %157, bb22, bb23)
+    (bb22 preds bb21
+      %158 = const 7
+      ret %158)
+    (bb23 preds bb21
+      ; check.bounds %161 -- removed: proof(constant)
+      %163 = add %0, %80
+      %164 = raw.load.8 %163
+      %165 = const 5
+      %166 = cmp.ne %164, %165
+      branch %166, bb24, bb25)
+    (bb24 preds bb23
+      ret %90)
+    (bb25 preds bb23
+      ; check.bounds %170 -- removed: proof(constant)
+      ; check.bounds %176 -- removed: proof(constant)
+      ; check.bounds %181 -- removed: proof(constant)
+      ; check.bounds %181 -- removed: proof(constant)
+      mem.copy %52, %46, %2
+      ; check.bounds %188 -- removed: proof(constant)
+      %191 = raw.load.8 %52
+      %193 = cmp.ne %191, %147
+      branch %193, bb26, bb27)
+    (bb26 preds bb25
+      %194 = const 9
+      ret %194)
+    (bb27 preds bb25
+      ; check.bounds %197 -- removed: proof(constant)
+      %202 = const 171
+      mem.set %52, %202, %90
+      ; check.bounds %207 -- removed: proof(constant)
+      %210 = raw.load.8 %52
+      %212 = cmp.ne %210, %202
+      branch %212, bb28, bb29)
+    (bb28 preds bb27
+      %213 = const 10
+      ret %213)
+    (bb29 preds bb27
+      %216 = const 7
+      ; check.bounds %216 -- removed: proof(constant)
+      %218 = add %0, %216
+      %219 = raw.load.8 %218
+      %221 = cmp.ne %219, %202
+      branch %221, bb30, bb31)
+    (bb30 preds bb29
+      ret %107)
+    (bb31 preds bb29
+      ; check.bounds %225 -- removed: proof(constant)
+      %227 = add %0, %90
+      %228 = raw.load.8 %227
+      %229 = const 9
+      %230 = cmp.ne %228, %229
+      branch %230, bb32, bb33)
+    (bb32 preds bb31
+      ret %83)
+    (bb33 preds bb31
+      ; check.bounds %234 -- removed: proof(constant)
+      mem.zero %52, %24
+      ; check.bounds %242 -- removed: proof(constant)
+      %245 = raw.load.8 %52
+      %247 = cmp.ne %245, %2
+      branch %247, bb34, bb35)
+    (bb34 preds bb33
+      ret %120)
+    (bb35 preds bb33
+      ; check.bounds %251 -- removed: proof(constant)
+      %253 = add %0, %71
+      %254 = raw.load.8 %253
+      %256 = cmp.ne %254, %2
+      branch %256, bb36, bb37)
+    (bb36 preds bb35
+      ret %134)
+    (bb37 preds bb35
+      ; check.bounds %260 -- removed: proof(constant)
+      mem.secure_zero %46, %24
+      ; check.bounds %268 -- removed: proof(constant)
+      %271 = raw.load.8 %46
+      %273 = cmp.ne %271, %2
+      branch %273, bb38, bb39)
+    (bb38 preds bb37
+      ret %71)
+    (bb39 preds bb37
+      ; check.bounds %277 -- removed: proof(constant)
+      %280 = raw.load.8 %73
+      %282 = cmp.ne %280, %2
+      branch %282, bb40, bb41)
+    (bb40 preds bb39
+      ret %24)
+    (bb41 preds bb39
+      ; check.bounds %287 -- removed: proof(constant)
+      ; check.bounds %293 -- removed: proof(constant)
+      ; check.bounds %297 -- removed: proof(constant)
+      ; check.bounds %297 -- removed: proof(constant)
+      mem.copy %46, %52, %147
+      %302 = const 42
+      ret %302)))

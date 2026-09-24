@@ -518,6 +518,9 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
                 if view_eq(tok_text(cx, base.t0), "atomic")
                     check_atomic(pg, mi, n)
                 end
+                if view_eq(tok_text(cx, base.t0), "mem")
+                    check_memop(pg, mi, n)
+                end
                 if view_eq(tok_text(cx, base.t0), "cpu")
                     if view_eq(tok_text(cx, callee.t0), "fence")
                         check_fence(pg, mi, n)
@@ -650,6 +653,48 @@ proc check_atomic(pg: rw ref Prog, mi: u64, n: u64)
         end
     end
     check_order_arg(pg, mi, last)
+end
+
+proc check_memop(pg: rw ref Prog, mi: u64, n: u64)
+    -- `mem.copy(dst, src, n)`, `mem.set(dst, b)`, `mem.zero(dst)`,
+    -- `mem.secure_zero(dst)`: the arity, and a writable destination.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    callee := node_at(cx, kid1(cx, n))
+    m := tok_text(cx, callee.t0)
+    want : u64 <- 0
+    if view_eq(m, "copy")
+        want <- 3
+    end
+    if view_eq(m, "set")
+        want <- 2
+    end
+    if view_eq(m, "zero")
+        want <- 1
+    end
+    if view_eq(m, "secure_zero")
+        want <- 1
+    end
+    if want == 0
+        ret
+    end
+    cnt : u64 <- 0
+    a : u64 <- kid2(cx, n)
+    while a != 0
+        cnt <- cnt + 1
+        a <- sibling(cx, a)
+    end
+    if cnt != want
+        sdiag(pg, mi, 900, callee.t0)
+        ret
+    end
+    a0 := kid2(cx, n)
+    dt := ety(pg, mi, a0, b[0..0])
+    if starts_with(dt, "rw ") == 0
+        if dt.len > 0
+            sdiag(pg, mi, 111, first_tok(pg, mi, a0))
+        end
+    end
 end
 
 proc check_fence(pg: rw ref Prog, mi: u64, n: u64)

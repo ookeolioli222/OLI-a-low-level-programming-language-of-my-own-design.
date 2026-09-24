@@ -174,6 +174,11 @@ O_CRSTORE := 42
 -- ORDER` is a barrier alone.
 O_ATOMIC := 43
 O_FENCE := 44
+-- `mem.copy %dst, %src, %n`, `mem.set %dst, %b, %n`, `mem.zero %dst, %n`,
+-- `mem.secure_zero %dst, %n` (OIR_SPEC §4): `bop` says which (0..3), `a`
+-- the destination address, `b` the source address or the byte (the
+-- destination again for zero), `val` the count. Never removed.
+O_MEMOP := 45
 -- The arithmetic modes: plain arithmetic traps, `wrap` wraps, `sat` clamps,
 -- `checked` answers with a failure (design 0006).
 AM_TRAP := 0
@@ -683,6 +688,9 @@ proc op_uses_a(op: u64) -> word
     if op == O_ATOMIC
         ret 1
     end
+    if op == O_MEMOP
+        ret 1
+    end
     if op == O_CHKB
         ret 1
     end
@@ -735,6 +743,9 @@ proc op_uses_b(op: u64) -> word
     if op == O_ATOMIC
         ret 1
     end
+    if op == O_MEMOP
+        ret 1
+    end
     if op == O_CHKB
         ret 1
     end
@@ -770,6 +781,9 @@ proc op_uses_val(op: u64) -> word
         ret 1
     end
     if op == O_ZFROM
+        ret 1
+    end
+    if op == O_MEMOP
         ret 1
     end
     ret 0
@@ -1975,6 +1989,57 @@ proc gen_atomic(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ret i
 end
 
+proc gen_memop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, kind: u64) -> u64
+    -- `mem.copy(dst, src, n)`: `n` within both views (`check.range`, the
+    -- `bounds` trap), then the move; `mem.set(dst, b)`, `mem.zero(dst)` and
+    -- `mem.secure_zero(dst)` over the whole destination.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    a0 := sibling(cx, kid1(cx, n))
+    dst := gen_expr(pg, ob, mi, a0, "rw view u8")
+    dlen := ob.lastlen
+    a1 := sibling(cx, a0)
+    if kind == 0
+        src := gen_expr(pg, ob, mi, a1, "view u8")
+        slen := ob.lastlen
+        cnt := gen_expr(pg, ob, mi, sibling(cx, a1), "uword")
+        zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        ck1 := emit_ins(ob, O_CHKR, zero, cnt, 0, dlen)
+        ci1 := ins_at(ob, ck1)
+        ci1.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+        ck2 := emit_ins(ob, O_CHKR, zero, cnt, 0, slen)
+        ci2 := ins_at(ob, ck2)
+        ci2.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+        m := emit_ins(ob, O_MEMOP, dst, src, 0, cnt)
+        mi0 := ins_at(ob, m)
+        mi0.bop <- 0
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    bv : u64 <- dst
+    if kind == 1
+        bv <- gen_expr(pg, ob, mi, a1, "u8")
+    end
+    m2 := emit_ins(ob, O_MEMOP, dst, bv, 0, dlen)
+    mi2 := ins_at(ob, m2)
+    mi2.bop <- kind
+    ob.lastlen <- 0
+    ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+end
+
+proc memop_name(k: u64) -> view u8
+    if k == 0
+        ret "mem.copy"
+    end
+    if k == 1
+        ret "mem.set"
+    end
+    if k == 2
+        ret "mem.zero"
+    end
+    ret "mem.secure_zero"
+end
+
 proc gen_mmio(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `mem.mmio(T, a, n)`: the view (a, n) of device memory — no instruction
     -- of its own; what makes it `mmio` is every access through it, which
@@ -2152,6 +2217,9 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     if ck == CK_ATOMIC
         ret gen_atomic(pg, ob, mi, n)
+    end
+    if memop_kind(ck) >= 0
+        ret gen_memop(pg, ob, mi, n, u64.bits(memop_kind(ck)))
     end
     if ck == CK_FENCE
         fa := sibling(cx, kid1(cx, n))
@@ -5471,6 +5539,9 @@ proc oir_op_name(op: u64) -> view u8
     if op == O_FENCE
         ret "cpu.fence"
     end
+    if op == O_MEMOP
+        ret "mem"
+    end
     if op == O_ZALLOC
         ret "zone.alloc"
     end
@@ -5808,6 +5879,18 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     if op == O_FENCE
         put(1, "cpu.fence ")
         put(1, order_name(ins.val))
+        ret
+    end
+    if op == O_MEMOP
+        put(1, memop_name(ins.bop))
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        if ins.bop <= 1
+            put(1, ", ")
+            pv(ob, pg, ins.b)
+        end
+        put(1, ", ")
+        pv(ob, pg, ins.val)
         ret
     end
     if op == O_CHKB

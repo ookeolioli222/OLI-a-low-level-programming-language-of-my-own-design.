@@ -1,0 +1,9 @@
+module trap_memcopy
+-- expect: trap: bounds at stdin:7
+proc start -> s32
+    entry
+    a : [4]u8
+    b : [8]u8
+    mem.copy(a[..], b[..], 8)
+    ret 0
+end

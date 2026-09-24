@@ -274,9 +274,9 @@ check they remove is printed with its proof by `--show-oir=opt`.
 |---------|--------------|--------|------|--------|
 | `os.syscall(nr, a1..a6)` | a raw Linux system call — this is how `hello` prints without libc | `os.syscall` | SYSCALL | **runs** |
 | `cpu.halt()`, `cpu.pause()` | `hlt` / `pause`, one instruction each (`cpu.halt` in OIR) | `cpu.halt` / — | KERNEL / ZERO | **runs** |
-| `mem.copy(dst, src, n)` | copy `n` bytes (overlap allowed) | — | COPY | analysed |
-| `mem.set(dst, b)`, `mem.zero(dst)` | fill / zero a byte view | — | COPY | analysed |
-| `mem.secure_zero(dst)` | zero that no pass may delete (wipes a secret) | — | COPY | analysed |
+| `mem.copy(dst, src, n)` | copy `n` bytes from `src` to `dst` (`rw view u8`), `check.range` that both hold `n` (`bounds`), overlap allowed: `rep movsb`, backwards when `dst` lies above `src` | — | CHECK + COPY | **runs** (`tests/run/memops.oli`) |
+| `mem.set(dst, b)`, `mem.zero(dst)` | fill / zero a byte view: `rep stosb` over its whole length | — | COPY | **runs** |
+| `mem.secure_zero(dst)` | zero that no pass may delete (wipes a secret): one OIR instruction no pass removes, `rep stosb` | — | COPY | **runs** |
 | `mem.get_u16/32/64`, `get_be*`, `get_le*` | read an integer of a given width and endianness from a view: `check.range` that the view holds it (`bounds`), one load, a byte swap for `be` | — | CHECK | **runs** (`tests/run/bytes.oli`) |
 | `mem.put_u16/32/64`, `put_be*`, `put_le*` | write one, the same way | — | CHECK | **runs** |
 | `mem.mmio(T, a, n)` | a view of device memory, `mmio rw view T` (`T` one of `u8`…`u64`, `a` and `n` `uword`); every `v[i]` read or write through it is one volatile load or store (`raw.load.T.mmio` / `raw.store.T.mmio`: no pass removes, merges or reorders it) after the bounds check any view carries; `v[a..b]`, `.len`, `.addr` as for any view; `mmio` is never dropped (`E0200` where a plain view is wanted) | `memory.mmio` | KERNEL | **runs** (`tests/run/mmio.oli`, `examples/kernel.oli`); `each` and `Name.at` over it are E0900 |
@@ -381,7 +381,7 @@ tool).
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
 review that is:
-a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause`/`interrupts` and the `mem.*` intrinsics beyond `get_*`/`put_*`/`mmio`, the `port T` type and `port T (n)`, an `extern proc` in an executable (only an object file can carry an unresolved symbol), `each` and `Name.at` over an `mmio` view,
+a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause`/`interrupts`/`fence`, the `port T` type and `port T (n)`, an `extern proc` in an executable (only an object file can carry an unresolved symbol), `each` and `Name.at` over an `mmio` view,
 an `os.syscall` with more than seven words (the number and six
 arguments are all the registers a system call has) and aggregate constants (`NAME : [N]T := { … }` or a layout constant, which would live in `.rodata`; reading one is refused, and the harness probes that).
 The front end already checks all of them, so a program using them is

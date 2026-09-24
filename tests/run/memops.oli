@@ -1,0 +1,45 @@
+module memops
+-- `mem.copy(dst, src, n)`, `mem.set(dst, b)`, `mem.zero(dst)` and
+-- `mem.secure_zero(dst)` (OIR_SPEC §4): one instruction each in the OIR,
+-- never removed; `copy` checks `n` against both views (`bounds`) and moves
+-- with `rep movsb`, backwards when the destination lies above the source so
+-- an overlap copies right; the fills are `rep stosb`. The exit status is
+-- the number of the check that failed; 42 when every one held.
+
+proc start -> s32
+    entry
+    a : [16]u8
+    b : [16]u8
+    i : uword <- 0
+    while i < 16
+        a[i] <- u8.wrap(i + 1)
+        b[i] <- 0
+        i <- i + 1
+    end
+    mem.copy(b[..], a[..], 16)
+    if b[0] != 1 then ret 1
+    if b[15] != 16 then ret 2
+    mem.copy(b[4..], b[..], 8)
+    if b[4] != 1 then ret 3
+    if b[11] != 8 then ret 4
+    if b[12] != 13 then ret 5
+    mem.copy(a[..], a[2..], 4)
+    if a[0] != 3 then ret 6
+    if a[3] != 6 then ret 7
+    if a[4] != 5 then ret 8
+    mem.copy(a[..], b[..], 0)
+    if a[0] != 3 then ret 9
+    mem.set(a[..8], 0xAB)
+    if a[0] != 0xAB then ret 10
+    if a[7] != 0xAB then ret 11
+    if a[8] != 9 then ret 12
+    mem.zero(a[..])
+    if a[0] != 0 then ret 13
+    if a[15] != 0 then ret 14
+    mem.secure_zero(b[..])
+    if b[0] != 0 then ret 15
+    if b[15] != 0 then ret 16
+    n : uword <- 3
+    mem.copy(b[..], a[..], n)
+    ret 42
+end

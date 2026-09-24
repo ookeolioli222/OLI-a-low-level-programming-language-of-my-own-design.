@@ -1140,7 +1140,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli" "atomic tests/run/atomic.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli" "atomic tests/run/atomic.oli" "memops tests/run/memops.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1149,7 +1149,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging,atomic}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging,atomic,memops}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1171,7 +1171,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging atomic; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging atomic memops; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1338,7 +1338,7 @@ for f in ../tests/run/*.oli; do
         [ "$st" = 42 ] || fail "run: $n exited $st, want 42 (the check number that failed)"
     fi
 done
-echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, fallible results carried in the caller's area when a view, a layout or a wide choice is the value or the failure is wider than a word, a choice wider than a word held by its address as a local, a parameter and a result, views of device memory from mem.mmio with every element access volatile and bounds-checked, port places, cpu.interrupts and control registers compiled behind a byte that never arrives, procedures and constants of an imported library module (core.x64.paging) called and read, atomics at every width with their old values and fences, a ref to a static, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, a calls-interrupt handler entered through a frame pushed by hand and left through iretq, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
+echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, fallible results carried in the caller's area when a view, a layout or a wide choice is the value or the failure is wider than a word, a choice wider than a word held by its address as a local, a parameter and a result, views of device memory from mem.mmio with every element access volatile and bounds-checked, port places, cpu.interrupts and control registers compiled behind a byte that never arrives, procedures and constants of an imported library module (core.x64.paging) called and read, atomics at every width with their old values and fences, a ref to a static, block copies over an overlap and fills, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, a calls-interrupt handler entered through a frame pushed by hand and left through iretq, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
 # Port places and the interrupt flag (design 0015): each form of
 # tests/run/hw.oli is exactly one instruction in the image, at its width,
 # found by binutils; a read is zero-extended to the canonical image.
@@ -1362,6 +1362,19 @@ done
 ( cd .. && genesis/build/explain < tests/run/atomic.oli > genesis/build/atomic.explain 2> genesis/build/explain.err ) || fail "explain: atomic.oli: $(head -1 build/explain.err)"
 [ "$(grep -c 'ATOMIC=' build/atomic.explain)" = 22 ] || fail "explain: atomic.oli must bill twenty-two lines ATOMIC"
 echo "ok: atomic.load/store/add/sub/and/or/xor/exchange/cas and cpu.fence are lock-prefixed instructions, xchg and fences at their widths (objdump on atomic.elf), kept by every pass and billed ATOMIC"
+# mem.copy/set/zero/secure_zero (OIR_SPEC 4): a copy is rep movsb in both
+# directions (an overlap copies right), a fill rep stosb; the five copies
+# and three fills of tests/run/memops.oli stay through the passes and are
+# COPY in --explain.
+objdump -d --no-show-raw-insn build/memops.elf > build/memops.dis
+for pin in 'rep movsb=10' 'rep stos=3' 'std$=5' 'cld$=5'; do
+    pat=${pin%=*}; want=${pin##*=}
+    [ "$(grep -c "$pat" build/memops.dis)" = "$want" ] || fail "memops: [$pat] must be $want times in memops.elf, is $(grep -c "$pat" build/memops.dis)"
+done
+[ "$(grep -c 'mem\.' build/memops.opt)" = 8 ] || fail "opt: memops.oli must keep its eight block operations"
+( cd .. && genesis/build/explain < tests/run/memops.oli > genesis/build/memops.explain 2> genesis/build/explain.err ) || fail "explain: memops.oli: $(head -1 build/explain.err)"
+[ "$(grep -c 'COPY=' build/memops.explain)" = 8 ] || fail "explain: memops.oli must bill eight lines COPY"
+echo "ok: mem.copy (rep movsb, backwards over an overlap, bounds-checked), mem.set, mem.zero and mem.secure_zero (rep stosb) run, stay through every pass and are COPY in --explain"
 # The image of a program with statics has two loadable segments, the second
 # read+write on the page after the first; hello.elf still has one.
 [ "$(od -An -tu2 -j56 -N2 build/statics.elf | tr -d ' ')" = 2 ] || fail "elf: statics.elf should have two program headers"
