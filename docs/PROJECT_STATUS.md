@@ -1289,12 +1289,40 @@ constant in `.rodata`).
   here: the sequence with a kernel's own GDT (no QEMU); what runs is the
   same bytes under the selectors of a process.
 
+## Implemented in front-end stage 33 (2026-09-24): `own T` and `<~`
+
+- **Linear values** (design 0002, MEMORY_MODEL.md §8). `own T` holds a
+  handle — `T` an integer, `physaddr` or `addr T` (anything else is
+  E0900) — made by `own T (e)` and unwrapped by the conversion `T(h)`;
+  both are the same bits, no instruction. A local of `own` type is *full*
+  when it holds a value and *empty* once the value moved out: every read
+  consumes it (E0340 when it is empty), `<~` fills an `own` place (E0341
+  for any other place, E0342 when it is still full, and an `own` place
+  takes `<~`, never `<-`: E0343), a value still held where its scope ends,
+  at `ret`/`fail`, or at `break`/`continue` for a local of the loop's
+  body was never consumed (E0344), and the branches of an `if` or `case`
+  — and every pass of a `while`/`each`/`loop` body — must leave each
+  `own` local in the same state (E0345). The states are kept on a stack
+  of cells (`Prog.owns`) beside the definite-assignment marks: a snapshot
+  at every `if`/`case`/loop, a branch restored to it, the fall-through
+  branches compared, the loop's exits compared with its entry.
+- `<~` lowers as the store it is; a parameter, a result, a binding and a
+  place may all be `own`.
+- `tests/run/own.oli` runs a file descriptor through it: `dup(0)` wrapped
+  as `own u64`, moved into a place, passed to `release(h : own u64)`,
+  which unwraps it for `close`; every path — an `if … else`, a `while`,
+  a one-line `if … then ret` — consumes exactly once, and the last check
+  closes descriptor 3 again and must fail. `tests/sema/err/linear.oli`
+  pins all six diagnostics at their constructs (the seventeenth negative
+  fixture); the harness pins the `.sema` form (an `own` result, parameter
+  and place, three moves) and that the OIR carries no conversion.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 29,118 lines) into
+compiles its own source (`compiler/`, seventeen modules, 29,499 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,267,856 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,284,744 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

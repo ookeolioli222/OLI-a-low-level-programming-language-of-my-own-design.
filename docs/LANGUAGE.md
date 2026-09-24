@@ -307,7 +307,7 @@ left at the end of a line is `E0032`.
 | `be T` / `le T` | an integer with a fixed byte order; a `be` field is swapped on load and store | **[runs]** |
 | `mmio view T` / `mmio rw view T` | memory-mapped I/O: every element access volatile; never dropped by a conversion (`E0200`); made by `mem.mmio` under `permit memory.mmio` | **[runs]** |
 | `mmio ref T` / `mmio rw ref T` | a ref into device memory from `Name.at` over an `mmio` view: every field access volatile | **[runs]** |
-| `own T` | reserved in V0: parsed, rejected by the checker (`E0900`) | **[parses]** |
+| `own T` | a linear handle, `T` an integer or an address: made by `own T (e)`, consumed exactly once — by `<~` into an `own` place, by an `own T` parameter, by `ret`, or by the unwrapping read `T(h)`; a second use is `E0340`, a value never consumed `E0344`, a value consumed on one path only `E0345` (MEMORY_MODEL.md §8; `tests/run/own.oli`, `tests/sema/err/linear.oli`) | **[runs]** |
 
 `or` binds loosest in a type: `ref Header or E` is `(ref Header) or E`.
 
@@ -473,7 +473,7 @@ parameters. The name `main` has no special meaning.
 | binding | `x := expr` or `x : T := expr` — immutable, no address | **[runs]** |
 | place | `x : T` or `x : T <- expr` — must be stored before it is read | **[runs]** |
 | store | `place <- expr` | **[runs]** |
-| move | `place <~ expr` — reserved for `own` (`E0900` in V0) | **[parses]** |
+| move | `place <~ expr` — fills a place of `own` type with an `own` value; any other place is `E0341`, a place still holding a value `E0342`, and an `own` place takes `<~`, never `<-` (`E0343`) | **[runs]** |
 | expression | a call, or any fallible value that is resolved | **[runs]** |
 | `ret` | `ret` or `ret expr` | **[runs]** |
 | `fail` | `fail` or `fail expr`, only in a `-> T or E` procedure | **[runs]** |
@@ -712,9 +712,9 @@ block needs `permit cpu.asm`, a port place `port.u8[n]` / `port.u16[n]` /
 `cli`) need `permit cpu.interrupt`, a control register `arch.x64.cr0/2/3/4/8`,
 `cpu.stack`, `cpu.frame`, `arch.x64.gdt`/`idt`/`tr`, `cpu.call` and `cpu.jump`
 need `permit cpu.control`, and `arch.x64.msr[n]` needs `permit cpu.msr` —
-without them the compiler reports `E0401` at the construct. Constructs the V0 front end accepts but does not implement — `own`,
-`f32`/`f64`, `<~`, `port T (…)` — report `E0900` rather than compiling to
-something approximate; `mem.mmio` and `calls interrupt` run.
+without them the compiler reports `E0401` at the construct. Constructs the V0 front end accepts but does not implement —
+`f32`/`f64` — report `E0900` rather than compiling to something approximate;
+`own`, `<~`, `port T (…)`, `mem.mmio` and `calls interrupt` run.
 
 With `-- target: freestanding` at the top of the program there is no
 operating system: the program supplies its own entry point (`entry` with
@@ -806,6 +806,12 @@ Implemented today **[runs]**:
 | E0310 | unhandled failure |
 | E0311 | `case` is not exhaustive |
 | E0330 | a freestanding zone needs `at` or `from` |
+| E0340 | `own` value used after it was moved |
+| E0341 | `<~` needs a place of `own` type |
+| E0342 | `own` value overwritten before it was consumed |
+| E0343 | an `own` place is written with `<~`, not `<-` |
+| E0344 | `own` value never consumed |
+| E0345 | `own` value consumed on one path but not on another |
 | E0401 | capability not permitted here |
 | E0900 | feature not implemented |
 | W0001 | doc comment documents nothing |

@@ -482,6 +482,9 @@ proc p_type_prim(cx: ref Ctx) -> u64
     -- A type in expression position: one primitive, or `port`/`be`/`le` plus
     -- one. It never swallows a following `.wrap`/`.bits` (that is the mode).
     t0 := tpos(cx)
+    if at_kw(cx, KW_OWN)
+        adv(cx)
+    end
     if at_kw(cx, KW_PORT)
         adv(cx)
     end
@@ -788,6 +791,10 @@ proc p_primary(cx: ref Ctx) -> u64
         if port_place_follows(cx) == 1
             ret p_hwplace(cx)
         end
+        ret p_typestart(cx)
+    end
+    if at_kw(cx, KW_OWN)
+        -- `own T (e)`: the value `e` wrapped as a linear `own T` (design 0002).
         ret p_typestart(cx)
     end
     if at_kw(cx, KW_ATOMIC)

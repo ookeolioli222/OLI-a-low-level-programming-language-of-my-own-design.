@@ -1634,6 +1634,10 @@ proc conv_operand_want(pg: ref Prog, mi: u64, arg: u64, dst: view u8) -> view u8
     if is_port_type(dst) == 1
         ret "u16"
     end
+    if starts_with(dst, "own ")
+        -- `own T (e)`: `e` is a `T`.
+        ret dst[4..]
+    end
     if untyped_int_expr(pg, mi, arg) == 1
         ret dst
     end
@@ -3141,6 +3145,21 @@ proc tconvert(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
     dst := ety(pg, mi, n, b[0..0])
     src := ety(pg, mi, arg, b[0..0])
     texpr(pg, mi, arg, conv_operand_want(pg, mi, arg, dst))
+    if starts_with(dst, "own ")
+        -- `own T (e)` wraps a `T`; `T(h)` unwraps an `own T`, and is the
+        -- read that consumes it (MEMORY_MODEL.md 8). Nothing else converts
+        -- to or from an `own`.
+        if coerce_kind(pg, src, dst[4..]) > 4
+            terr(pg, mi, 200, n)
+        end
+        ret
+    end
+    if starts_with(src, "own ")
+        if view_eq(src[4..], dst) == 0
+            terr(pg, mi, 200, n)
+        end
+        ret
+    end
     an := node_at(cx, arg)
     if mn.kind == 0
         ret

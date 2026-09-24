@@ -293,6 +293,12 @@ Hosted: message to fd 2, `exit_group(134)`. Freestanding: the `traps` procedure 
 | E0310 | unhandled failure |
 | E0311 | `case` not exhaustive |
 | E0330 | zone has no memory source (freestanding top-level zone without `at`/`from`) |
+| E0340 | `own` value used after it was moved |
+| E0341 | `<~` needs a place of `own` type |
+| E0342 | `own` value overwritten before it was consumed |
+| E0343 | an `own` place is written with `<~`, not `<-` |
+| E0344 | `own` value never consumed |
+| E0345 | `own` value consumed on one path but not on another |
 | E0400 | capability not available on this target |
 | E0401 | operation requires permit |
 | E0402 | unknown capability name |

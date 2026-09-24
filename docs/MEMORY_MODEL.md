@@ -160,8 +160,20 @@ into a place or a parameter, or passed to a consuming procedure. Dropping it
 silently is a compile error; using it after a move is a compile error. There is
 no hidden destructor call; releasing a resource is a visible call to a
 procedure that takes `own T`. This gives leak-freedom and double-free-freedom at
-zero run-time cost and zero hidden control flow. V0 reserves the type; `std`
-introduces the first `own` resources (file descriptors, mappings).
+zero run-time cost and zero hidden control flow.
+
+Implemented in `olic` (2026-09-24): `T` is an integer or an address (a
+handle); `own T (e)` wraps one and `T(h)` is the read that unwraps it. Every
+read of an `own` local consumes it (`E0340` once it is empty); `<~` fills an
+`own` place (`E0341` for any other place, `E0342` when it still holds a
+value, `E0343` for `<-`); a value still held where its scope ends, at
+`ret`/`fail`, or at `break`/`continue` for a local of the loop's body, is
+`E0344`; and the branches of an `if`/`case` — and every pass of a loop's
+body — must leave each `own` local in the same state (`E0345`). The wrap,
+the unwrap and the move add no instruction (`tests/run/own.oli` acquires,
+moves, passes and closes a file descriptor exactly once;
+`tests/sema/err/linear.oli` pins the six diagnostics). `std` will introduce
+the first `own` resources (file descriptors, mappings).
 
 ## 9. Memory spaces
 

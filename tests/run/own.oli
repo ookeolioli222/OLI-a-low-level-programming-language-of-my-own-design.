@@ -1,0 +1,52 @@
+module own
+-- `own T` and `<~` (design 0002, MEMORY_MODEL.md 8): a linear handle that
+-- must be consumed exactly once. The resource is a file descriptor: `dup(0)`
+-- (syscall 32) yields one, `own u64 (…)` wraps it, `<~` moves it into a
+-- place, a procedure taking `own u64` consumes it, and `u64(h)` is the
+-- unwrapping read that consumes the handle for `close` (syscall 3), which
+-- returns 0 exactly once per descriptor. Every handle here is descriptor 3
+-- (the lowest free one), so the last check — closing 3 again must fail —
+-- proves that every release ran, and the checker proves that none ran
+-- twice. The exit status is the number of the check that failed; 42 when
+-- every one held.
+
+proc acquire() -> own u64
+    permit os.syscall
+    fd := os.syscall(32, 0)
+    ret own u64 (u64.bits(fd))
+end
+
+proc release(h : own u64) -> word
+    permit os.syscall
+    ret os.syscall(3, u64(h))
+end
+
+proc start -> s32
+    entry
+    permit os.syscall
+    a := acquire()
+    if release(a) != 0 then ret 1
+    slot : own u64
+    b := acquire()
+    slot <~ b
+    if release(slot) != 0 then ret 2
+    c := acquire()
+    keep : own u64
+    if os.syscall(39) == 0
+        keep <~ c
+    else
+        keep <~ c
+    end
+    if release(keep) != 0 then ret 3
+    i : u64 <- 0
+    while i < 3
+        d := acquire()
+        if release(d) != 0 then ret 4
+        i <- i + 1
+    end
+    if os.syscall(39) == 0 then ret 5
+    e := acquire()
+    if release(e) != 0 then ret 6
+    if os.syscall(3, 3) == 0 then ret 7
+    ret 42
+end

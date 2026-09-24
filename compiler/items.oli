@@ -7,6 +7,7 @@ module olic.items
 
 MOD_MAX := 8
 LOC_MAX := 4096
+OWN_MAX := 65536
 SBUF_MAX := 131072
 ITEM_MAX := 256
 FLD_MAX := 1024
@@ -23,6 +24,8 @@ layout Chk
     b1 : u64
     zd : u64
     vzd : u64
+    lin : u64
+    full : u64
 end
 
 layout Loc
@@ -84,6 +87,11 @@ layout Prog
     curproc : u64
     chks : rw view u8
     nchk : u64
+    owns : rw view u8
+    nown : u64
+    loopbase : u64
+    loopn : u64
+    inloop : u64
     cdepth : u64
     zdepth : u64
     fstanding : u64
@@ -132,6 +140,11 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.curproc <- 0
     pg.chks <- z.bytes(LOC_MAX * Chk.size)
     pg.nchk <- 0
+    pg.owns <- z.bytes(OWN_MAX * 8)
+    pg.nown <- 0
+    pg.loopbase <- 0
+    pg.loopn <- 0
+    pg.inloop <- 0
     pg.cdepth <- 0
     pg.zdepth <- 0
     pg.fstanding <- 0

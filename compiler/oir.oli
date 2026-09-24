@@ -3689,6 +3689,13 @@ proc gen_convert(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     dst := ety(pg, mi, n, b[0..0])
     src := ety(pg, mi, arg, b[0..0])
     v := gen_expr(pg, ob, mi, arg, conv_operand_want(pg, mi, arg, dst))
+    if starts_with(dst, "own ")
+        -- `own T (e)` and `T(h)`: the same bits, ZERO (design 0002).
+        ret v
+    end
+    if starts_with(src, "own ")
+        ret v
+    end
     if mn.kind == N_MODE
         if view_eq(tok_text(cx, mn.t0), "wrap")
             ret gen_conv(ob, v, src, dst)
@@ -5268,6 +5275,11 @@ proc gen_stmt(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
         ret
     end
     if k == N_STORE
+        gen_store(pg, ob, mi, n)
+        ret
+    end
+    if k == N_MOVE
+        -- `place <~ e`: the handle stored; the linearity was checked.
         gen_store(pg, ob, mi, n)
         ret
     end

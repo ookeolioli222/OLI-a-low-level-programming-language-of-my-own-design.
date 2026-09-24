@@ -1,0 +1,40 @@
+proc take(h : own u64)
+    _x := u64(h)
+end
+proc leak(h : own u64)
+end
+proc main -> s32
+    entry
+    a := own u64 (1)
+    take(a)
+    take(a)
+    b := own u64 (2)
+    p : u64 <- 0
+    p <~ b
+    c : own u64
+    c <~ own u64 (3)
+    c <~ own u64 (4)
+    d : own u64 <- own u64 (5)
+    e := own u64 (6)
+    if p == 0
+        take(e)
+    end
+    f := own u64 (7)
+    while p < 1
+        take(f)
+        p <- p + 1
+    end
+    g := own u64 (8)
+    take(c)
+    take(d)
+    take(f)
+    ret 0
+end
+-- expect: E0344 @ 4:11
+-- expect: E0340 @ 10:10
+-- expect: E0341 @ 13:5
+-- expect: E0342 @ 16:5
+-- expect: E0343 @ 17:5
+-- expect: E0345 @ 19:5
+-- expect: E0345 @ 23:5
+-- expect: E0344 @ 31:5

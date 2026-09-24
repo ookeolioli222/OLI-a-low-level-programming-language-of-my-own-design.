@@ -82,6 +82,24 @@ proc smsg(code: u64) -> view u8
     if code == 330
         ret "a freestanding zone needs `at` or `from`"
     end
+    if code == 340
+        ret "`own` value used after it was moved"
+    end
+    if code == 341
+        ret "`<~` needs a place of `own` type"
+    end
+    if code == 342
+        ret "`own` value overwritten before it was consumed"
+    end
+    if code == 343
+        ret "an `own` place is written with `<~`, not `<-`"
+    end
+    if code == 344
+        ret "`own` value never consumed"
+    end
+    if code == 345
+        ret "`own` value consumed on one path but not on another"
+    end
     ret "feature not implemented"
 end
 
@@ -139,8 +157,30 @@ end
 
 -- Types that V0 parses but does not implement -------------------------------
 
+proc own_elem_ok(cx: ref Ctx, i: u64) -> word
+    -- `own T` holds a handle: `T` is an integer, `physaddr` or `addr T`.
+    t := ctok(cx, i)
+    if t.kind == TK_KW
+        if t.sub == KW_ADDR
+            ret 1
+        end
+        ret 0
+    end
+    if t.kind != TK_IDENT
+        ret 0
+    end
+    if prim_size(tok_text(cx, i)) > 0
+        ret 1
+    end
+    if view_eq(tok_text(cx, i), "physaddr")
+        ret 1
+    end
+    ret 0
+end
+
 proc check_type(pg: ref Prog, mi: u64, ty: u64)
-    -- `own` is reserved, `f32`/`f64` arrive in V2 (E0900).
+    -- `own T` takes a handle (an integer or an address) in V0; `f32`/`f64`
+    -- arrive in V2 (E0900).
     if ty == 0
         ret
     end
@@ -151,7 +191,9 @@ proc check_type(pg: ref Prog, mi: u64, ty: u64)
         t := ctok(cx, i)
         if t.kind == TK_KW
             if t.sub == KW_OWN
-                sdiag(pg, mi, 900, i)
+                if own_elem_ok(cx, i + 1) == 0
+                    sdiag(pg, mi, 900, i)
+                end
             end
         end
         if t.kind == TK_IDENT
@@ -251,7 +293,165 @@ proc chk_push(pg: rw ref Prog, mi: u64, nametok: u64, kind: u64, assigned: u64)
     c.b1 <- 0
     c.zd <- pg.zdepth
     c.vzd <- 0
+    c.lin <- 0
+    c.full <- 0
     pg.nchk <- i + 1
+end
+
+-- Linear values (design 0002, MEMORY_MODEL.md 8) ------------------------------
+--
+-- A local of `own` type is full when it holds a value and empty once the
+-- value was moved out: every read consumes it (E0340 when empty), `<~`
+-- fills a place (E0342 when still full), and a value still held when its
+-- scope ends, at `ret`/`fail`, or at `break`/`continue` for a local of the
+-- loop's body, was never consumed (E0344). The branches of an `if` or a
+-- `case` must agree on every local's state (E0345); a loop's body must
+-- leave every outer local as it found it (E0345), so that the state after
+-- the loop is the state before it. The states are kept on a stack of cells.
+
+layout OwnCell
+    v : u64
+end
+
+proc own_cell(pg: ref Prog, i: u64) -> rw ref OwnCell
+    t := pg.owns
+    ret OwnCell.at(t[i * 8..i * 8 + 8])
+end
+
+proc own_mark(pg: ref Prog, mi: u64, nametok: u64, full: u64)
+    -- The local just pushed, when its type is `own T`: full when it starts
+    -- with a value (a binding, a parameter), empty for a bare place.
+    cx := mod_ctx(pg, mi)
+    if starts_with(loc_type(pg, tok_text(cx, nametok)), "own ") == 0
+        ret
+    end
+    c := chk_at(pg, pg.nchk - 1)
+    c.lin <- 1
+    c.full <- full
+end
+
+proc own_snapshot(pg: rw ref Prog) -> u64
+    -- The state of every local, pushed; the index of the first cell.
+    base := pg.nown
+    i : u64 <- 0
+    while i < pg.nchk
+        c := chk_at(pg, i)
+        cell := own_cell(pg, base + i)
+        cell.v <- c.full
+        i <- i + 1
+    end
+    pg.nown <- base + pg.nchk
+    ret base
+end
+
+proc own_restore(pg: ref Prog, base: u64, n: u64)
+    i : u64 <- 0
+    while i < n
+        c := chk_at(pg, i)
+        cell := own_cell(pg, base + i)
+        c.full <- cell.v
+        i <- i + 1
+    end
+end
+
+proc own_agree_init(pg: rw ref Prog, n: u64) -> u64
+    -- Cells for the state the branches agree on, 2 = no branch seen yet.
+    base := pg.nown
+    i : u64 <- 0
+    while i < n
+        cell := own_cell(pg, base + i)
+        cell.v <- 2
+        i <- i + 1
+    end
+    pg.nown <- base + n
+    ret base
+end
+
+proc own_agree(pg: rw ref Prog, mi: u64, abase: u64, n: u64, tok: u64)
+    -- A branch that falls through: its end state must equal the others'.
+    i : u64 <- 0
+    while i < n
+        c := chk_at(pg, i)
+        cell := own_cell(pg, abase + i)
+        if c.lin == 1
+            if cell.v == 2
+                cell.v <- c.full
+            elif cell.v != c.full
+                sdiag(pg, mi, 345, tok)
+                cell.v <- 0
+            end
+        end
+        i <- i + 1
+    end
+end
+
+proc own_adopt(pg: ref Prog, abase: u64, n: u64)
+    -- After the branches: the agreed state; the entry state when every
+    -- branch diverged (nothing follows).
+    i : u64 <- 0
+    while i < n
+        c := chk_at(pg, i)
+        cell := own_cell(pg, abase + i)
+        if cell.v != 2
+            c.full <- cell.v
+        end
+        i <- i + 1
+    end
+end
+
+proc own_leave(pg: rw ref Prog, mi: u64, lo: u64, tok: u64)
+    -- Control leaves: every `own` local from `lo` up that is still full was
+    -- never consumed on this path, reported once, at the leaving statement.
+    i : u64 <- lo
+    while i < pg.nchk
+        c := chk_at(pg, i)
+        if c.lin == 1
+            if c.full == 1
+                sdiag(pg, mi, 344, tok)
+                c.full <- 0
+            end
+        end
+        i <- i + 1
+    end
+end
+
+proc own_loop_exit(pg: rw ref Prog, mi: u64, tok: u64)
+    -- `break`, `continue` or the end of a loop's body: the locals of the
+    -- body are consumed, and every outer local is as the loop found it.
+    if pg.inloop == 0
+        ret
+    end
+    own_leave(pg, mi, pg.loopn, tok)
+    i : u64 <- 0
+    while i < pg.loopn
+        c := chk_at(pg, i)
+        cell := own_cell(pg, pg.loopbase + i)
+        if c.lin == 1
+            if c.full != cell.v
+                sdiag(pg, mi, 345, tok)
+            end
+        end
+        i <- i + 1
+    end
+end
+
+proc own_loop_enter(pg: rw ref Prog) -> u64
+    -- The loop's entry state, remembered for its exits; the old loop's
+    -- cells are restored by own_loop_leave.
+    base := own_snapshot(pg)
+    pg.loopbase <- base
+    pg.loopn <- pg.nchk
+    pg.inloop <- 1
+    ret base
+end
+
+proc own_loop_leave(pg: rw ref Prog, base: u64, obase: u64, on: u64, oin: u64)
+    -- After the loop: every outer local as the loop found it.
+    own_restore(pg, base, pg.loopn)
+    pg.loopbase <- obase
+    pg.loopn <- on
+    pg.inloop <- oin
+    pg.nown <- base
 end
 
 proc set_region(pg: ref Prog, vzd: u64)
@@ -349,6 +549,19 @@ proc frame_escape(pg: ref Prog, mi: u64, n: u64) -> word
 end
 
 proc scope_drop(pg: rw ref Prog, mark: u64)
+    -- An `own` local that still holds its value where its scope ends was
+    -- never consumed (E0344, at the name).
+    i : u64 <- mark
+    while i < pg.nchk
+        c := chk_at(pg, i)
+        if c.lin == 1
+            if c.full == 1
+                sdiag(pg, c.mod, 344, c.name)
+                c.full <- 0
+            end
+        end
+        i <- i + 1
+    end
     pg.nchk <- mark
 end
 
@@ -433,6 +646,21 @@ proc chk_read(pg: ref Prog, mi: u64, tok: u64)
         ret
     end
     c := chk_at(pg, u64.bits(idx))
+    if c.lin == 1
+        -- A read consumes the value (design 0002).
+        if c.full == 1
+            c.full <- 0
+            ret
+        end
+        if c.kind != 1
+            sdiag(pg, mi, 340, tok)
+            ret
+        end
+        if c.assigned == 1
+            sdiag(pg, mi, 340, tok)
+            ret
+        end
+    end
     if c.kind != 1
         ret
     end
@@ -1225,22 +1453,49 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
             end
         end
         check_expr(pg, mi, e0)
+        own_leave(pg, mi, 0, nd.t0)
         ret 1
     end
     if k == N_FAIL
         check_expr(pg, mi, kid1(cx, n))
+        own_leave(pg, mi, 0, nd.t0)
         ret 1
     end
     if k == N_BREAK
+        own_loop_exit(pg, mi, nd.t0)
         ret 1
     end
     if k == N_CONTINUE
+        own_loop_exit(pg, mi, nd.t0)
         ret 1
     end
     if k == N_MOVE
-        sdiag(pg, mi, 900, nd.t0)
-        check_expr(pg, mi, kid1(cx, n))
+        -- `place <~ e`: the place is a local of `own` type, empty.
         check_expr(pg, mi, kid2(cx, n))
+        mlhs := kid1(cx, n)
+        mln := node_at(cx, mlhs)
+        if mln.kind != N_NAME
+            sdiag(pg, mi, 341, nd.t0)
+            ret 0
+        end
+        midx := chk_find(pg, tok_text(cx, mln.t0))
+        if midx < 0
+            ret 0
+        end
+        mc := chk_at(pg, u64.bits(midx))
+        if mc.lin == 0
+            sdiag(pg, mi, 341, nd.t0)
+            ret 0
+        end
+        if mc.kind != 1
+            sdiag(pg, mi, 110, nd.t0)
+            ret 0
+        end
+        if mc.full == 1
+            sdiag(pg, mi, 342, nd.t0)
+        end
+        mc.full <- 1
+        chk_assign(pg, mi, mlhs)
         ret 0
     end
     if k == N_MACHINE
@@ -1287,6 +1542,15 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
         end
         chk_push(pg, mi, nd.t0, 1, a)
         set_region(pg, region_of(pg, mi, v))
+        own_mark(pg, mi, nd.t0, 0)
+        if v != 0
+            pc := chk_at(pg, pg.nchk - 1)
+            if pc.lin == 1
+                -- An `own` place is filled by `<~`.
+                sdiag(pg, mi, 343, nd.t0)
+                pc.full <- 1
+            end
+        end
         ret 0
     end
     if k == N_BIND
@@ -1298,6 +1562,7 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
         check_expr(pg, mi, v2)
         chk_push(pg, mi, nd.t0, 2, 1)
         set_region(pg, region_of(pg, mi, v2))
+        own_mark(pg, mi, nd.t0, 1)
         ret 0
     end
     if k == N_STORE
@@ -1313,6 +1578,9 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
                 if c.kind != 1
                     -- A binding, a parameter or a zone handle is immutable.
                     sdiag(pg, mi, 110, nd.t0)
+                end
+                if c.lin == 1
+                    sdiag(pg, mi, 343, nd.t0)
                 end
                 c2 := chk_at(pg, u64.bits(idx))
                 tzd <- c2.zd
@@ -1365,21 +1633,30 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
         nbr : u64 <- 0
         alldiv : u64 <- 1
         haselse : u64 <- 0
+        on0 := pg.nchk
+        obase := own_snapshot(pg)
+        abase := own_agree_init(pg, on0)
         br : u64 <- kid2(cx, n)
         while br != 0
             bn2 := node_at(cx, br)
+            own_restore(pg, obase, on0)
+            bdiv : u64 <- 1
             if bn2.kind == N_ELIF
                 check_expr(pg, mi, kid1(cx, br))
                 if check_branch(pg, mi, kid2(cx, br)) == 0
-                    alldiv <- 0
+                    bdiv <- 0
                 end
             else
                 if bn2.kind == N_ELSE
                     haselse <- 1
                 end
                 if check_branch(pg, mi, kid1(cx, br)) == 0
-                    alldiv <- 0
+                    bdiv <- 0
                 end
+            end
+            if bdiv == 0
+                alldiv <- 0
+                own_agree(pg, mi, abase, on0, bn2.t0)
             end
             nbr <- nbr + 1
             mark_branch(pg, depth)
@@ -1389,7 +1666,12 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
             keep_common(pg, nbr)
         else
             clear_marks(pg)
+            -- The path that takes no branch.
+            own_restore(pg, obase, on0)
+            own_agree(pg, mi, abase, on0, nd.t0)
         end
+        own_adopt(pg, abase, on0)
+        pg.nown <- obase
         if haselse == 1
             ret word.bits(alldiv)
         end
@@ -1398,10 +1680,20 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
     if k == N_IFTHEN
         check_expr(pg, mi, kid1(cx, n))
         depth2 := pg.cdepth + 1
+        tn0 := pg.nchk
+        tbase := own_snapshot(pg)
+        tabase := own_agree_init(pg, tn0)
         pg.cdepth <- depth2
-        check_stmt(pg, mi, kid2(cx, n))
+        tdiv := check_stmt(pg, mi, kid2(cx, n))
         pg.cdepth <- depth2 - 1
         undo_assigns(pg, depth2)
+        if tdiv == 0
+            own_agree(pg, mi, tabase, tn0, nd.t0)
+        end
+        own_restore(pg, tbase, tn0)
+        own_agree(pg, mi, tabase, tn0, nd.t0)
+        own_adopt(pg, tabase, tn0)
+        pg.nown <- tbase
         ret 0
     end
     if k == N_WHILE
@@ -1409,23 +1701,44 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
         -- `loop` is infinite.
         check_expr(pg, mi, kid1(cx, n))
         wd := pg.cdepth + 1
-        check_branch(pg, mi, kid1(cx, kid2(cx, n)))
+        wob := pg.loopbase
+        won := pg.loopn
+        wil := pg.inloop
+        wbase := own_loop_enter(pg)
+        if check_branch(pg, mi, kid1(cx, kid2(cx, n))) == 0
+            own_loop_exit(pg, mi, nd.t0)
+        end
+        own_loop_leave(pg, wbase, wob, won, wil)
         undo_assigns(pg, wd)
         ret 0
     end
     if k == N_EACH
         check_expr(pg, mi, kid1(cx, n))
         mark2 := pg.nchk
+        eob := pg.loopbase
+        eon := pg.loopn
+        eil := pg.inloop
+        ebase := own_loop_enter(pg)
         chk_push(pg, mi, nd.t0, 2, 1)
         ed := pg.cdepth + 1
-        check_branch(pg, mi, kid1(cx, kid2(cx, n)))
+        if check_branch(pg, mi, kid1(cx, kid2(cx, n))) == 0
+            own_loop_exit(pg, mi, nd.t0)
+        end
         undo_assigns(pg, ed)
         scope_drop(pg, mark2)
+        own_loop_leave(pg, ebase, eob, eon, eil)
         ret 0
     end
     if k == N_LOOP
         ld := pg.cdepth + 1
-        check_branch(pg, mi, kid1(cx, kid1(cx, n)))
+        lob := pg.loopbase
+        lon := pg.loopn
+        lil := pg.inloop
+        lbase := own_loop_enter(pg)
+        if check_branch(pg, mi, kid1(cx, kid1(cx, n))) == 0
+            own_loop_exit(pg, mi, nd.t0)
+        end
+        own_loop_leave(pg, lbase, lob, lon, lil)
         undo_assigns(pg, ld)
         if has_break(pg, mi, kid1(cx, n)) == 0
             ret 1
@@ -1437,24 +1750,35 @@ proc check_stmt(pg: rw ref Prog, mi: u64, n: u64) -> word
         check_case_exhaustive(pg, mi, n)
         alldiv2 : u64 <- 1
         narm : u64 <- 0
+        cn0 := pg.nchk
+        cbase := own_snapshot(pg)
+        cabase := own_agree_init(pg, cn0)
         arm : u64 <- kid2(cx, n)
         while arm != 0
             an := node_at(cx, arm)
             mark3 := pg.nchk
+            own_restore(pg, cbase, cn0)
+            adiv : u64 <- 1
             if an.kind == N_WHEN
                 bind_pattern_names(pg, mi, kid1(cx, arm))
                 if check_branch(pg, mi, kid2(cx, arm)) == 0
-                    alldiv2 <- 0
+                    adiv <- 0
                 end
             else
                 if check_branch(pg, mi, kid1(cx, arm)) == 0
-                    alldiv2 <- 0
+                    adiv <- 0
                 end
             end
             scope_drop(pg, mark3)
+            if adiv == 0
+                alldiv2 <- 0
+                own_agree(pg, mi, cabase, cn0, an.t0)
+            end
             narm <- narm + 1
             arm <- sibling(cx, arm)
         end
+        own_adopt(pg, cabase, cn0)
+        pg.nown <- cbase
         if narm == 0
             ret 0
         end
@@ -1618,6 +1942,7 @@ proc check_proc(pg: rw ref Prog, mi: u64, node: u64)
         pn := node_at(cx, p)
         check_type(pg, mi, kid1(cx, p))
         chk_push(pg, mi, pn.t0, 2, 1)
+        own_mark(pg, mi, pn.t0, 1)
         p <- sibling(cx, p)
     end
     k : u64 <- sibling(cx, params)
@@ -1660,8 +1985,13 @@ proc check_proc(pg: rw ref Prog, mi: u64, node: u64)
         end
         k <- sibling(cx, k)
     end
+    pg.nown <- 0
+    pg.inloop <- 0
     if body != 0
         if check_body(pg, mi, body) == 0
+            -- Control falls off the end: an `own` parameter still held was
+            -- never consumed.
+            scope_drop(pg, 0)
             if pg.curhasres == 1
                 if pg.curnever == 0
                     if ends_in_machine(pg, mi, body) == 0

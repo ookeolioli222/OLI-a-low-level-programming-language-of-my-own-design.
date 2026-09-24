@@ -45,3 +45,12 @@ be taken, so no dangling pointers to register values; `own` misuse is a type err
 - `let`/`var` keywords: copies Rust/Zig and hides the machine distinction behind words.
 - `=` for stores: the single most overloaded symbol in existing languages.
 - `x <- 20` for both bind and store (as in some ML dialects): loses the binding/place split.
+
+## Status
+`:=` and `<-` since M1. `<~` and `own T` implemented 2026-09-24 with the
+linear check of MEMORY_MODEL.md §8: `own T (e)` wraps a handle, `T(h)`
+unwraps it, every read consumes, and the checker reports a second use
+(E0340), a move into a place that is not `own` (E0341) or still full
+(E0342), a `<-` into an `own` place (E0343), a value never consumed (E0344)
+and paths that disagree (E0345). `tests/run/own.oli` runs a file descriptor
+through all of it; `tests/sema/err/linear.oli` pins the diagnostics.

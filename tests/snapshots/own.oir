@@ -1,0 +1,141 @@
+(oir
+  (static 0 len=27)
+  (proc acquire locals=1
+    (bb0
+      %0 = const 32
+      arg %0
+      %2 = const 0
+      arg %2
+      %4 = syscall/2
+      store frame.0, %4
+      %6 = load frame.0
+      ret %6))
+  (proc release locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = const 3
+      arg %2
+      %4 = load frame.0
+      arg %4
+      %6 = syscall/2
+      ret %6))
+  (proc start locals=8 entry
+    (bb0
+      %0 = call acquire/0
+      store frame.0, %0
+      %2 = load frame.0
+      arg %2
+      %4 = call release/1
+      %5 = const 0
+      %6 = cmp.ne.s %4, %5
+      branch %6, bb1, bb2)
+    (bb1 preds bb0
+      %8 = const 1
+      ret %8)
+    (bb2 preds bb0
+      %11 = call acquire/0
+      store frame.2, %11
+      %13 = load frame.2
+      store frame.1, %13
+      %15 = load frame.1
+      arg %15
+      %17 = call release/1
+      %18 = const 0
+      %19 = cmp.ne.s %17, %18
+      branch %19, bb3, bb4)
+    (bb3 preds bb2
+      %21 = const 2
+      ret %21)
+    (bb4 preds bb2
+      %24 = call acquire/0
+      store frame.3, %24
+      %26 = const 39
+      arg %26
+      %28 = syscall/1
+      %29 = const 0
+      %30 = cmp.eq.s %28, %29
+      branch %30, bb5, bb6)
+    (bb5 preds bb4
+      %32 = load frame.3
+      store frame.4, %32
+      jump bb7)
+    (bb6 preds bb4
+      %36 = load frame.3
+      store frame.4, %36
+      jump bb7)
+    (bb7 preds bb5 bb6
+      %39 = load frame.4
+      arg %39
+      %41 = call release/1
+      %42 = const 0
+      %43 = cmp.ne.s %41, %42
+      branch %43, bb8, bb9)
+    (bb8 preds bb7
+      %45 = const 3
+      ret %45)
+    (bb9 preds bb7
+      %48 = const 0
+      store frame.5, %48
+      jump bb10)
+    (bb10 preds bb9 bb13
+      %51 = load frame.5
+      %52 = const 3
+      %53 = cmp.lt %51, %52
+      branch %53, bb11, bb14)
+    (bb11 preds bb10
+      %55 = call acquire/0
+      store frame.6, %55
+      %57 = load frame.6
+      arg %57
+      %59 = call release/1
+      %60 = const 0
+      %61 = cmp.ne.s %59, %60
+      branch %61, bb12, bb13)
+    (bb12 preds bb11
+      %63 = const 4
+      ret %63)
+    (bb13 preds bb11
+      %66 = load frame.5
+      %67 = const 1
+      %68 = add %66, %67
+      check.overflow %68
+      store frame.5, %68
+      jump bb10)
+    (bb14 preds bb10
+      %72 = const 39
+      arg %72
+      %74 = syscall/1
+      %75 = const 0
+      %76 = cmp.eq.s %74, %75
+      branch %76, bb15, bb16)
+    (bb15 preds bb14
+      %78 = const 5
+      ret %78)
+    (bb16 preds bb14
+      %81 = call acquire/0
+      store frame.7, %81
+      %83 = load frame.7
+      arg %83
+      %85 = call release/1
+      %86 = const 0
+      %87 = cmp.ne.s %85, %86
+      branch %87, bb17, bb18)
+    (bb17 preds bb16
+      %89 = const 6
+      ret %89)
+    (bb18 preds bb16
+      %92 = const 3
+      arg %92
+      %94 = const 3
+      arg %94
+      %96 = syscall/2
+      %97 = const 0
+      %98 = cmp.eq.s %96, %97
+      branch %98, bb19, bb20)
+    (bb19 preds bb18
+      %100 = const 7
+      ret %100)
+    (bb20 preds bb18
+      %103 = const 42
+      ret %103)))

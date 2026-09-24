@@ -64,7 +64,7 @@ hdr.len <- 20           -- store: into a field through a ref
 | `v[i] <- expr` | store into a view element, bounds-checked | CHECK + ZERO | **runs** |
 | `r.f <- expr` | store into a field through a `ref`, at the field's width | ZERO | **runs** |
 | `[p] <- expr` | raw store through an `addr`, at the width of its element type (`permit memory.raw`) | ZERO | **runs** (`tests/run/statics.oli`) |
-| `place <~ expr` | move an `own` value; the source becomes unusable | ZERO | reserved (V1) |
+| `place <~ expr` | move an `own` value into an `own` place; the source is consumed (a later read is `E0340`) | ZERO: one store, or a register move after `mem2reg` | **runs** (`tests/run/own.oli`) |
 | `addr x` | the raw address of a place | ZERO | analysed |
 | `ref x` / `rw ref x` | a safe reference to one live object — a local keeps its frame words once its address is taken, a field is the address of that part of the record | ZERO | **runs** |
 | `[p]` | raw load through an `addr` (`permit memory.raw`) | ZERO | **runs** |
@@ -343,7 +343,7 @@ Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 | `mmio view T` / `mmio rw view T` | a view of device memory: every element access volatile; made by `mem.mmio`, passed as a parameter, never converted to a plain view | **runs** |
 | `mmio ref T` / `mmio rw ref T` | a ref into device memory, from `Name.at` over an `mmio` view: every field access through it volatile (`raw.load/store.T.mmio`), never dropped | **runs** (`tests/run/mmio.oli`) |
 | `port T` | an I/O port as a value; `p.in()` / `p.out(v)` | **runs** |
-| `own T` | ownership | reserved (V1) |
+| `own T` | a linear handle (`T` an integer or an address): `own T (e)` wraps, `T(h)` unwraps and consumes, `<~` moves; consumed exactly once on every path or the checker says why (`E0340`–`E0345`, `tests/sema/err/linear.oli`); no instruction for the wrap or the unwrap | **runs** (`tests/run/own.oli`) |
 | `f32 f64` | floating point | reserved (V2) |
 
 Type identity is nominal for `layout`/`choice`, structural for everything
