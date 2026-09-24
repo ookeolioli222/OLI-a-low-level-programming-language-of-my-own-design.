@@ -1140,7 +1140,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1149,7 +1149,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1171,7 +1171,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1331,7 +1331,7 @@ for f in ../tests/run/*.oli; do
         [ "$st" = 42 ] || fail "run: $n exited $st, want 42 (the check number that failed)"
     fi
 done
-echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, a calls-interrupt handler entered through a frame pushed by hand and left through iretq, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
+echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, fallible results carried in the caller's area when a view, a layout or a wide choice is the value or the failure is wider than a word, a choice wider than a word held by its address as a local, a parameter and a result, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, a calls-interrupt handler entered through a frame pushed by hand and left through iretq, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
 # The image of a program with statics has two loadable segments, the second
 # read+write on the page after the first; hello.elf still has one.
 [ "$(od -An -tu2 -j56 -N2 build/statics.elf | tr -d ' ')" = 2 ] || fail "elf: statics.elf should have two program headers"
@@ -1413,9 +1413,10 @@ printf 'module notrap\nproc start -> s32\n    entry\n    ret 0\nend\n' > build/n
 [ "$(wc -c < build/notrap.elf)" -lt 200 ] || fail "notrap.elf is $(wc -c < build/notrap.elf) bytes: the trap routine was emitted anyway"
 echo "ok: the trap routine and its messages are in the binary only when a trap site is"
 
-# Anything the back end cannot lower is E0900, never approximated: here a
-# `choice` wider than a word, whose image would need memory (ABI.md 3).
-printf 'module z\nchoice Wide\n    one { a : u64, b : u64 }\nend\nproc f(x : u64) -> u64 or Wide\n    if x > 1 then fail one { a: x, b: x }\n    ret x\nend\nproc start -> s32\n    entry\n    v := f(1) else ret 3\n    if v != 1\n        ret 1\n    end\n    ret 0\nend\n' > build/nolower.oli
+# Anything the back end cannot lower is E0900, never approximated: here an
+# aggregate constant, which would live in .rodata (COMMANDS.md) — read, it
+# must be refused, not a zero-length view that traps.
+printf 'module z\nTABLE : [4]u8 := { 1, 2, 3, 4 }\nproc start -> s32\n    entry\n    v := TABLE[2]\n    if v != 3\n        ret 1\n    end\n    ret 0\nend\n' > build/nolower.oli
 set +e
 ( cd .. && genesis/build/olic < genesis/build/nolower.oli > genesis/build/nolower.elf 2> genesis/build/nolower.err )
 st=$?

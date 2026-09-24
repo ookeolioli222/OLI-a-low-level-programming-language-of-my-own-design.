@@ -138,7 +138,7 @@ if pkt.len < Header.size then fail too_short
 | `T.size`, `T.align` | compile-time constants | ZERO | **runs** |
 | `T.at(v)` | a `ref T` over a view; `check.range` traps `bounds` when short, `check.align` traps `misaligned` when not aligned (unless `packed`) | CHECK | **runs** |
 | `r.f` | a field load at the field's width, sign- or zero-extended; a view field as its two words; a by-value layout field as the address of that part | ZERO | **runs** |
-| `choice NAME ... end` | a tagged union of variants with optional payload; one that fits eight bytes travels as its memory image in one word — the tag (variant number from 0, in declaration order) in the first byte, each field at its offset | — | **runs** when ≤ 8 bytes; a wider one is E0900 |
+| `choice NAME ... end` | a tagged union of variants with optional payload; one that fits eight bytes travels as its memory image in one word — the tag (variant number from 0, in declaration order) in the first byte, each field at its offset; a wider one is its image in memory, reached by its address like a layout | — | **runs** |
 | `tag`, `payload` access on a `choice` | — | ZERO | reserved |
 
 ---
@@ -256,7 +256,7 @@ checked(x + y)   -- yields `T or Overflow`, handled with else/case
 | `T(x)` | a lossless widening; emits nothing | ZERO | **runs** |
 | `T.wrap(x)`, `T.bits(x)` | truncate to the width of `T`, wrapping / reinterpret at the same width | ZERO | **runs** |
 | `T.sat(x)`, `T.checked(x)` | saturating / fallible narrowing: clamp to the range of `T` / `T or Overflow` | CHECK | **runs** |
-| `physaddr(n)`, `addr T (n)` | an integer as a physical / raw virtual address (`permit memory.raw` for the latter) | ZERO | analysed |
+| `physaddr(n)`, `addr T (n)` | an integer as a physical / raw virtual address (`permit memory.raw` for the latter) | ZERO | **runs** as a value (the integer; `u64.bits` reads it back) |
 | an implicit narrowing | `E0202`: the conversion must be written | — | **runs** (as a diagnostic) |
 | a wrong field in a literal or pattern | `E0208`: a field the layout or variant does not declare, one named twice, or one left out of a literal (`tests/sema/err/fields.oli`) | — | **runs** (as a diagnostic) |
 
@@ -323,10 +323,10 @@ Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 | `ref T` / `rw ref T` | reference to one object — safe, writable; one word | **runs** |
 | `[N]T` | fixed array (a place type, not a value): in a frame or as a static, read as `rw view T` | **runs** |
 | `layout` names | nominal record types | **runs** |
-| `choice` names | nominal tagged unions; a value is its image in a word when it fits eight bytes | **runs** (≤ 8 bytes) |
-| `T or E`, `T or none` | a fallible value / an optional; `T` an integer or a ref, `E` an integer type or `none` | **runs** |
-| `T or E` with a `choice` `E` | the error a tagged union in the payload word | **runs** (choice ≤ 8 bytes) |
-| `T or E` with a view `T` from a procedure | a payload that needs `sret` | analysed (`z.try_bytes` is the one view payload that runs) |
+| `choice` names | nominal tagged unions; a value is its image in a word when it fits eight bytes, and its image in memory reached by its address — held, copied and passed like a layout by value — when it is wider | **runs** |
+| `T or E`, `T or none` | a fallible value / an optional; `T` an integer, a ref, a view, a layout or a choice, `E` an integer type, `none`, a `choice`, a layout or a view | **runs** |
+| `T or E` with a `choice` `E` | the error a tagged union: in the payload word when it fits eight bytes, in the caller's area otherwise | **runs** |
+| `T or E` with a view, a layout or a wide `choice` as `T`, or an `E` wider than a word | carried in the caller's area (ABI.md §2, `sret`): the tag, then the value's words or bytes, or the failure's; a layout of one word as `T` travels in the pair as that word; `else`/`case` read the area (a layout or a wide choice by its address, copied into the binding), `else fail` copies the failure on | **runs** (`tests/run/wide.oli`) |
 | `never` | a procedure that does not return | analysed |
 | `physaddr` | a physical address — never dereferenced; cannot mix with `addr` | analysed |
 | `be T` / `le T` | an integer stored big/little-endian, in a `layout` | **runs** |
@@ -373,10 +373,10 @@ tool).
 
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
-review that is: a `choice` or a layout failure wider than eight bytes, a view inside a `T or E` that a procedure returns,
-a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), `physaddr(n)`, the `cpu.*` intrinsics beyond `halt`/`pause` and the `mem.*` intrinsics beyond `get_*`/`put_*`,
+review that is:
+a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause` and the `mem.*` intrinsics beyond `get_*`/`put_*`,
 an `os.syscall` with more than seven words (the number and six
-arguments are all the registers a system call has) and aggregate constants.
+arguments are all the registers a system call has) and aggregate constants (`NAME : [N]T := { … }` or a layout constant, which would live in `.rodata`; reading one is refused, and the harness probes that).
 The front end already checks all of them, so a program using them is
 type-checked before it is refused.
 

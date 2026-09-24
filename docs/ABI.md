@@ -39,7 +39,7 @@ the equivalent C aggregates.
 | layout ≤ 16 bytes, all-integer fields | up to two INTEGER registers (SysV eightbyte classification) | `rax`, `rdx` |
 | layout > 16 bytes, or `packed` with unaligned fields | copied to the stack by the caller (`COPY`, reported) | hidden `sret` pointer in `rdi`; `rax` returns it |
 | `choice` | as the equivalent C struct `{ tag; union payload }` | same |
-| `T or E` | as the two-variant choice: tag `0` = ok, `1` = fail | `rax` = tag, `rdx` = payload if the whole value fits in 16 bytes; else `sret` |
+| `T or E` | as the two-variant choice: tag `0` = ok, `1` = fail | `rax` = tag, `rdx` = payload if the whole value fits in 16 bytes (a layout of one word as its word); else `sret`: an area the caller owns — one word for the tag, then the words of the wider payload (a view's two, a layout's or a wide choice's bytes) — whose address is the hidden first argument and comes back in `rax` |
 | `never` | — | control does not return; the compiler emits no code after the call |
 | `[N]T` | never by value; pass a `view` or `ref` | — |
 
@@ -53,7 +53,7 @@ prototype and every C function callable from Oli-- (V2 adds the `extern` declara
 - `packed`: no padding, alignment 1; accesses use unaligned moves (`ZERO` cost on x86-64, `CHECK`-free).
 - `align N` on a layout raises its alignment; `align N` on a field inserts padding before it.
 - `be T` / `le T` fields occupy exactly the bytes of `T` in that byte order.
-- `bool` is one byte holding 0 or 1. `choice` tags are the smallest unsigned integer that fits the variant count; a variant's tag is its number in declaration order, from 0. A choice whose image fits eight bytes travels in a register as that image (the tag in the low byte, each field at its offset), which is what `olic` does today; a wider one is not lowered yet.
+- `bool` is one byte holding 0 or 1. `choice` tags are the smallest unsigned integer that fits the variant count; a variant's tag is its number in declaration order, from 0. A choice whose image fits eight bytes travels in a register as that image (the tag in the low byte, each field at its offset); a wider one is held by its address and passed and returned like a layout of its size (the pair up to sixteen bytes, `sret` beyond). This is what `olic` does today.
 - `view T` is `{ addr: u64, len: u64 }` in memory; `zone` is `{ base, cursor, limit: u64 }`.
 
 ## 4. Symbols

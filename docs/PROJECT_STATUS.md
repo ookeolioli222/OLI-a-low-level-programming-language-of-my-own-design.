@@ -663,7 +663,8 @@ constant in `.rodata`).
   signedness, so an `s8` comes back sign-extended — into the local the
   pattern declared; a bare `when fail` or `else` takes the rest. `else fail`
   hands the word on unchanged. A choice wider than a word would need memory
-  and is `E0900`, which the harness probes. `tests/run/choice.oli` pins
+  and was `E0900`, which the harness probed until stage 19 lowered it
+  (`tests/run/wide.oli`). `tests/run/choice.oli` pins
   twenty-three checks; no OIR instruction was added — the integer group's
   `and`, `shl`, `shr`, `or` and `trunc` are all it takes.
 - **Two front-end defects found on the way.** A pattern local was resolved
@@ -903,12 +904,53 @@ constant in `.rodata`).
   it and checks its exit status and output — the vendor string is the
   machine's own `cpuid`.
 
+## Implemented in back-end stage 19 (2026-09-23/24): fallible results in the caller's area, wide choices as values
+
+- **A `T or E` the register pair cannot carry** — a view, a layout or a
+  choice wider than a word as `T`; a `choice`, a layout wider than a word or
+  a view as `E` — travels the way a wide layout result does (ABI.md §2):
+  the caller owns an area of its frame, one word for the tag and as many as
+  the wider payload needs, and passes its address as a hidden first
+  argument; `ret v` writes tag 0 and the value's words (a view's two, an
+  aggregate's bytes), `fail e` tag 1 and the failure's word, two words or
+  bytes, and the address comes back in rax. The caller reads the tag from
+  the area, a view's two words or a payload word after it, and for a layout
+  or a wide choice keeps the address of its bytes, which the binding copies:
+  `case … when fail VARIANT { f }` reads the tag byte and the fields from
+  memory, `else fail` copies the bytes into the procedure's own area. A
+  layout of one word as `T` still travels in the pair, as its word.
+- **A `choice` wider than a word is a value like a layout by value**: its
+  image in memory — the tag in the first byte, each field at its offset —
+  reached by its address (`detail { code: x, extra: y }`, `nothing`), copied
+  into a local, a parameter (the pair up to sixteen bytes, the stack beyond,
+  as for a layout) or a result (`sret`), and matched by `case` from the tag
+  byte with each field loaded at its offset, width and sign.
+- **Found on the way, and closed.** A layout or a wide choice as the `T` of
+  a `T or E`, and a wide choice as a plain value, compiled without a
+  diagnostic to the *address* of an area in the callee's frame — a dangling
+  value that happened to read right. A view as `E` kept its address and
+  lost its length. An aggregate constant (`TABLE : [4]u8 := { … }`) read as
+  a zero-length view, so `TABLE[2]` trapped `bounds`. The first three are
+  lowered above; the constant is `E0900` (it would live in `.rodata`), and
+  the harness probes it in place of the wide choice it probed before.
+  `physaddr(n)` and `addr T (n)`, listed as analysed, run as the integer
+  they are; the tables say so now.
+- `tests/run/wide.oli` pins forty-one checks: `find` answering a view or a
+  wide failure, `first_word` answering `view u8 or none`, `relay` passing a
+  wide failure on with `else fail`, `mk_pair`/`relay_pair` (a layout of two
+  words as the value), `mk_small`/`mk_sm` (a layout of one word, with `none`
+  and a wide choice as the failure), `mk_big` (a wide choice as the value),
+  `fp`/`relay_fp` (a layout as the failure), `f_view`/`g_view` (a view as
+  the failure), `mk_choice`/`sum_of` (a wide choice as a result, a parameter
+  and the subject of `case`), and every arm of `case` over them. Nothing in
+  the `T or E` family is `E0900` now.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 24,185 lines) into
+compiles its own source (`compiler/`, seventeen modules, 24,509 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 900,406 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 912,621 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

@@ -40,9 +40,11 @@ module olic.oir
 -- A `machine x64` block is `machine.in REG, %v` for each `in`, the block
 -- (`machine x64`, assembled by compiler/asm.oli) and `%n = machine.out REG`
 -- for each `out`, standing together in the stream.
--- Anything else is refused with E0900 rather than approximated: a choice
--- wider than a word, a view inside a `T or E` of a procedure and a machine
--- line the encoder does not know.
+-- A `T or E` the register pair cannot carry — a view, a layout or a wide
+-- choice as the value, a layout or a wide choice as the failure — goes
+-- through an area the caller owns, as a wide layout result does.
+-- Anything else is refused with E0900 rather than approximated: an
+-- aggregate constant, and a machine line the encoder does not know.
 --
 -- Plain arithmetic traps on overflow (design 0006), so every `+ - * / %` and
 -- every `-x` carries the width of its type and the static that names its trap
@@ -389,6 +391,8 @@ layout Oir
     sretslot : u64
     sretsize : u64
     curint : u64
+    widefall : u64
+    paywide : u64
     entryp : u64
     amode : u64
     ovfacc : u64
@@ -513,6 +517,8 @@ proc oir_reset(ob: rw ref Oir)
     ob.sretslot <- 0
     ob.sretsize <- 0
     ob.curint <- 0
+    ob.widefall <- 0
+    ob.paywide <- 0
     ob.entryp <- 0
     ob.amode <- 0
     ob.ovfacc <- 0
@@ -1932,6 +1938,7 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     rt := proc_result(pg, tok_text(cx, cn.t0))
     rl := layout_param(pg, rt)
+    fw := fallible_wide(pg, rt)
     hidden : u64 <- 0
     if rl > 16
         -- SysV `sret`: the caller owns an area for the result and passes
@@ -1940,12 +1947,43 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         ob.sretv <- tmp_area(ob, rl)
         hidden <- 1
     end
+    if fw > 0
+        ob.sretv <- tmp_area(ob, fw * 8)
+        hidden <- 1
+    end
     nargs := gen_call_args(pg, ob, mi, n, pi, hidden)
     r := emit_ins(ob, O_CALL, u64.bits(pi), nargs, ob.callstk, 0)
     ob.lastlen <- 0
     ob.lastpay <- 0
+    ob.paywide <- 0
     if rl > 16
         ret ob.sretv
+    end
+    if fw > 0
+        -- The tag from the area; the payload after it — a view's two words,
+        -- a word, or the address of the bytes of a layout or a wide choice.
+        area := ob.sretv
+        tag := emit_ins(ob, O_RLOAD, area, 8, 0, 0)
+        eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+        p1 := addr_add(ob, area, eight)
+        okt := ok_of(rt)
+        if is_view_type(okt) == 1
+            ob.lastpay <- emit_ins(ob, O_RLOAD, p1, 8, 0, 0)
+            sixteen := emit_ins(ob, O_CONST, 0, 0, 0, 16)
+            ob.lastlen <- emit_ins(ob, O_RLOAD, addr_add(ob, area, sixteen), 8, 0, 0)
+        elif layout_param(pg, okt) > 0
+            -- An aggregate held by its address, as a layout by value is.
+            ob.lastpay <- p1
+        else
+            ob.lastpay <- emit_ins(ob, O_RLOAD, p1, 8, 0, 0)
+        end
+        et := err_of(rt)
+        if view_eq(et, "none") == 0
+            if pay_words(pg, et) > 1
+                ob.paywide <- p1
+            end
+        end
+        ret tag
     end
     if rl > 0
         -- A layout of sixteen bytes or less comes back in rax and rdx
@@ -1973,6 +2011,13 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         -- 0007: the call's value is the tag, and the payload is read out here
         -- for the `else` or the `case` that must follow.
         ob.lastpay <- emit_ins(ob, O_RDX, 0, 0, 1, 0)
+        if layout_param(pg, ok_of(rt)) > 0
+            -- A layout of a word or less as the value: its word goes to a
+            -- fresh area of the frame, whose address is the payload.
+            la := tmp_area(ob, 8)
+            emit_ins(ob, O_RSTORE, la, ob.lastpay, 8, 0)
+            ob.lastpay <- la
+        end
     end
     ret r
 end
@@ -1986,8 +2031,25 @@ proc gen_name(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         -- A variant without fields, named on its own: the image is its tag.
         vi := variant_fields_of(pg, name)
         if vi >= 0
-            if choice_fits(pg, ob, mi, u64.bits(vi), n) == 0
-                ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+            vitem := item_at(pg, u64.bits(vi))
+            if vitem.size > 8
+                -- A wide choice: the image in a fresh area, the tag alone.
+                wb := tmp_area(ob, vitem.size)
+                wz := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+                wk : u64 <- 0
+                while wk * 8 < vitem.size
+                    wd : u64 <- wb
+                    if wk > 0
+                        wo := emit_ins(ob, O_CONST, 0, 0, 0, wk * 8)
+                        wd <- addr_add(ob, wb, wo)
+                    end
+                    emit_ins(ob, O_RSTORE, wd, wz, 8, 0)
+                    wk <- wk + 1
+                end
+                wt := emit_ins(ob, O_CONST, 0, 0, 0, variant_ordinal(pg, u64.bits(vi), name))
+                emit_ins(ob, O_RSTORE, wb, wt, 1, 0)
+                ob.lastlen <- 0
+                ret wb
             end
             ob.lastlen <- 0
             ret emit_ins(ob, O_CONST, 0, 0, 0, variant_ordinal(pg, u64.bits(vi), name))
@@ -2021,6 +2083,23 @@ proc gen_name(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         ret v
     end
     if nk == 2
+        -- An integer constant is its value. An aggregate one — `[N]T`, a
+        -- layout, a view — would live in `.rodata`, which is not lowered:
+        -- E0900, never a zero in its place.
+        kb := pg.sbuf
+        kt := ety(pg, mi, n, kb[0..0])
+        if is_array_type(kt) == 1
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        if is_view_type(kt) == 1
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        if layout_param(pg, kt) > 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
         ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
     end
     if nk == 3
@@ -3182,16 +3261,52 @@ end
 
 proc gen_ret_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, rv: u64)
     -- The `ret v` of the current procedure: a view is its pair, a `T or E` is
-    -- the pair (tag 0, v) — design 0007, ABI.md §2 — and anything else is one
-    -- word. A view inside a `T or E` would need `sret`, and is not lowered.
+    -- the pair (tag 0, v) — design 0007, ABI.md §2 — or, when the pair cannot
+    -- carry it (`ob.widefall`), tag and value written into the caller's area;
+    -- anything else is one word.
     full := cur_result(pg)
     rt := ok_of(full)
     if is_fallible(full) == 1
+        if ob.widefall > 0
+            -- Into the caller's area: tag 0, then the value's words.
+            v0 := gen_expr(pg, ob, mi, rv, rt)
+            ln0 := ob.lastlen
+            area := emit_ins(ob, O_LOAD, ob.sretslot - 1, 0, 0, 0)
+            zero0 := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+            emit_ins(ob, O_RSTORE, area, zero0, 8, 0)
+            eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+            p1 := addr_add(ob, area, eight)
+            lp0 := layout_param(pg, rt)
+            if is_view_type(rt) == 1
+                emit_ins(ob, O_RSTORE, p1, v0, 8, 0)
+                sixteen := emit_ins(ob, O_CONST, 0, 0, 0, 16)
+                emit_ins(ob, O_RSTORE, addr_add(ob, area, sixteen), ln0, 8, 0)
+            elif lp0 > 0
+                -- A layout or a wide choice: its bytes, exactly.
+                gen_copy(ob, p1, v0, lp0)
+            else
+                emit_ins(ob, O_RSTORE, p1, v0, 8, 0)
+            end
+            gen_release_to(ob, 0)
+            emit_ins(ob, O_RET, area, 0, 1, 0)
+            ret
+        end
         if is_view_type(rt) == 1
             oir_err(ob, pg, mi, 900, pg.curstmt)
             ret
         end
-        v := gen_expr(pg, ob, mi, rv, rt)
+        v1 := gen_expr(pg, ob, mi, rv, rt)
+        v : u64 <- v1
+        lp1 := layout_param(pg, rt)
+        if lp1 > 0
+            -- A layout of a word or less: its bytes, copied exactly into a
+            -- zeroed word of the frame, travel in rdx as that word.
+            wa := tmp_area(ob, 8)
+            wz := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+            emit_ins(ob, O_RSTORE, wa, wz, 8, 0)
+            gen_copy(ob, wa, v1, lp1)
+            v <- emit_ins(ob, O_RLOAD, wa, 8, 0, 0)
+        end
         zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
         gen_release_to(ob, 0)
         emit_ins(ob, O_RET, zero, v, 2, 0)
@@ -3248,6 +3363,10 @@ proc gen_fail(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     end
     ev := kid1(cx, n)
     one := emit_ins(ob, O_CONST, 0, 0, 0, 1)
+    if ob.widefall > 0
+        gen_fail_wide(pg, ob, mi, n)
+        ret
+    end
     if ev == 0
         zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
         gen_release_to(ob, 0)
@@ -3286,6 +3405,39 @@ proc gen_fail(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     emit_ins(ob, O_RET, one, e, 2, 0)
 end
 
+proc gen_fail_wide(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `fail [e]` of a procedure whose result lives in the caller's area:
+    -- tag 1, then the failure — a word, a view's two, or the bytes of a
+    -- layout or of a choice wider than a word — and the area's address
+    -- back in rax.
+    cx := mod_ctx(pg, mi)
+    full := cur_result(pg)
+    et := err_of(full)
+    ev := kid1(cx, n)
+    area := emit_ins(ob, O_LOAD, ob.sretslot - 1, 0, 0, 0)
+    one := emit_ins(ob, O_CONST, 0, 0, 0, 1)
+    emit_ins(ob, O_RSTORE, area, one, 8, 0)
+    eight := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+    p1 := addr_add(ob, area, eight)
+    if ev != 0
+        e := gen_expr(pg, ob, mi, ev, et)
+        eln := ob.lastlen
+        elp := layout_param(pg, et)
+        if elp > 0
+            gen_copy(ob, p1, e, elp)
+        elif is_view_type(et) == 1
+            -- A view: its two words.
+            emit_ins(ob, O_RSTORE, p1, e, 8, 0)
+            sixteen := emit_ins(ob, O_CONST, 0, 0, 0, 16)
+            emit_ins(ob, O_RSTORE, addr_add(ob, area, sixteen), eln, 8, 0)
+        else
+            emit_ins(ob, O_RSTORE, p1, e, 8, 0)
+        end
+    end
+    gen_release_to(ob, 0)
+    emit_ins(ob, O_RET, area, 0, 1, 0)
+end
+
 proc gen_fallback(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `e else handler`: the call, a branch on its tag, and in the fail block
     -- the handler — `fail` passes the payload on as this procedure's own
@@ -3298,6 +3450,7 @@ proc gen_fallback(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     tag := gen_fallible(pg, ob, mi, call)
     pay := ob.lastpay
     paylen := ob.lastlen
+    paywide := ob.paywide
     if pay == 0
         oir_err(ob, pg, mi, 900, n)
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
@@ -3353,8 +3506,25 @@ proc gen_fallback(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
             oir_err(ob, pg, mi, 900, n)
         end
         one := emit_ins(ob, O_CONST, 0, 0, 0, 1)
-        gen_release_to(ob, 0)
-        emit_ins(ob, O_RET, one, pay, 2, 0)
+        if ob.widefall > 0
+            -- Into this procedure's own area: the tag, then the failure's
+            -- word or bytes copied from the callee's area.
+            area2 := emit_ins(ob, O_LOAD, ob.sretslot - 1, 0, 0, 0)
+            emit_ins(ob, O_RSTORE, area2, one, 8, 0)
+            eight2 := emit_ins(ob, O_CONST, 0, 0, 0, 8)
+            q1 := addr_add(ob, area2, eight2)
+            if paywide > 0
+                ew2 := pay_words(pg, err_of(cur_result(pg)))
+                gen_copy(ob, q1, paywide, ew2 * 8)
+            else
+                emit_ins(ob, O_RSTORE, q1, pay, 8, 0)
+            end
+            gen_release_to(ob, 0)
+            emit_ins(ob, O_RET, area2, 0, 1, 0)
+        else
+            gen_release_to(ob, 0)
+            emit_ins(ob, O_RET, one, pay, 2, 0)
+        end
     elif hn.kind == N_RET
         rv := kid1(cx, h)
         if rv == 0
@@ -3395,6 +3565,7 @@ proc gen_case(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     tag := gen_fallible(pg, ob, mi, subj)
     pay := ob.lastpay
     paylen := ob.lastlen
+    paywide := ob.paywide
     if pay == 0
         oir_err(ob, pg, mi, 900, n)
         ret
@@ -3432,8 +3603,10 @@ proc gen_case(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
             oir_err(ob, pg, mi, 900, n)
             ret
         end
-        if choice_fits(pg, ob, mi, u64.bits(ci), n) == 0
-            ret
+        if paywide == 0
+            if choice_fits(pg, ob, mi, u64.bits(ci), n) == 0
+                ret
+            end
         end
     end
     zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
@@ -3457,6 +3630,7 @@ proc gen_case(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     emit_ins(ob, O_LABEL, lfail, 0, 0, 0)
     if npat > 0
         ob.lastpay <- pay
+        ob.paywide <- paywide
         gen_fail_arms(pg, ob, mi, n, u64.bits(ci), ldone)
     end
     if failarm != 0
@@ -3489,8 +3663,9 @@ proc gen_case_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     -- `case v when … end` over a `bool`, an integer or a plain `choice`:
     -- the arms in the order written, each a compare and a jump past it —
     -- `true`/`false` and an integer against the value, a variant against
-    -- the tag byte of the image with its fields bound — and `else` takes
-    -- the rest.
+    -- the tag byte of the image (in the word, or in memory at the address
+    -- the value is when the choice is wider) with its fields bound — and
+    -- `else` takes the rest.
     cx := mod_ctx(pg, mi)
     b := pg.sbuf
     subj := kid1(cx, n)
@@ -3507,12 +3682,16 @@ proc gen_case_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
         end
     end
     tagv : u64 <- v
+    wide : u64 <- 0
     if ci >= 0
-        if choice_fits(pg, ob, mi, u64.bits(ci), n) == 0
-            ret
+        cit := item_at(pg, u64.bits(ci))
+        if cit.size > 8
+            wide <- 1
+            tagv <- emit_ins(ob, O_RLOAD, v, 1, 0, 0)
+        else
+            m255 := emit_ins(ob, O_CONST, 0, 0, 0, 255)
+            tagv <- emit_bin(ob, B_AND, v, m255, 0)
         end
-        m255 := emit_ins(ob, O_CONST, 0, 0, 0, 255)
-        tagv <- emit_bin(ob, B_AND, v, m255, 0)
     end
     ldone := new_label(ob)
     elsearm : u64 <- 0
@@ -3550,7 +3729,11 @@ proc gen_case_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
                 pg.curstmt <- pat
                 f : u64 <- kid1(cx, pat)
                 while f != 0
-                    gen_bind_field(pg, ob, mi, v, pat, f)
+                    if wide > 0
+                        gen_bind_field_mem(pg, ob, mi, v, pat, f)
+                    else
+                        gen_bind_field(pg, ob, mi, v, pat, f)
+                    end
                     f <- sibling(cx, f)
                 end
             end
@@ -3573,8 +3756,15 @@ proc gen_fail_arms(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, ci: u64, ld
     -- payload arrives in `ob.lastpay`: oli-core passes six words.
     cx := mod_ctx(pg, mi)
     pay := ob.lastpay
-    m255 := emit_ins(ob, O_CONST, 0, 0, 0, 255)
-    tagv := emit_bin(ob, B_AND, pay, m255, 0)
+    wide := ob.paywide
+    tagv : u64 <- 0
+    if wide > 0
+        -- The image lies in memory: its first byte is the tag.
+        tagv <- emit_ins(ob, O_RLOAD, wide, 1, 0, 0)
+    else
+        m255 := emit_ins(ob, O_CONST, 0, 0, 0, 255)
+        tagv <- emit_bin(ob, B_AND, pay, m255, 0)
+    end
     arm : u64 <- kid2(cx, n)
     while arm != 0
         an := node_at(cx, arm)
@@ -3594,7 +3784,11 @@ proc gen_fail_arms(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, ci: u64, ld
                     pg.curstmt <- kid1(cx, arm)
                     f : u64 <- kid1(cx, pat)
                     while f != 0
-                        gen_bind_field(pg, ob, mi, pay, pat, f)
+                        if wide > 0
+                            gen_bind_field_mem(pg, ob, mi, wide, pat, f)
+                        else
+                            gen_bind_field(pg, ob, mi, pay, pat, f)
+                        end
                         f <- sibling(cx, f)
                     end
                     gen_block(pg, ob, mi, kid2(cx, arm))
@@ -3641,6 +3835,37 @@ proc gen_bind_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, pay: u64, pat: u64
     gen_store_local(pg, ob, mi, fname, v)
 end
 
+proc gen_bind_field_mem(pg: rw ref Prog, ob: rw ref Oir, mi: u64, base: u64, pat: u64, f: u64)
+    -- One field of a pattern over a choice whose image lies in memory at
+    -- `base`: loaded at its offset, width and signedness.
+    cx := mod_ctx(pg, mi)
+    fn := node_at(cx, f)
+    vn := node_at(cx, pat)
+    vname := tok_text(cx, vn.t0)
+    fname := tok_text(cx, fn.t0)
+    vi := variant_fields_of(pg, vname)
+    if vi < 0
+        oir_err(ob, pg, mi, 900, pat)
+        ret
+    end
+    ci := u64.bits(vi)
+    ft := variant_field_type(pg, vname, fname)
+    nb := field_bits(ft)
+    sg : u64 <- 0
+    if int_signed(ft) == 1
+        sg <- 1
+    end
+    off := variant_field_off(pg, ci, vname, fname)
+    p : u64 <- base
+    if off > 0
+        oc := emit_ins(ob, O_CONST, 0, 0, 0, off)
+        p <- addr_add(ob, base, oc)
+    end
+    v := emit_ins(ob, O_RLOAD, p, nb / 8, sg, 0)
+    ob.lastlen <- 0
+    gen_store_local(pg, ob, mi, fname, v)
+end
+
 proc gen_variant_lit(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `VARIANT { f: e, … }`: the image of the choice as one word — the tag in
     -- its first byte, each field's bits at the field's offset (ABI.md §3).
@@ -3662,8 +3887,9 @@ proc gen_variant_lit(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end
     ci := u64.bits(vi)
-    if choice_fits(pg, ob, mi, ci, n) == 0
-        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    citem := item_at(pg, ci)
+    if citem.size > 8
+        ret gen_variant_mem(pg, ob, mi, n, ci)
     end
     img : u64 <- emit_ins(ob, O_CONST, 0, 0, 0, variant_ordinal(pg, ci, vname))
     f : u64 <- kid2(cx, n)
@@ -3693,6 +3919,47 @@ end
 
 proc one_u64() -> u64
     ret 1
+end
+
+proc gen_variant_mem(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, ci: u64) -> u64
+    -- A variant of a choice wider than a word: its image in a fresh area
+    -- of the frame — the tag in the first byte, each field at its offset —
+    -- and the value is the area's address, as for a layout held by value.
+    cx := mod_ctx(pg, mi)
+    hn := node_at(cx, kid1(cx, n))
+    vname := tok_text(cx, hn.t0)
+    item := item_at(pg, ci)
+    base := tmp_area(ob, item.size)
+    zero := emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    k : u64 <- 0
+    while k * 8 < item.size
+        d : u64 <- base
+        if k > 0
+            off := emit_ins(ob, O_CONST, 0, 0, 0, k * 8)
+            d <- addr_add(ob, base, off)
+        end
+        emit_ins(ob, O_RSTORE, d, zero, 8, 0)
+        k <- k + 1
+    end
+    tagc := emit_ins(ob, O_CONST, 0, 0, 0, variant_ordinal(pg, ci, vname))
+    emit_ins(ob, O_RSTORE, base, tagc, 1, 0)
+    f : u64 <- kid2(cx, n)
+    while f != 0
+        fn := node_at(cx, f)
+        fname := tok_text(cx, fn.t0)
+        ft := variant_field_type(pg, vname, fname)
+        v := gen_expr(pg, ob, mi, kid1(cx, f), ft)
+        off2 := variant_field_off(pg, ci, vname, fname)
+        p : u64 <- base
+        if off2 > 0
+            oc := emit_ins(ob, O_CONST, 0, 0, 0, off2)
+            p <- addr_add(ob, base, oc)
+        end
+        gen_store_typed(pg, ob, p, v, ft)
+        f <- sibling(cx, f)
+    end
+    ob.lastlen <- 0
+    ret base
 end
 
 proc gen_layout_lit(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, li: u64) -> u64
@@ -3776,8 +4043,10 @@ proc field_bits(t: view u8) -> u64
 end
 
 proc choice_fits(pg: rw ref Prog, ob: rw ref Oir, mi: u64, ci: u64, n: u64) -> word
-    -- A choice travels as its image in one word; one wider than a word
-    -- would need memory, which is not lowered — E0900, never approximated.
+    -- The guard of the paths that carry a choice as its image in one word.
+    -- A wider one lies in memory and is held by its address instead —
+    -- `gen_variant_mem`, `gen_fail_wide`, `gen_case_value` — so it does not
+    -- reach these paths; were it to, E0900 rather than an approximation.
     it := item_at(pg, ci)
     if it.size > 8
         oir_err(ob, pg, mi, 900, n)
@@ -4462,8 +4731,48 @@ proc count_locals(pg: ref Prog) -> u64
     ret pg.nloc - pg.locbase
 end
 
+proc pay_words(pg: ref Prog, t: view u8) -> u64
+    -- The words a payload of type `t` takes: a view two, a choice or a
+    -- layout as many as its bytes, anything else one.
+    if is_view_type(t) == 1
+        ret 2
+    end
+    it := layout_of(pg, t)
+    if it >= 0
+        if is_ref_type(t) == 0
+            item := item_at(pg, u64.bits(it))
+            ret (item.size + 7) / 8
+        end
+    end
+    ret 1
+end
+
+proc fallible_wide(pg: ref Prog, t: view u8) -> u64
+    -- A `T or E` that does not fit rax and rdx: the words of its area — the
+    -- tag and the wider payload — or 0 when the pair carries it.
+    if is_fallible(t) == 0
+        ret 0
+    end
+    ok := pay_words(pg, ok_of(t))
+    e := err_of(t)
+    ew : u64 <- 1
+    if view_eq(e, "none") == 0
+        ew <- pay_words(pg, e)
+    end
+    w : u64 <- ok
+    if ew > w
+        w <- ew
+    end
+    if w <= 1
+        ret 0
+    end
+    ret 1 + w
+end
+
 proc layout_param(pg: ref Prog, t: view u8) -> u64
-    -- The size of a layout passed by value, 0 for any other type.
+    -- The size of an aggregate held by its address — a layout by value, or
+    -- a choice wider than a word, whose image lies in memory — and 0 for
+    -- any other type; a choice that fits a word travels as that word.
     if is_view_type(t) == 1
         ret 0
     end
@@ -4478,6 +4787,12 @@ proc layout_param(pg: ref Prog, t: view u8) -> u64
         ret 0
     end
     item := item_at(pg, u64.bits(it))
+    if item.kind == 1
+        if item.size > 8
+            ret item.size
+        end
+        ret 0
+    end
     if item.kind != 0
         ret 0
     end
@@ -4502,6 +4817,14 @@ proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
         st := new_tmp(ob)
         emit_ins(ob, O_STORE, st, sp, 0, 0)
         ob.sretslot <- st + 1
+        regs <- 1
+    end
+    if ob.widefall > 0
+        -- The same for a fallible result the register pair cannot carry.
+        sp2 := emit_ins(ob, O_PARAM, 0, 0, 0, 0)
+        st2 := new_tmp(ob)
+        emit_ins(ob, O_STORE, st2, sp2, 0, 0)
+        ob.sretslot <- st2 + 1
         regs <- 1
     end
     i : u64 <- pg.locbase
@@ -4643,6 +4966,7 @@ proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     ob.brk <- 0
     ob.cont <- 0
     ob.sretsize <- layout_param(pg, proc_result(pg, tok_text(cx, nd.t0)))
+    ob.widefall <- fallible_wide(pg, proc_result(pg, tok_text(cx, nd.t0)))
     gen_params(pg, ob, v.node)
     params := kid1(cx, v.node)
     k : u64 <- sibling(cx, params)

@@ -420,7 +420,11 @@ number, from 0, in declaration order) in the first byte, each field at its
 offset — so `fail VARIANT { f: e }` builds the word with masks and shifts,
 `case … when fail VARIANT { f }` compares the tag byte and reads each field
 back at its width and sign, and `else fail` hands the word on
-(`tests/run/choice.oli`). A wider choice would need memory and is `E0900`.
+(`tests/run/choice.oli`). A wider choice is its image in memory, held by
+its address like a layout by value: copied into a local, a parameter or a
+result, written into the caller's area by `fail`, and matched by `case`
+from its tag byte with each field loaded at its offset
+(`tests/run/wide.oli`).
 A field a literal or pattern names that the variant does not declare, one
 named twice, or one a literal leaves out is `E0208`.
 
