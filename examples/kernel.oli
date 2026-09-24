@@ -2,12 +2,14 @@
 -- load: 0x100000
 module kernel
 import core.x64
--- M3 (docs/FREESTANDING.md §8) and the first step of M4: a flat kernel
+-- M3 (docs/FREESTANDING.md §8) and the first steps of M4: a flat kernel
 -- image for QEMU or GRUB — a Multiboot2 header in `.text.boot`, its own
--- entry with no frame, its own stack, a line on COM1 through port I/O, the
--- same line in the VGA text buffer through raw stores, `cpuid` through a
--- machine block, an interrupt descriptor table with a `calls interrupt`
--- handler on vector 3 that a software `int 3` reaches, then `hlt` forever.
+-- entry with no frame, its own stack, a line on COM1 through port places
+-- (`port.u8[n] <- b`), the same line in the VGA text buffer through an
+-- `mmio` view, `cpuid` through a machine block, an interrupt descriptor
+-- table with `calls interrupt` handlers on vector 3 (reached by a software
+-- `int 3`) and vector 32 (the timer: the 8259 PICs remapped, the 8253 PIT at
+-- 100 Hz, `sti`), a wait of one second in `hlt`, then `hlt` forever.
 -- No system calls, no libc: nothing in the image but this program.
 --
 --   bin/olic examples/kernel.oli -o kernel.elf
@@ -36,6 +38,8 @@ idt : [256]core.x64.IdtGate
 
 idtr : core.x64.TablePointer
 
+ticks : u64
+
 proc start -> never
     entry
     calls none
@@ -57,13 +61,9 @@ proc on_trap(_kind : core.TrapKind, _site : core.Site) -> never
     end
 end
 
-proc outb(pn : u32, value : u8)
-    permit cpu.asm
-    machine x64
-        in edx <- pn
-        in eax <- u32(value)
-        out dx, al
-    end
+proc outb(pn : u16, value : u8)
+    permit io.port
+    port.u8[pn] <- value
 end
 
 proc serial_write(s : view u8)
@@ -92,6 +92,39 @@ proc on_int3(frame : ref core.x64.InterruptFrame)
     serial_write("int 3 at ")
     serial_hex(frame.rip)
     serial_write("\n")
+end
+
+proc pic_init()
+    -- The two 8259s remapped to vectors 32..47 (ICW1 to ICW4 on each), then
+    -- every line masked but IRQ 0, the timer.
+    permit io.port
+    port.u8[0x20] <- 0x11
+    port.u8[0xA0] <- 0x11
+    port.u8[0x21] <- 32
+    port.u8[0xA1] <- 40
+    port.u8[0x21] <- 4
+    port.u8[0xA1] <- 2
+    port.u8[0x21] <- 1
+    port.u8[0xA1] <- 1
+    port.u8[0x21] <- 0xFE
+    port.u8[0xA1] <- 0xFF
+end
+
+proc pit_init(hz : u32)
+    -- Channel 0 of the 8253, both bytes of the divisor, square wave (mode
+    -- 3), at `hz` interrupts a second.
+    permit io.port
+    divisor := 1193182 / hz
+    port.u8[0x43] <- 0x36
+    port.u8[0x40] <- u8.wrap(divisor)
+    port.u8[0x40] <- u8.wrap(divisor >> 8)
+end
+
+proc on_timer(_frame : ref core.x64.InterruptFrame)
+    calls interrupt
+    permit cpu.interrupt, io.port
+    ticks <- ticks + 1
+    port.u8[0x20] <- 0x20
 end
 
 proc serial_hex(v : u64)
@@ -129,6 +162,12 @@ proc install_idt()
         out rax -> h
     end
     set_gate(3, h)
+    t : u64 <- 0
+    machine x64
+        mov rax, on_timer
+        out rax -> t
+    end
+    set_gate(32, t)
     idtr.limit <- 256 * 16 - 1
     idtr.base <- u64(idt.addr)
     machine x64
@@ -149,7 +188,7 @@ proc cpu_vendor_word() -> u32
 end
 
 proc main -> never
-    permit cpu.halt, cpu.asm
+    permit cpu.halt, cpu.asm, cpu.interrupt
     outb(0x3F9, 0)
     outb(0x3FB, 0x80)
     outb(0x3F8, 3)
@@ -170,6 +209,13 @@ proc main -> never
         int 3
     end
     serial_write("back from int 3\n")
+    pic_init()
+    pit_init(100)
+    cpu.interrupts(on)
+    while ticks < 100
+        cpu.halt()
+    end
+    serial_write("timer: 100 ticks\n")
     loop
         cpu.halt()
     end

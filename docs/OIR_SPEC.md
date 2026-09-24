@@ -155,7 +155,7 @@ Blocks end in exactly one terminator: `jump`, `branch`, `ret`, `fail`, `trap`,
 | control | `jump bbN`, `branch %c, bbT, bbF`, `ret %v`, `fail %e`, `trap KIND`, `unreachable`, `call PROC(%args)` → `%r`, `syscall %nr, %args` → `%r` |
 | machine | `machine x64` node: inputs (reg, %v), outputs (reg, place), clobbers, memory flag, encoded body |
 | ownership | `own.move %v` |
-| hardware (design 0015) | `hw.load PLACE` → `%v`, `hw.store PLACE, %v`, `hw.cmd NAME(%args)` → `%r`; `PLACE` is `cpu.stack`, `cpu.frame`, `arch.x64.cr3`, `port.u8[%n]`, `arch.x64.msr[%n]`, …; all volatile, each annotated with its capability |
+| hardware (design 0015) | `hw.load PLACE` → `%v`, `hw.store PLACE, %v`, `hw.cmd NAME(%args)` → `%r`; `PLACE` is `cpu.stack`, `cpu.frame`, `arch.x64.cr3`, `port.u8[%n]`, `arch.x64.msr[%n]`, …; all volatile, each annotated with its capability. Today `olic` prints `%v = hw.load port.u8 %p` and `hw.store port.u16 %p, %v` for a port place (one `in`/`out` at the width) and `cpu.interrupts on`/`off` (`sti`/`cli`) beside `cpu.halt`/`cpu.pause`; all are class KERNEL and no pass removes or merges them |
 | intrinsics | `cpu.halt`, `cpu.pause`, `cpu.fence ORDER`, `mem.copy %dst, %src, %n`, `mem.set`, `mem.zero`, `mem.secure_zero` (never removed), `port.in.T`, `port.out.T` |
 
 ## 5. Text form example

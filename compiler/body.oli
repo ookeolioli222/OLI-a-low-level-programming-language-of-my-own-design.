@@ -532,6 +532,7 @@ CK_MAKE := 12
 CK_AT := 13
 CK_PROC := 14
 CK_MMIO := 15
+CK_INTS := 16
 
 proc mmio_elem_ok(t: view u8) -> word
     -- The element types `mem.mmio` takes: the unsigned widths.
@@ -638,6 +639,9 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
                 end
             end
             if view_eq(bname, "cpu")
+                if view_eq(m, "interrupts")
+                    ret CK_INTS
+                end
                 if view_eq(m, "halt")
                     ret CK_HALT
                 end
@@ -701,6 +705,9 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
         ret "(no value)"
     end
     if ck == CK_PAUSE
+        ret "(no value)"
+    end
+    if ck == CK_INTS
         ret "(no value)"
     end
     if ck == CK_COPY
@@ -1017,6 +1024,9 @@ proc ety(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
     if k == N_RAWLOAD
         ret addr_elem(ety(pg, mi, kid1(cx, n), b[0..0]))
     end
+    if k == N_HWPLACE
+        ret hw_type(nd.val)
+    end
     if k == N_BINOP
         ret binop_type(pg, mi, n, want)
     end
@@ -1240,6 +1250,9 @@ proc is_place(pg: ref Prog, mi: u64, n: u64) -> word
     if k == N_RAWLOAD
         ret 1
     end
+    if k == N_HWPLACE
+        ret 1
+    end
     if k == N_NAME
         nk := name_kind(pg, mi, n)
         if nk == 3
@@ -1303,6 +1316,9 @@ proc place_rw(pg: ref Prog, mi: u64, n: u64) -> word
     if k == N_RAWLOAD
         ret 1
     end
+    if k == N_HWPLACE
+        ret 1
+    end
     if k == N_NAME
         nk := name_kind(pg, mi, n)
         if nk == 3
@@ -1353,6 +1369,14 @@ proc pplace(pg: ref Prog, mi: u64, n: u64)
     if k == N_RAWLOAD
         put(1, "raw ")
         pexpr(pg, mi, kid1(cx, n), b[0..0])
+        put(1, "]")
+        ret
+    end
+    if k == N_HWPLACE
+        put(1, "port.")
+        put(1, hw_type(nd.val))
+        put(1, " ")
+        pexpr(pg, mi, kid1(cx, n), "u16")
         put(1, "]")
         ret
     end
@@ -1568,6 +1592,10 @@ proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
         put(1, "MemMmio")
         ret
     end
+    if ck == CK_INTS
+        put(1, "CpuInterrupts")
+        ret
+    end
     if ck == CK_GET
         put(1, "MemGet(")
     else
@@ -1728,6 +1756,9 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
             else
                 pexpr(pg, mi, a2, "uword")
             end
+        elif ck == CK_INTS
+            onn := node_at(cx, a2)
+            put(1, tok_text(cx, onn.t0))
         elif ck == CK_PUT
             if j == 0
                 pexpr(pg, mi, a2, "rw view u8")
@@ -3106,6 +3137,11 @@ proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
     end
     if k == N_RAWLOAD
         texpr(pg, mi, kid1(cx, n), b[0..0])
+        ret
+    end
+    if k == N_HWPLACE
+        -- A port number is sixteen bits: what `dx` holds.
+        texpr(pg, mi, kid1(cx, n), "u16")
         ret
     end
     if k == N_FALLBACK

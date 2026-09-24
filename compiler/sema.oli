@@ -256,6 +256,9 @@ proc infer(pg: ref Prog, mi: u64, n: u64) -> view u8
         end
         ret elem_of(base)
     end
+    if k == N_HWPLACE
+        ret hw_type(nd.val)
+    end
     if k == N_FIELD
         m := tok_text(cx, nd.t0)
         ft := field_type_text(pg, infer(pg, mi, kid1(cx, n)), m)

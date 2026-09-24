@@ -841,6 +841,45 @@ proc lower_rload(ob: rw ref Oir, mc: ref Mach, i: u64)
     st_val(ob, mc, R_AX, i)
 end
 
+proc lower_hwload(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `hw.load port.uN %p`: the port number in dx, `in` at the width, and
+    -- the value zero-extended to the canonical image of its type — `in
+    -- eax, dx` clears the upper half itself.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_DX, ins.a)
+    if ins.b == 1
+        cb(ob, 236)
+        cb(ob, 15)
+        cb(ob, 182)
+        cb(ob, 192)
+    elif ins.b == 2
+        cb(ob, 102)
+        cb(ob, 237)
+        cb(ob, 15)
+        cb(ob, 183)
+        cb(ob, 192)
+    else
+        cb(ob, 237)
+    end
+    st_val(ob, mc, R_AX, i)
+end
+
+proc lower_hwstore(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `hw.store port.uN %p, %v`: the port number in dx, the value in al,
+    -- ax or eax, one `out`.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_DX, ins.a)
+    ld_val(ob, mc, R_AX, ins.b)
+    if ins.c == 1
+        cb(ob, 238)
+    elif ins.c == 2
+        cb(ob, 102)
+        cb(ob, 239)
+    else
+        cb(ob, 239)
+    end
+end
+
 proc lower_rstore(ob: rw ref Oir, mc: ref Mach, i: u64)
     ins := ins_at(ob, i)
     ld_val(ob, mc, R_AX, ins.a)
@@ -1562,10 +1601,22 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     if op == O_CPU
         if ins.val == 0
             cb(ob, 244)
+        elif ins.val == 2
+            cb(ob, 250)
+        elif ins.val == 3
+            cb(ob, 251)
         else
             cb(ob, 243)
             cb(ob, 144)
         end
+        ret
+    end
+    if op == O_HWLOAD
+        lower_hwload(ob, mc, i)
+        ret
+    end
+    if op == O_HWSTORE
+        lower_hwstore(ob, mc, i)
         ret
     end
     if op == O_TRAP

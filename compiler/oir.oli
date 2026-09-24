@@ -154,9 +154,15 @@ O_ZENDF := 34
 O_MIN := 35
 O_MACHINE := 36
 O_MOUT := 37
--- `cpu.halt()` and `cpu.pause()` (design 0015): one instruction each,
--- `hlt` and `pause`; `val` says which.
+-- `cpu.halt()`, `cpu.pause()`, `cpu.interrupts(off)`, `cpu.interrupts(on)`
+-- (design 0015): one instruction each — `hlt`, `pause`, `cli`, `sti`;
+-- `val` (0..3) says which.
 O_CPU := 38
+-- `hw.load port.uN %p` and `hw.store port.uN %p, %v` (design 0015): an I/O
+-- port read or written at the width `b` (load) or `c` (store) names, in
+-- bytes; volatile, class KERNEL, never removed or merged.
+O_HWLOAD := 39
+O_HWSTORE := 40
 -- The arithmetic modes: plain arithmetic traps, `wrap` wraps, `sat` clamps,
 -- `checked` answers with a failure (design 0006).
 AM_TRAP := 0
@@ -651,6 +657,12 @@ proc op_uses_a(op: u64) -> word
     if op == O_RSTORE
         ret 1
     end
+    if op == O_HWLOAD
+        ret 1
+    end
+    if op == O_HWSTORE
+        ret 1
+    end
     if op == O_CHKB
         ret 1
     end
@@ -695,6 +707,9 @@ proc op_uses_b(op: u64) -> word
         ret 1
     end
     if op == O_RSTORE
+        ret 1
+    end
+    if op == O_HWSTORE
         ret 1
     end
     if op == O_CHKB
@@ -1400,6 +1415,27 @@ proc gen_rawload(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ret emit_ins(ob, O_RLOAD, p, u64.bits(nb) / 8, sg, 0)
 end
 
+-- Hardware places (design 0015, `permit io.port`) ----------------------------
+
+proc gen_hwload(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `port.uN[p]` read: `hw.load port.uN %p` — one `in` at the width.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    p := gen_expr(pg, ob, mi, kid1(cx, n), "u16")
+    ob.lastlen <- 0
+    ret emit_ins(ob, O_HWLOAD, p, nd.val / 8, 0, 0)
+end
+
+proc gen_store_hw(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
+    -- `port.uN[p] <- v`: `hw.store port.uN %p, %v` — one `out` at the width.
+    cx := mod_ctx(pg, mi)
+    tgt := kid1(cx, n)
+    tn := node_at(cx, tgt)
+    p := gen_expr(pg, ob, mi, kid1(cx, tgt), "u16")
+    v := gen_expr(pg, ob, mi, kid2(cx, n), hw_type(tn.val))
+    emit_ins(ob, O_HWSTORE, p, v, tn.val / 8, 0)
+end
+
 proc gen_store_raw(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     cx := mod_ctx(pg, mi)
     b := pg.sbuf
@@ -1946,6 +1982,23 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     if ck == CK_HALT
         emit_ins(ob, O_CPU, 0, 0, 0, 0)
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    if ck == CK_INTS
+        -- `cpu.interrupts(off)` is `cli`, `(on)` is `sti`; the checker let
+        -- nothing else through.
+        ia := sibling(cx, kid1(cx, n))
+        if ia == 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        ian := node_at(cx, ia)
+        if view_eq(tok_text(cx, ian.t0), "on")
+            emit_ins(ob, O_CPU, 0, 0, 0, 3)
+        else
+            emit_ins(ob, O_CPU, 0, 0, 0, 2)
+        end
         ob.lastlen <- 0
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end
@@ -3105,6 +3158,9 @@ proc gen_expr(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -
     if k == N_RAWLOAD
         ret gen_rawload(pg, ob, mi, n)
     end
+    if k == N_HWPLACE
+        ret gen_hwload(pg, ob, mi, n)
+    end
     oir_err(ob, pg, mi, 900, n)
     ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
 end
@@ -3247,6 +3303,10 @@ proc gen_store(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     end
     if tn.kind == N_RAWLOAD
         gen_store_raw(pg, ob, mi, n)
+        ret
+    end
+    if tn.kind == N_HWPLACE
+        gen_store_hw(pg, ob, mi, n)
         ret
     end
     if tn.kind != N_NAME
@@ -5162,6 +5222,12 @@ proc oir_op_name(op: u64) -> view u8
     if op == O_CPU
         ret "cpu"
     end
+    if op == O_HWLOAD
+        ret "hw.load"
+    end
+    if op == O_HWSTORE
+        ret "hw.store"
+    end
     if op == O_ZALLOC
         ret "zone.alloc"
     end
@@ -5480,6 +5546,15 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         pv(ob, pg, ins.b)
         ret
     end
+    if op == O_HWSTORE
+        put(1, "hw.store port.")
+        put(1, hw_type(ins.c * 8))
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
     if op == O_CHKB
         put(1, "check.bounds ")
         pv(ob, pg, ins.a)
@@ -5554,6 +5629,10 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     if op == O_CPU
         if ins.val == 0
             put(1, "cpu.halt")
+        elif ins.val == 2
+            put(1, "cpu.interrupts off")
+        elif ins.val == 3
+            put(1, "cpu.interrupts on")
         else
             put(1, "cpu.pause")
         end
@@ -5674,6 +5753,13 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         if ins.val == 1
             put(1, ".mmio")
         end
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        ret
+    end
+    if op == O_HWLOAD
+        put(1, "hw.load port.")
+        put(1, hw_type(ins.b * 8))
         put(1, " ")
         pv(ob, pg, ins.a)
         ret

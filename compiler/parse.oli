@@ -496,6 +496,47 @@ proc p_type_prim(cx: ref Ctx) -> u64
     ret n
 end
 
+proc port_place_follows(cx: ref Ctx) -> word
+    -- `port.` starts an indexed hardware place (design 0015); `port u8 (…)`
+    -- and `port u8` are the type.
+    t := ctok(cx, tpos(cx) + 1)
+    if t.kind == TK_OP
+        if t.sub == OP_DOT
+            ret 1
+        end
+    end
+    ret 0
+end
+
+proc p_hwplace(cx: ref Ctx) -> u64
+    -- `port.u8[n]`, `port.u16[n]`, `port.u32[n]`: an I/O port of that width
+    -- as a place, the width in `val`.
+    n := mk(cx, N_HWPLACE, tpos(cx))
+    adv(cx)
+    adv(cx)
+    w : u64 <- 0
+    wt := tok_text(cx, tpos(cx))
+    if view_eq(wt, "u8")
+        w <- 8
+    end
+    if view_eq(wt, "u16")
+        w <- 16
+    end
+    if view_eq(wt, "u32")
+        w <- 32
+    end
+    if w == 0
+        diag_at(cx, 13, tpos(cx))
+    end
+    adv(cx)
+    nd := node_at(cx, n)
+    nd.val <- w
+    open_bracket(cx)
+    add_kid(cx, n, p_expr(cx))
+    close_bracket(cx, OP_RBRACK)
+    ret n
+end
+
 proc p_typestart(cx: ref Ctx) -> u64
     -- A primitive or `port`/`be`/`le` type in expression position: a
     -- conversion when an operand follows, otherwise a type argument (§7.4).
@@ -581,6 +622,9 @@ proc p_primary(cx: ref Ctx) -> u64
         ret p_callop(cx, U_CHECKED)
     end
     if at_kw(cx, KW_PORT)
+        if port_place_follows(cx) == 1
+            ret p_hwplace(cx)
+        end
         ret p_typestart(cx)
     end
     if at_kw(cx, KW_BE)
@@ -1516,6 +1560,9 @@ proc pm_line(cx: ref Ctx, parent: u64)
             if k == N_RAWLOAD
                 ok <- 1
             end
+            if k == N_HWPLACE
+                ok <- 1
+            end
             if ok == 0
                 diag_at(cx, 17, lv)
             end
@@ -1667,6 +1714,9 @@ proc is_place_expr(cx: ref Ctx, e: u64) -> word
         ret 1
     end
     if k == N_RAWLOAD
+        ret 1
+    end
+    if k == N_HWPLACE
         ret 1
     end
     ret 0

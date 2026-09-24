@@ -183,7 +183,9 @@ A kernel imports `core` only. `olic --freestanding` rejects any import of `std`.
 A binary that: has its own `entry`, installs its own stack, writes a string to
 the COM1 port (`io.port`) and the VGA text buffer (`memory.mmio`), reads
 `cpuid` through a `machine` block, and halts — with no syscalls and no libc.
-`examples/kernel.oli` is that program today: COM1 through `out dx, al` in a
-`machine` block (`port T` is still V1), the VGA cells through `mem.mmio`.
+`examples/kernel.oli` is that program today: COM1 through `port.u8[0x3F8] <- b`,
+the VGA cells through `mem.mmio` — and beyond it the two 8259 PICs remapped,
+the 8253 PIT at 100 Hz, a `calls interrupt` handler on vector 32 counting
+ticks, `cpu.interrupts(on)` and a second of `hlt`.
 It is run under QEMU as a flat kernel (`-kernel` with a Multiboot2 header
 placed in `.text.boot` as a static `layout` with `section`).

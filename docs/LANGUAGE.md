@@ -298,7 +298,7 @@ left at the end of a line is `E0032`.
 | `none` | the empty type; `T or none` is the optional `T` | **[runs]** |
 | `never` | the bottom type: the procedure does not return | **[parses]** |
 | `zone` | 8 bytes, a zone handle | **[runs]** |
-| `port T` | an I/O port (V1) | **[parses]** |
+| `port T` | an I/O port as a value (V1); port I/O itself runs as the place `port.u8[n]` under `permit io.port` (§13) | **[parses]** |
 | `be T` / `le T` | an integer with a fixed byte order; a `be` field is swapped on load and store | **[runs]** |
 | `mmio view T` / `mmio rw view T` | memory-mapped I/O: every element access volatile; never dropped by a conversion (`E0200`); made by `mem.mmio` under `permit memory.mmio` | **[runs]** |
 | `mmio ref T` | a ref into device memory | **[parses]** |
@@ -697,9 +697,12 @@ rejected rather than silently ignored (`E0019` in the front end, exit 1 in
 ## 13. Freestanding and kernel mode **[runs]** (the M3 shape; the loader profile is planned)
 
 The capability rules of §11 are enforced today: a raw load or store, a raw
-address conversion and `zone … at` need `permit memory.raw`, and a `machine`
-block needs `permit cpu.asm` — without them the compiler reports `E0401` at the
-construct. Constructs the V0 front end accepts but does not implement — `own`,
+address conversion and `zone … at` need `permit memory.raw`, a `machine`
+block needs `permit cpu.asm`, a port place `port.u8[n]` / `port.u16[n]` /
+`port.u32[n]` (read: one `in`; written with `<-`: one `out`) needs
+`permit io.port`, and `cpu.interrupts(on)` / `cpu.interrupts(off)` (`sti` /
+`cli`) need `permit cpu.interrupt` — without them the compiler reports `E0401`
+at the construct. Constructs the V0 front end accepts but does not implement — `own`,
 `f32`/`f64`, `<~`, `port T (…)` — report `E0900` rather than compiling to
 something approximate; `mem.mmio` and `calls interrupt` run.
 

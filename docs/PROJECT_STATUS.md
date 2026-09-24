@@ -976,12 +976,42 @@ constant in `.rodata`).
   instead of raw stores. `tests/sema/err/not_implemented.oli` reports
   `E0401` for `mem.mmio` without the capability where it reported `E0900`.
 
+## Implemented in back-end stage 21 (2026-09-24): port places, `cpu.interrupts`, the PIC and the PIT
+
+- **`port.u8[n]`, `port.u16[n]`, `port.u32[n]`** (design 0015) are places:
+  read, one `in` at the width with the value zero-extended to the canonical
+  image; written with `<-`, one `out`; the port number is a `u16` (what `dx`
+  holds). The parser tells `port.` from the `port T` type by the dot, the
+  checker asks for `permit io.port` (`E0401`), and the OIR has two new
+  instructions, `hw.load port.uN %p` and `hw.store port.uN %p, %v` —
+  volatile: the dead-code pass keeps a load whatever reads it, nothing
+  merges or moves them, `--explain` bills them `KERNEL` (as it now does
+  `cpu.halt`, `cli` and `sti`).
+- **`cpu.interrupts(on)` / `cpu.interrupts(off)`** are `sti` / `cli` under
+  `permit cpu.interrupt`; any other argument is `E0900`.
+- `tests/run/hw.oli` compiles every form and runs to 42 with the port code
+  behind a byte that never arrives on stdin, since a process may touch
+  neither a port nor the interrupt flag; the harness disassembles the image
+  with binutils and finds each of `out %al/%ax/%eax`, `in %al/%ax/%eax`,
+  `cli`, `sti` and the zero-extension exactly once, and the six port
+  accesses in `--show-oir=opt`. `hw.{oir,ssa,opt}` pin the form.
+- **`examples/kernel.oli` programs its hardware from Oli--**: `outb` is a
+  port place; `pic_init` remaps the two 8259s to vectors 32..47 and masks
+  every line but the timer's; `pit_init(100)` sets channel 0 of the 8253;
+  `on_timer` (`calls interrupt`, vector 32) counts `ticks` and writes the
+  end of interrupt; `main` enables interrupts and waits a second in `hlt`
+  before its final `hlt` loop. The harness finds fifteen `out dx, al`, one
+  `sti` and two `iretq` in the image, fifteen `hw.store port.u8` in its
+  OIR, and the machine blocks that remain (`cpuid`, `lidt`, `int 3`, the
+  handler addresses) as before. No QEMU on this machine: the image is
+  checked structurally.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 24,721 lines) into
+compiles its own source (`compiler/`, seventeen modules, 25,025 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 920,052 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 931,333 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

@@ -168,7 +168,7 @@ end
 | `module a.b` | one file = one module; `cpu`/`mem`/`os` always in scope, `core` implicit | **runs** |
 | `import a.b [as x]`, `pub` | imports resolve under `lib/`, names are checked across modules | analysed as a whole program; no run fixture imports a module yet |
 | `proc NAME(params) -> T ... end` | a procedure: arguments in the six SysV registers, then on the stack right to left; a view that does not fit in the registers left goes to the stack whole and the next integer still takes a register (the SysV rule, `docs/ABI.md` §1–2); one result (a view: two words) | **runs** (`tests/run/args.oli`) |
-| `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw`, `memory.mmio`, `cpu.asm` and `cpu.interrupt` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`, `memory.raw`, `memory.mmio`, `cpu.asm`, `cpu.interrupt`) / analysed (the rest) |
+| `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw`, `memory.mmio`, `io.port`, `cpu.asm` and `cpu.interrupt` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`, `memory.raw`, `memory.mmio`, `io.port`, `cpu.asm`, `cpu.interrupt`) / analysed (the rest) |
 | `calls sysv` | the default convention | analysed |
 | `calls none` | no prologue, no frame: the body is `machine` blocks alone, without `in`/`out` (boot code) | **runs** (`tests/run/freestanding.oli`) |
 | `calls interrupt` | an interrupt handler (`permit cpu.interrupt`): the prologue pushes every general register but rsp and rbp, the one parameter is `ref core.x64.InterruptFrame` — the rip, cs, rflags, rsp and ss the CPU pushed — and the return is `iretq`; no result | **runs** (`tests/run/interrupt.oli` enters one through a frame pushed by hand; `examples/kernel.oli` installs one on vector 3 and reaches it with `int 3`) |
@@ -292,16 +292,18 @@ cpu.stack <- addr boot_stack + 16K   -- the stack pointer is a place
 cpu.call(main)                       -- transfer control
 id := cpu.id(0)                      -- cpuid -> core.CpuId { a, b, c, d }
 arch.x64.cr3 <- page_table           -- V1: a control register (physaddr-typed)
-port.u8[0x3F8] <- b                  -- V1: port I/O as an indexed place
+port.u8[0x3F8] <- b                  -- runs: port I/O as an indexed place (`io.port`)
 ```
 
 | Command | Permit | Status |
 |---------|--------|--------|
 | `cpu.stack`, `cpu.frame`, `cpu.call`, `cpu.jump` | `cpu.control` | planned (`docs/design/0015-hardware-commands.md`) |
 | `cpu.id(leaf)` | — | planned |
-| `cpu.interrupts(on/off)`, `cpu.fence(order)`, `cpu.tsc()` | `cpu.interrupt` / — | planned (V1) |
+| `cpu.interrupts(on)` / `cpu.interrupts(off)` | `cpu.interrupt` | **runs**: one `sti` / `cli`, KERNEL (`tests/run/hw.oli`, `examples/kernel.oli`) |
+| `cpu.fence(order)`, `cpu.tsc()` | — | planned (V1) |
 | `arch.x64.cr0/2/3/4/8`, `msr[n]`, `gdt`, `idt`, `tr`, `segments()` | `cpu.control` / `cpu.msr` | planned (V1) |
-| `port.u8/u16/u32[n]`, the `port T` type | `io.port` | reserved (V1) |
+| `port.u8/u16/u32[n]` | `io.port` | **runs**: `n` a `u16`; a read is one `in` at the width, zero-extended, a write one `out` — `hw.load port.uN %p` / `hw.store port.uN %p, %v` in the OIR, volatile, KERNEL, kept by every pass (`tests/run/hw.oli`; the kernel example programs COM1, the PICs and the PIT with them) |
+| the `port T` type, `port T (n)` | `io.port` | reserved (V1) |
 | `atomic.load/store/add/sub/and/or/xor/cas(ref, ..., order)` | — | planned (V1) |
 | `machine x64 ... end` with `in`, `out`, `clobber` | `cpu.asm` | **runs**: `in REG <- e` loads the value before the block, `out REG -> place` stores the register after it, a callee-saved register the block names (rbx, r12–r15) is kept for the caller; `.label:` and jumps to it stay inside the block; port I/O (`in al\|ax\|eax, dx\|imm8`, `out dx\|imm8, al\|ax\|eax`), `mov SREG, ax`, `mov ax, SREG`, `mov ax, imm16`, `retfq`, `pushfq`/`popfq`, `int n`/`int3` and `lea r64, [.label]` per design 0023; any other 8/16-bit form is `E0900` |
 
@@ -331,7 +333,7 @@ Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 | `physaddr` | a physical address — never dereferenced; cannot mix with `addr` | analysed |
 | `be T` / `le T` | an integer stored big/little-endian, in a `layout` | **runs** |
 | `mmio view T` / `mmio rw view T` | a view of device memory: every element access volatile; made by `mem.mmio`, passed as a parameter, never converted to a plain view | **runs** |
-| `mmio ref T`, `port T`, `own T` | a ref into device memory, port I/O, ownership | reserved (V1) |
+| `mmio ref T`, `port T`, `own T` | a ref into device memory, a port as a value (port I/O itself runs as the place `port.u8[n]`), ownership | reserved (V1) |
 | `f32 f64` | floating point | reserved (V2) |
 
 Type identity is nominal for `layout`/`choice`, structural for everything
@@ -375,7 +377,7 @@ tool).
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
 review that is:
-a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause` and the `mem.*` intrinsics beyond `get_*`/`put_*`/`mmio`, `each` and `Name.at` over an `mmio` view,
+a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause`/`interrupts` and the `mem.*` intrinsics beyond `get_*`/`put_*`/`mmio`, the `port T` type and `port T (n)`, `each` and `Name.at` over an `mmio` view,
 an `os.syscall` with more than seven words (the number and six
 arguments are all the registers a system call has) and aggregate constants (`NAME : [N]T := { … }` or a layout constant, which would live in `.rodata`; reading one is refused, and the harness probes that).
 The front end already checks all of them, so a program using them is

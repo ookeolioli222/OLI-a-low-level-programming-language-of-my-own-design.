@@ -28,6 +28,8 @@ N_MODE := 19
 N_TRUE := 20
 N_FALSE := 21
 N_NONE := 22
+-- `port.u8[n]` (design 0015): an I/O port as a place; `val` is its width in bits.
+N_HWPLACE := 23
 
 N_BIND := 50
 N_PLACE := 51
@@ -226,6 +228,17 @@ end
 proc node_index(cx: ref Ctx, nd: ref Node) -> u64
     -- The arena index of a node the caller holds a ref to.
     ret cx.nnode - 1
+end
+
+proc hw_type(w: u64) -> view u8
+    -- The type of a port place of `w` bits.
+    if w == 16
+        ret "u16"
+    end
+    if w == 32
+        ret "u32"
+    end
+    ret "u8"
 end
 
 proc add_kid(cx: ref Ctx, parent: u64, kid: u64)
@@ -598,6 +611,14 @@ proc pe(cx: ref Ctx, n: u64)
     end
     if k == N_RAWLOAD
         emit(cx, "(raw-load ")
+        pe(cx, kid1(cx, n))
+        emit(cx, ")")
+        ret
+    end
+    if k == N_HWPLACE
+        emit(cx, "(port.")
+        emit(cx, hw_type(nd.val))
+        emit(cx, " ")
         pe(cx, kid1(cx, n))
         emit(cx, ")")
         ret

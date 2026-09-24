@@ -1,0 +1,86 @@
+(oir
+  (static 0 len=25)
+  (static 1 len=25)
+  (static 2 len=27)
+  (proc probe locals=1
+    (bb0
+      %0 = param 0
+      %1 = hw.load port.u8 %0
+      ret %1))
+  (proc start locals=5 temps=1 entry
+    (bb0
+      %0 = addr.of frame.0
+      %1 = const 1
+      %2 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %3 = phi [bb0 %2] [bb2 %10]
+      %4 = cmp.lt %3, %1
+      branch %4, bb2, bb3)
+    (bb2 preds bb1
+      %5 = const 8
+      %6 = mul %3, %5
+      %7 = add %0, %6
+      raw.store.64 %7, %2
+      %9 = const 1
+      %10 = add %3, %9
+      jump bb1)
+    (bb3 preds bb1
+      %11 = const 0
+      arg %11
+      %13 = const 0
+      arg %13
+      %15 = addr.of frame.0
+      %16 = const 1
+      %17 = const 0
+      check.range %17, %16, %16
+      %19 = add %15, %17
+      %20 = sub %16, %17
+      arg %19
+      %22 = const 1
+      arg %22
+      %24 = syscall/4
+      %25 = const 1
+      %26 = cmp.eq.s %24, %25
+      branch %26, bb4, bb7)
+    (bb4 preds bb3
+      cpu.interrupts off
+      %28 = const 0
+      %29 = const 128
+      %30 = addr.of frame.0
+      %31 = const 1
+      %32 = const 0
+      check.bounds %32, %31
+      %34 = add %30, %32
+      %35 = raw.load.8 %34
+      hw.store port.u8 %29, %35
+      %37 = const 496
+      %38 = const 4660
+      hw.store port.u16 %37, %38
+      %40 = const 3320
+      %41 = const 2147483648
+      hw.store port.u32 %40, %41
+      %43 = const 96
+      arg %43
+      %45 = call probe/1
+      %46 = const 496
+      %47 = hw.load port.u16 %46
+      %48 = const 3324
+      %49 = hw.load port.u32 %48
+      cpu.interrupts on
+      %51 = const 0
+      %52 = add %45, %47
+      check.overflow %52
+      %53 = add %52, %49
+      check.overflow %53
+      %54 = const 7
+      %55 = cmp.eq %53, %54
+      branch %55, bb5, bb6)
+    (bb5 preds bb4
+      %56 = const 1
+      ret %56)
+    (bb6 preds bb4
+      jump bb7)
+    (bb7 preds bb3 bb6
+      %57 = const 42
+      ret %57)))

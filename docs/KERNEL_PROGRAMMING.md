@@ -40,7 +40,7 @@ construct answers each system-programming requirement.
 | physical memory | `physaddr` type; `zone ... at`; `memory.raw` | V0 |
 | virtual memory | `addr T` is a virtual address; page-table layouts in `core.x64.paging` | V0 type, V1 library |
 | MMIO | `mmio` views from `mem.mmio` + `memory.mmio` capability | V0 (**runs**) |
-| port I/O | `port T` type, `p.in()`, `p.out(v)`, `io.port` capability | V1 |
+| port I/O | `port.u8/u16/u32[n]` as a place under `io.port` — **runs**: one `in` or `out` each, volatile (`tests/run/hw.oli`; the kernel example programs COM1, the 8259 PICs and the 8253 PIT with them); the `port T` value type, `p.in()`, `p.out(v)` | V0 (place), V1 (type) |
 | syscalls | `os.syscall` (hosted programs); a kernel *implements* syscalls with `calls interrupt` or a `machine` `syscall` entry stub | V0 / V1 |
 | page tables | `layout` + `packed` + `bits` + `physaddr` | V1 |
 | SIMD registers | `machine` blocks in V0; native vector types in V2 | V0 / V2 |
@@ -99,19 +99,23 @@ permit memory.mmio
 end
 ```
 
-### Serial output through port I/O (V1)
+### Serial output through port I/O (runs)
 
 ```oli
-COM1 : port u8 := 0x3F8
-
 proc serial_put(b : u8)
-permit io.port
-    while (port u8 (0x3FD)).in() & 0x20 == 0
+    permit io.port
+    while port.u8[0x3FD] & 0x20 == 0     -- one `in al, dx`, zero-extended
         cpu.pause()
     end
-    COM1.out(b)
+    port.u8[0x3F8] <- b                  -- one `out dx, al`
 end
 ```
+
+`examples/kernel.oli` goes further: `pic_init` remaps the two 8259s and masks
+every line but the timer's, `pit_init(100)` programs channel 0 of the 8253,
+`on_timer` (`calls interrupt`, vector 32) counts ticks and writes the end of
+interrupt, and `cpu.interrupts(on)` is the `sti` after which `cpu.halt()`
+waits a second for a hundred ticks.
 
 ### GDT with packed descriptor and `lgdt`
 

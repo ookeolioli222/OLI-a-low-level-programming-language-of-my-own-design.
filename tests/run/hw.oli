@@ -1,0 +1,33 @@
+module hw
+-- Port I/O as indexed places and the interrupt flag as a command (design
+-- 0015): `port.u8[n]`, `port.u16[n]`, `port.u32[n]` read and written under
+-- `permit io.port` — `hw.load port.uN %p` / `hw.store port.uN %p, %v` in
+-- the OIR, one `in` or `out` each — and `cpu.interrupts(off)` / `(on)`
+-- under `permit cpu.interrupt`, `cli` / `sti`. A process may touch neither,
+-- so the accesses wait for a byte that never arrives on stdin (the harness
+-- gives /dev/null): what is pinned is the OIR, the machine code (objdump
+-- finds each instruction once) and the exit status, 42.
+
+proc probe(p : u16) -> u8
+    permit io.port
+    ret port.u8[p]
+end
+
+proc start -> s32
+    entry
+    permit os.syscall, io.port, cpu.interrupt
+    buf : [1]u8
+    n := os.syscall(0, 0, buf[..].addr, 1)
+    if n == 1
+        cpu.interrupts(off)
+        port.u8[0x80] <- buf[0]
+        port.u16[0x1F0] <- 0x1234
+        port.u32[0xCF8] <- 0x80000000
+        a := probe(0x60)
+        b := port.u16[0x1F0]
+        c := port.u32[0xCFC]
+        cpu.interrupts(on)
+        if u64(a) + u64(b) + u64(c) == 7 then ret 1
+    end
+    ret 42
+end
