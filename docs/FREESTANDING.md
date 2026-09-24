@@ -160,7 +160,7 @@ current stack; it must not return (`-> never`).
 
 | Library | Depends on | Contents |
 |---------|-----------|----------|
-| `core` | nothing | **today:** `TrapKind`, `Site`, `CpuId` (`lib/core.oli`) and `mem.equal` (`lib/core/mem.oli`). **Planned:** integer helpers, `mem.copy/set/zero/secure_zero`, `view` helpers, endian helpers, `InterruptFrame`, CPU intrinsics wrappers, minimal formatting into a `rw view u8` |
+| `core` | nothing | **today:** `TrapKind`, `Site`, `CpuId` (`lib/core.oli`) and `mem.equal` (`lib/core/mem.oli`), `InterruptFrame`, `IdtGate`, `TablePointer` (`lib/core/x64.oli`), `core.x64.paging` (`lib/core/x64/paging.oli`: entries, indices, `identity_2m`). **Planned:** integer helpers, `mem.copy/set/zero/secure_zero`, `view` helpers, endian helpers, `InterruptFrame`, CPU intrinsics wrappers, minimal formatting into a `rw view u8` |
 | `std` | `core` + an OS | `os` (syscall numbers, `Error`), files, mapping-backed zones, process, threads, networking |
 
 A kernel imports `core` only. `olic --freestanding` rejects any import of `std`.

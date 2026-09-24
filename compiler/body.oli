@@ -1025,6 +1025,9 @@ proc ety(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
         ret addr_elem(ety(pg, mi, kid1(cx, n), b[0..0]))
     end
     if k == N_HWPLACE
+        if nd.sub == 1
+            ret cr_type(nd.val)
+        end
         ret hw_type(nd.val)
     end
     if k == N_BINOP
@@ -1373,6 +1376,12 @@ proc pplace(pg: ref Prog, mi: u64, n: u64)
         ret
     end
     if k == N_HWPLACE
+        if nd.sub == 1
+            put(1, "arch.x64.")
+            put(1, cr_name(nd.val))
+            put(1, "]")
+            ret
+        end
         put(1, "port.")
         put(1, hw_type(nd.val))
         put(1, " ")
@@ -3140,8 +3149,11 @@ proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
         ret
     end
     if k == N_HWPLACE
-        -- A port number is sixteen bits: what `dx` holds.
-        texpr(pg, mi, kid1(cx, n), "u16")
+        -- A port number is sixteen bits: what `dx` holds. A control
+        -- register has no index.
+        if nd.sub == 0
+            texpr(pg, mi, kid1(cx, n), "u16")
+        end
         ret
     end
     if k == N_FALLBACK

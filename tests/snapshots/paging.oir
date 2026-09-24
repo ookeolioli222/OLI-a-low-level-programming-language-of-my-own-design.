@@ -1,0 +1,352 @@
+(oir
+  (static 0 len=25)
+  (static 1 len=25)
+  (static 2 len=25)
+  (static 3 len=25)
+  (static 4 len=25)
+  (static 5 len=43)
+  (static 6 len=45)
+  (static 7 len=45)
+  (proc start locals=4 temps=1 entry
+    (bb0
+      %0 = const 1
+      %1 = const 2
+      %2 = or %0, %1
+      store frame.0, %2
+      %4 = const 4096
+      arg %4
+      %6 = load frame.0
+      arg %6
+      %8 = call make_entry/2
+      store frame.1, %8
+      %10 = load frame.1
+      %11 = const 4099
+      %12 = cmp.ne %10, %11
+      branch %12, bb1, bb2)
+    (bb1 preds bb0
+      %14 = const 1
+      ret %14)
+    (bb2 preds bb0
+      %17 = load frame.1
+      arg %17
+      %19 = call entry_target/1
+      %20 = const 4096
+      %21 = cmp.ne %19, %20
+      branch %21, bb3, bb4)
+    (bb3 preds bb2
+      %23 = const 2
+      ret %23)
+    (bb4 preds bb2
+      %26 = const 0
+      arg %26
+      %28 = call entry_present/1
+      branch %28, bb5, bb6)
+    (bb5 preds bb4
+      %30 = const 3
+      ret %30)
+    (bb6 preds bb4
+      %33 = load frame.1
+      arg %33
+      %35 = call entry_present/1
+      %36 = const 0
+      %37 = cmp.eq %35, %36
+      branch %37, bb7, bb8)
+    (bb7 preds bb6
+      %39 = const 4
+      ret %39)
+    (bb8 preds bb6
+      %42 = const 18446603336223298100
+      store frame.2, %42
+      %44 = load frame.2
+      arg %44
+      %46 = call pml4_index/1
+      %47 = const 256
+      %48 = cmp.ne %46, %47
+      branch %48, bb9, bb10)
+    (bb9 preds bb8
+      %50 = const 5
+      ret %50)
+    (bb10 preds bb8
+      %53 = load frame.2
+      arg %53
+      %55 = call pdpt_index/1
+      %56 = const 0
+      %57 = cmp.ne %55, %56
+      branch %57, bb11, bb12)
+    (bb11 preds bb10
+      %59 = const 6
+      ret %59)
+    (bb12 preds bb10
+      %62 = load frame.2
+      arg %62
+      %64 = call pd_index/1
+      %65 = const 1
+      %66 = cmp.ne %64, %65
+      branch %66, bb13, bb14)
+    (bb13 preds bb12
+      %68 = const 7
+      ret %68)
+    (bb14 preds bb12
+      %71 = load frame.2
+      arg %71
+      %73 = call pt_index/1
+      %74 = const 1
+      %75 = cmp.ne %73, %74
+      branch %75, bb15, bb16)
+    (bb15 preds bb14
+      %77 = const 8
+      ret %77)
+    (bb16 preds bb14
+      %80 = load frame.2
+      arg %80
+      %82 = call page_offset/1
+      %83 = const 564
+      %84 = cmp.ne %82, %83
+      branch %84, bb17, bb18)
+    (bb17 preds bb16
+      %86 = const 9
+      ret %86)
+    (bb18 preds bb16
+      %89 = load frame.2
+      arg %89
+      %91 = call huge_offset/1
+      %92 = const 4660
+      %93 = cmp.ne %91, %92
+      branch %93, bb19, bb20)
+    (bb19 preds bb18
+      %95 = const 10
+      ret %95)
+    (bb20 preds bb18
+      %98 = addr.of frame.514
+      %99 = const 512
+      %100 = const 0
+      store frame.515, %100
+      jump bb21)
+    (bb21 preds bb20 bb22
+      %103 = load frame.515
+      %104 = cmp.lt %103, %99
+      branch %104, bb22, bb23)
+    (bb22 preds bb21
+      %106 = const 8
+      %107 = mul %103, %106
+      %108 = add %98, %107
+      raw.store.64 %108, %100
+      %110 = const 1
+      %111 = add %103, %110
+      store frame.515, %111
+      jump bb21)
+    (bb23 preds bb21
+      %115 = addr.of frame.514
+      %116 = const 512
+      %117 = const 0
+      check.range %117, %116, %116
+      %119 = const 8
+      %120 = mul %117, %119
+      %121 = add %115, %120
+      %122 = sub %116, %117
+      arg %121
+      arg %122
+      %125 = const 0
+      arg %125
+      %127 = load frame.0
+      arg %127
+      %129 = call identity_2m/4
+      %130 = addr.of frame.514
+      %131 = const 512
+      %132 = const 0
+      check.bounds %132, %131
+      %134 = const 8
+      %135 = mul %132, %134
+      %136 = add %130, %135
+      %137 = raw.load.64 %136
+      %138 = const 131
+      %139 = cmp.ne %137, %138
+      branch %139, bb24, bb25)
+    (bb24 preds bb23
+      %141 = const 11
+      ret %141)
+    (bb25 preds bb23
+      %144 = addr.of frame.514
+      %145 = const 512
+      %146 = const 3
+      check.bounds %146, %145
+      %148 = const 8
+      %149 = mul %146, %148
+      %150 = add %144, %149
+      %151 = raw.load.64 %150
+      %152 = const 6291587
+      %153 = cmp.ne %151, %152
+      branch %153, bb26, bb27)
+    (bb26 preds bb25
+      %155 = const 12
+      ret %155)
+    (bb27 preds bb25
+      %158 = addr.of frame.514
+      %159 = const 512
+      %160 = const 511
+      check.bounds %160, %159
+      %162 = const 8
+      %163 = mul %160, %162
+      %164 = add %158, %163
+      %165 = raw.load.64 %164
+      %166 = const 1071644803
+      %167 = cmp.ne %165, %166
+      branch %167, bb28, bb29)
+    (bb28 preds bb27
+      %169 = const 13
+      ret %169)
+    (bb29 preds bb27
+      %172 = addr.of frame.514
+      %173 = const 512
+      %174 = const 511
+      check.bounds %174, %173
+      %176 = const 8
+      %177 = mul %174, %176
+      %178 = add %172, %177
+      %179 = raw.load.64 %178
+      arg %179
+      %181 = call entry_target/1
+      %182 = const 1071644672
+      %183 = cmp.ne %181, %182
+      branch %183, bb30, bb31)
+    (bb30 preds bb29
+      %185 = const 14
+      ret %185)
+    (bb31 preds bb29
+      %188 = const 42
+      ret %188))
+  (proc make_entry locals=2
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = load frame.0
+      %5 = const 4503599627366400
+      %6 = and %4, %5
+      %7 = load frame.1
+      %8 = or %6, %7
+      ret %8))
+  (proc entry_target locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 4503599627366400
+      %4 = and %2, %3
+      ret %4))
+  (proc entry_present locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 1
+      %4 = and %2, %3
+      %5 = const 0
+      %6 = cmp.ne %4, %5
+      ret %6))
+  (proc pml4_index locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 39
+      %4 = shr %2, %3
+      %5 = const 511
+      %6 = and %4, %5
+      ret %6))
+  (proc pdpt_index locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 30
+      %4 = shr %2, %3
+      %5 = const 511
+      %6 = and %4, %5
+      ret %6))
+  (proc pd_index locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 21
+      %4 = shr %2, %3
+      %5 = const 511
+      %6 = and %4, %5
+      ret %6))
+  (proc pt_index locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 12
+      %4 = shr %2, %3
+      %5 = const 511
+      %6 = and %4, %5
+      ret %6))
+  (proc page_offset locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 4095
+      %4 = and %2, %3
+      ret %4))
+  (proc huge_offset locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = const 2097151
+      %4 = and %2, %3
+      ret %4))
+  (proc identity_2m locals=4
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = param 2
+      store frame.2, %4
+      %6 = param 3
+      store frame.3, %6
+      %8 = const 0
+      store frame.4, %8
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %11 = load frame.4
+      %12 = load frame.0
+      %13 = load frame.1
+      %14 = cmp.lt %11, %13
+      branch %14, bb2, bb3)
+    (bb2 preds bb1
+      %16 = load frame.0
+      %17 = load frame.1
+      %18 = load frame.4
+      check.bounds %18, %17
+      %20 = const 8
+      %21 = mul %18, %20
+      %22 = add %16, %21
+      %23 = load frame.2
+      %24 = load frame.4
+      %25 = const 2097152
+      %26 = mul %24, %25
+      check.overflow %26
+      %27 = add %23, %26
+      check.overflow %27
+      arg %27
+      %29 = load frame.3
+      %30 = const 128
+      %31 = or %29, %30
+      arg %31
+      %33 = call make_entry/2
+      raw.store.64 %22, %33
+      %35 = load frame.4
+      %36 = const 1
+      %37 = add %35, %36
+      check.overflow %37
+      store frame.4, %37
+      jump bb1)
+    (bb3 preds bb1
+      ret)))

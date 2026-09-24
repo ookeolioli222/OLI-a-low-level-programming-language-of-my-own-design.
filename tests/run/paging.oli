@@ -1,0 +1,31 @@
+module paging_test
+import core.x64.paging
+-- `core.x64.paging` (lib/core/x64/paging.oli), executed: entries, the four
+-- indices and two offsets of a virtual address, and the identity map of a
+-- gigabyte in two-megabyte pages built into a page directory in the frame.
+-- The exit status is the number of the check that failed; 42 when every
+-- one held.
+
+proc start -> s32
+    entry
+    flags := paging.PRESENT | paging.WRITABLE
+    e := paging.make_entry(physaddr(0x1000), flags)
+    if e != 0x1003 then ret 1
+    if u64.bits(paging.entry_target(e)) != 0x1000 then ret 2
+    if paging.entry_present(0) then ret 3
+    if paging.entry_present(e) == false then ret 4
+    v : u64 <- 0xFFFF800000201234
+    if paging.pml4_index(v) != 256 then ret 5
+    if paging.pdpt_index(v) != 0 then ret 6
+    if paging.pd_index(v) != 1 then ret 7
+    if paging.pt_index(v) != 1 then ret 8
+    if paging.page_offset(v) != 0x234 then ret 9
+    if paging.huge_offset(v) != 0x1234 then ret 10
+    pd : [512]u64
+    paging.identity_2m(pd[..], 0, flags)
+    if pd[0] != 0x83 then ret 11
+    if pd[3] != 0x600083 then ret 12
+    if pd[511] != 0x3FE00083 then ret 13
+    if u64.bits(paging.entry_target(pd[511])) != 0x3FE00000 then ret 14
+    ret 42
+end

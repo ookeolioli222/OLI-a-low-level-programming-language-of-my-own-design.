@@ -1,0 +1,71 @@
+--- Page tables of x86-64 long mode (docs/KERNEL_PROGRAMMING.md): four levels
+--- of 512 eight-byte entries, each the physical address of the next table or
+--- of the page it maps, page-aligned, with the flags in its low twelve bits
+--- and the no-execute bit at the top. Nothing here touches the hardware: the
+--- tables are memory the caller owns, and `arch.x64.cr3 <- physaddr(...)`
+--- installs them.
+module core.x64.paging
+
+pub PRESENT : u64 := 1
+pub WRITABLE : u64 := 2
+pub USER : u64 := 4
+pub WRITE_THROUGH : u64 := 8
+pub NO_CACHE : u64 := 16
+pub ACCESSED : u64 := 32
+pub DIRTY : u64 := 64
+pub HUGE : u64 := 128
+pub GLOBAL : u64 := 256
+pub NO_EXECUTE : u64 := 0x8000000000000000
+pub ADDR_MASK : u64 := 0x000FFFFFFFFFF000
+pub PAGE : u64 := 4096
+pub HUGE_PAGE : u64 := 0x200000
+
+--- One entry: the physical address, page-aligned, with the flags.
+pub proc make_entry(target : physaddr, flags : u64) -> u64
+    ret (u64.bits(target) & ADDR_MASK) | flags
+end
+
+--- The physical address an entry points at.
+pub proc entry_target(e : u64) -> physaddr
+    ret physaddr(e & ADDR_MASK)
+end
+
+pub proc entry_present(e : u64) -> bool
+    ret (e & PRESENT) != 0
+end
+
+--- The index into each level for a virtual address.
+pub proc pml4_index(v : u64) -> uword
+    ret uword((v >> 39) & 511)
+end
+
+pub proc pdpt_index(v : u64) -> uword
+    ret uword((v >> 30) & 511)
+end
+
+pub proc pd_index(v : u64) -> uword
+    ret uword((v >> 21) & 511)
+end
+
+pub proc pt_index(v : u64) -> uword
+    ret uword((v >> 12) & 511)
+end
+
+--- The offset inside a four-kilobyte page, and inside a two-megabyte one.
+pub proc page_offset(v : u64) -> u64
+    ret v & 4095
+end
+
+pub proc huge_offset(v : u64) -> u64
+    ret v & 0x1FFFFF
+end
+
+--- Fills a page directory so that its 512 two-megabyte pages identity-map
+--- the gigabyte starting at `base`, with `flags` (HUGE is added).
+pub proc identity_2m(dir : rw view u64, base : u64, flags : u64)
+    i : uword <- 0
+    while i < dir.len
+        dir[i] <- make_entry(physaddr(base + u64(i) * HUGE_PAGE), flags | HUGE)
+        i <- i + 1
+    end
+end

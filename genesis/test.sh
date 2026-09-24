@@ -1140,7 +1140,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1149,7 +1149,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1171,7 +1171,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1338,16 +1338,16 @@ for f in ../tests/run/*.oli; do
         [ "$st" = 42 ] || fail "run: $n exited $st, want 42 (the check number that failed)"
     fi
 done
-echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, fallible results carried in the caller's area when a view, a layout or a wide choice is the value or the failure is wider than a word, a choice wider than a word held by its address as a local, a parameter and a result, views of device memory from mem.mmio with every element access volatile and bounds-checked, port places and cpu.interrupts compiled behind a byte that never arrives, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, a calls-interrupt handler entered through a frame pushed by hand and left through iretq, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
+echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, fallible results carried in the caller's area when a view, a layout or a wide choice is the value or the failure is wider than a word, a choice wider than a word held by its address as a local, a parameter and a result, views of device memory from mem.mmio with every element access volatile and bounds-checked, port places, cpu.interrupts and control registers compiled behind a byte that never arrives, procedures and constants of an imported library module (core.x64.paging) called and read, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, a calls-interrupt handler entered through a frame pushed by hand and left through iretq, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
 # Port places and the interrupt flag (design 0015): each form of
 # tests/run/hw.oli is exactly one instruction in the image, at its width,
 # found by binutils; a read is zero-extended to the canonical image.
 objdump -D -b binary -m i386:x86-64 --no-show-raw-insn build/hw.elf > build/hw.dis
-for pat in 'out    %al,(%dx)' 'out    %ax,(%dx)' 'out    %eax,(%dx)' 'in     (%dx),%al' 'in     (%dx),%ax' 'in     (%dx),%eax' 'cli$' 'sti$' 'movzwl %ax,%eax'; do
+for pat in 'out    %al,(%dx)' 'out    %ax,(%dx)' 'out    %eax,(%dx)' 'in     (%dx),%al' 'in     (%dx),%ax' 'in     (%dx),%eax' 'cli$' 'sti$' 'movzwl %ax,%eax' 'mov    %rax,%cr3' 'mov    %cr3,%rax' 'mov    %cr0,%rax' 'mov    %rax,%cr0' 'mov    %cr2,%rax' 'mov    %cr4,%rax' 'mov    %rax,%cr4'; do
     [ "$(grep -c "$pat" build/hw.dis)" = 1 ] || fail "hw: [$pat] must be exactly once in hw.elf, is $(grep -c "$pat" build/hw.dis)"
 done
-[ "$(grep -c 'hw\.' build/hw.opt)" = 6 ] || fail "opt: hw.oli must keep its six port accesses"
-echo "ok: port.u8/u16/u32[n] read and written are one in/out each at the width and cpu.interrupts(off/on) one cli/sti (objdump on hw.elf); the passes keep every port access"
+[ "$(grep -c 'hw\.' build/hw.opt)" = 13 ] || fail "opt: hw.oli must keep its six port accesses and seven control-register accesses"
+echo "ok: port.u8/u16/u32[n] read and written are one in/out each at the width, cpu.interrupts(off/on) one cli/sti, arch.x64.cr0/2/3/4 read and written one mov each (objdump on hw.elf); the passes keep every hardware access"
 # The image of a program with statics has two loadable segments, the second
 # read+write on the page after the first; hello.elf still has one.
 [ "$(od -An -tu2 -j56 -N2 build/statics.elf | tr -d ' ')" = 2 ] || fail "elf: statics.elf should have two program headers"
@@ -1421,12 +1421,16 @@ objdump -D -b binary -m i386:x86-64 --no-show-raw-insn build/kernel.elf > build/
 [ "$(grep -c 'out    %al,(%dx)' build/kernel.dis)" -ge 15 ] || fail "kernel: COM1, the two PICs and the PIT are written through port places, one out dx, al each ($(grep -c 'out    %al,(%dx)' build/kernel.dis) found)"
 [ "$(grep -c 'sti$' build/kernel.dis)" = 1 ] || fail "kernel: cpu.interrupts(on) must be one sti"
 [ "$(grep -c 'iretq' build/kernel.dis)" = 2 ] || fail "kernel: the int 3 and timer handlers must both end in iretq"
+[ "$(grep -c 'mov    %rax,%cr3' build/kernel.dis)" = 1 ] || fail "kernel: the page tables must be installed with one mov cr3, rax"
+[ "$(grep -c 'mov    %cr3,%rax' build/kernel.dis)" = 1 ] || fail "kernel: cr3 must be read back once"
 grep -q '0f a2' build/kernel.asm || fail "kernel: cpuid must be in its block"
 grep -q '^    cd 03)' build/kernel.asm || fail "kernel: the software interrupt must be int 3"
 grep -q '0f 01 1c 25' build/kernel.asm || fail "kernel: the descriptor table must be loaded with lidt"
 ( cd .. && genesis/build/show_oir < examples/kernel.oli > genesis/build/kernel.oir 2>/dev/null ) || fail "kernel: show_oir"
 [ "$(grep -c 'raw.store.8.mmio' build/kernel.oir)" = 2 ] || fail "kernel: the VGA cells must be written through mem.mmio, volatile"
 [ "$(grep -c 'hw.store port.u8' build/kernel.oir)" = 15 ] || fail "kernel: fifteen port writes - COM1 setup and byte, ICW1-4 and the masks of two PICs, the PIT's mode and divisor, the EOI"
+[ "$(grep -c 'hw.store arch.x64.cr3' build/kernel.oir)" = 1 ] || fail "kernel: the page tables go into cr3 through a hardware place"
+grep -q 'call core.x64.paging.identity_2m\|= call ' build/kernel.oir || fail "kernel: the page directory must be filled by core.x64.paging"
 [ "$(od -An -tx1 -v build/kernel.elf | tr -d '\n' | grep -o '48 cf' | wc -l)" = 2 ] || fail "kernel: exactly two calls-interrupt handlers end in iretq"
 ( cd .. && genesis/build/explain < examples/kernel.oli > genesis/build/kernel.explain 2>/dev/null ) || fail "kernel: explain"
 [ "$(grep -c 'syscalls=0' build/kernel.explain)" = "$(grep -c '(proc ' build/kernel.explain)" ] || fail "kernel: a procedure of the kernel makes a system call"

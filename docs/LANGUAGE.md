@@ -701,8 +701,9 @@ address conversion and `zone … at` need `permit memory.raw`, a `machine`
 block needs `permit cpu.asm`, a port place `port.u8[n]` / `port.u16[n]` /
 `port.u32[n]` (read: one `in`; written with `<-`: one `out`) needs
 `permit io.port`, and `cpu.interrupts(on)` / `cpu.interrupts(off)` (`sti` /
-`cli`) need `permit cpu.interrupt` — without them the compiler reports `E0401`
-at the construct. Constructs the V0 front end accepts but does not implement — `own`,
+`cli`) need `permit cpu.interrupt`, and a control register `arch.x64.cr0/2/3/4/8`
+as a place needs `permit cpu.control` — without them the compiler reports
+`E0401` at the construct. Constructs the V0 front end accepts but does not implement — `own`,
 `f32`/`f64`, `<~`, `port T (…)` — report `E0900` rather than compiling to
 something approximate; `mem.mmio` and `calls interrupt` run.
 

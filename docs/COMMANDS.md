@@ -166,9 +166,9 @@ end
 | Command | Meaning | Status |
 |---------|---------|--------|
 | `module a.b` | one file = one module; `cpu`/`mem`/`os` always in scope, `core` implicit | **runs** |
-| `import a.b [as x]`, `pub` | imports resolve under `lib/`, names are checked across modules | analysed as a whole program; no run fixture imports a module yet |
+| `import a.b [as x]`, `pub` | imports resolve under `lib/`, names are checked across modules; `mod.proc(...)` and `mod.CONST` reach a library's procedures and constants (names are program-wide: a local of a library procedure may not shadow a static of the program, `E0101`) | **runs** (`tests/run/paging.oli` calls `core.x64.paging`; `examples/kernel.oli` too) |
 | `proc NAME(params) -> T ... end` | a procedure: arguments in the six SysV registers, then on the stack right to left; a view that does not fit in the registers left goes to the stack whole and the next integer still takes a register (the SysV rule, `docs/ABI.md` §1–2); one result (a view: two words) | **runs** (`tests/run/args.oli`) |
-| `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw`, `memory.mmio`, `io.port`, `cpu.asm` and `cpu.interrupt` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`, `memory.raw`, `memory.mmio`, `io.port`, `cpu.asm`, `cpu.interrupt`) / analysed (the rest) |
+| `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw`, `memory.mmio`, `io.port`, `cpu.asm`, `cpu.interrupt` and `cpu.control` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`, `memory.raw`, `memory.mmio`, `io.port`, `cpu.asm`, `cpu.interrupt`, `cpu.control`) / analysed (the rest) |
 | `calls sysv` | the default convention | analysed |
 | `calls none` | no prologue, no frame: the body is `machine` blocks alone, without `in`/`out` (boot code) | **runs** (`tests/run/freestanding.oli`) |
 | `calls interrupt` | an interrupt handler (`permit cpu.interrupt`): the prologue pushes every general register but rsp and rbp, the one parameter is `ref core.x64.InterruptFrame` — the rip, cs, rflags, rsp and ss the CPU pushed — and the return is `iretq`; no result | **runs** (`tests/run/interrupt.oli` enters one through a frame pushed by hand; `examples/kernel.oli` installs one on vector 3 and reaches it with `int 3`) |
@@ -301,7 +301,8 @@ port.u8[0x3F8] <- b                  -- runs: port I/O as an indexed place (`io.
 | `cpu.id(leaf)` | — | planned |
 | `cpu.interrupts(on)` / `cpu.interrupts(off)` | `cpu.interrupt` | **runs**: one `sti` / `cli`, KERNEL (`tests/run/hw.oli`, `examples/kernel.oli`) |
 | `cpu.fence(order)`, `cpu.tsc()` | — | planned (V1) |
-| `arch.x64.cr0/2/3/4/8`, `msr[n]`, `gdt`, `idt`, `tr`, `segments()` | `cpu.control` / `cpu.msr` | planned (V1) |
+| `arch.x64.cr0/2/3/4/8` | `cpu.control` | **runs**: a place — read is one `mov rax, crN`, written with `<-` one `mov crN, rax`; cr3 is typed `physaddr`, the others `u64` (`tests/run/hw.oli`; the kernel example installs its page tables) |
+| `arch.x64.msr[n]`, `gdt`, `idt`, `tr`, `segments()` | `cpu.control` / `cpu.msr` | planned (V1) |
 | `port.u8/u16/u32[n]` | `io.port` | **runs**: `n` a `u16`; a read is one `in` at the width, zero-extended, a write one `out` — `hw.load port.uN %p` / `hw.store port.uN %p, %v` in the OIR, volatile, KERNEL, kept by every pass (`tests/run/hw.oli`; the kernel example programs COM1, the PICs and the PIT with them) |
 | the `port T` type, `port T (n)` | `io.port` | reserved (V1) |
 | `atomic.load/store/add/sub/and/or/xor/cas(ref, ..., order)` | — | planned (V1) |

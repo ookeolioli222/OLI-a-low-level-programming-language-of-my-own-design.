@@ -3,10 +3,13 @@ module hw
 -- 0015): `port.u8[n]`, `port.u16[n]`, `port.u32[n]` read and written under
 -- `permit io.port` — `hw.load port.uN %p` / `hw.store port.uN %p, %v` in
 -- the OIR, one `in` or `out` each — and `cpu.interrupts(off)` / `(on)`
--- under `permit cpu.interrupt`, `cli` / `sti`. A process may touch neither,
--- so the accesses wait for a byte that never arrives on stdin (the harness
--- gives /dev/null): what is pinned is the OIR, the machine code (objdump
--- finds each instruction once) and the exit status, 42.
+-- under `permit cpu.interrupt`, `cli` / `sti`; the control registers
+-- `arch.x64.cr0/2/3/4` as places under `permit cpu.control`, one
+-- `mov rax, crN` / `mov crN, rax` each, cr3 typed `physaddr`. A process may
+-- touch none of these, so the accesses wait for a byte that never arrives
+-- on stdin (the harness gives /dev/null): what is pinned is the OIR, the
+-- machine code (objdump finds each instruction once) and the exit status,
+-- 42.
 
 proc probe(p : u16) -> u8
     permit io.port
@@ -15,7 +18,7 @@ end
 
 proc start -> s32
     entry
-    permit os.syscall, io.port, cpu.interrupt
+    permit os.syscall, io.port, cpu.interrupt, cpu.control
     buf : [1]u8
     n := os.syscall(0, 0, buf[..].addr, 1)
     if n == 1
@@ -28,6 +31,14 @@ proc start -> s32
         c := port.u32[0xCFC]
         cpu.interrupts(on)
         if u64(a) + u64(b) + u64(c) == 7 then ret 1
+        arch.x64.cr3 <- physaddr(0x1000)
+        p := arch.x64.cr3
+        r0 := arch.x64.cr0
+        r2 := arch.x64.cr2
+        r4 := arch.x64.cr4
+        arch.x64.cr0 <- r0 | 0x10000
+        arch.x64.cr4 <- r4
+        if u64.bits(p) + r2 == 7 then ret 2
     end
     ret 42
 end

@@ -1,0 +1,264 @@
+(oir
+  (static 0 removed)
+  (static 1 removed)
+  (static 2 removed)
+  (static 3 removed)
+  (static 4 removed)
+  (static 5 removed)
+  (static 6 len=45)
+  (static 7 len=45)
+  (proc start locals=4 temps=1 entry
+    (bb0
+      %0 = const 1
+      %1 = const 2
+      %2 = const 3
+      %3 = const 4096
+      arg %3
+      arg %2
+      %6 = call make_entry/2
+      %7 = const 4099
+      %8 = cmp.ne %6, %7
+      branch %8, bb1, bb2)
+    (bb1 preds bb0
+      ret %0)
+    (bb2 preds bb0
+      arg %6
+      %11 = call entry_target/1
+      %13 = cmp.ne %11, %3
+      branch %13, bb3, bb4)
+    (bb3 preds bb2
+      ret %1)
+    (bb4 preds bb2
+      %15 = const 0
+      arg %15
+      %17 = call entry_present/1
+      branch %17, bb5, bb6)
+    (bb5 preds bb4
+      ret %2)
+    (bb6 preds bb4
+      arg %6
+      %20 = call entry_present/1
+      %22 = cmp.eq %20, %15
+      branch %22, bb7, bb8)
+    (bb7 preds bb6
+      %23 = const 4
+      ret %23)
+    (bb8 preds bb6
+      %24 = const 18446603336223298100
+      arg %24
+      %26 = call pml4_index/1
+      %27 = const 256
+      %28 = cmp.ne %26, %27
+      branch %28, bb9, bb10)
+    (bb9 preds bb8
+      %29 = const 5
+      ret %29)
+    (bb10 preds bb8
+      arg %24
+      %31 = call pdpt_index/1
+      %33 = cmp.ne %31, %15
+      branch %33, bb11, bb12)
+    (bb11 preds bb10
+      %34 = const 6
+      ret %34)
+    (bb12 preds bb10
+      arg %24
+      %36 = call pd_index/1
+      %38 = cmp.ne %36, %0
+      branch %38, bb13, bb14)
+    (bb13 preds bb12
+      %39 = const 7
+      ret %39)
+    (bb14 preds bb12
+      arg %24
+      %41 = call pt_index/1
+      %43 = cmp.ne %41, %0
+      branch %43, bb15, bb16)
+    (bb15 preds bb14
+      %44 = const 8
+      ret %44)
+    (bb16 preds bb14
+      arg %24
+      %46 = call page_offset/1
+      %47 = const 564
+      %48 = cmp.ne %46, %47
+      branch %48, bb17, bb18)
+    (bb17 preds bb16
+      %49 = const 9
+      ret %49)
+    (bb18 preds bb16
+      arg %24
+      %51 = call huge_offset/1
+      %52 = const 4660
+      %53 = cmp.ne %51, %52
+      branch %53, bb19, bb20)
+    (bb19 preds bb18
+      %54 = const 10
+      ret %54)
+    (bb20 preds bb18
+      %55 = addr.of frame.514
+      %56 = const 512
+      jump bb21)
+    (bb21 preds bb20 bb22
+      %58 = phi [bb20 %15] [bb22 %65]
+      %59 = cmp.lt %58, %56
+      branch %59, bb22, bb23)
+    (bb22 preds bb21
+      %60 = const 8
+      %61 = mul %58, %60
+      %62 = add %55, %61
+      raw.store.64 %62, %15
+      %65 = add %58, %0
+      jump bb21)
+    (bb23 preds bb21
+      ; check.bounds %68 -- removed: proof(constant)
+      %72 = add %55, %15
+      arg %72
+      arg %56
+      arg %15
+      arg %2
+      %79 = call identity_2m/4
+      ; check.bounds %82 -- removed: proof(constant)
+      %87 = raw.load.64 %72
+      %88 = const 131
+      %89 = cmp.ne %87, %88
+      branch %89, bb24, bb25)
+    (bb24 preds bb23
+      %90 = const 11
+      ret %90)
+    (bb25 preds bb23
+      ; check.bounds %93 -- removed: proof(constant)
+      %96 = const 24
+      %97 = add %55, %96
+      %98 = raw.load.64 %97
+      %99 = const 6291587
+      %100 = cmp.ne %98, %99
+      branch %100, bb26, bb27)
+    (bb26 preds bb25
+      %101 = const 12
+      ret %101)
+    (bb27 preds bb25
+      ; check.bounds %104 -- removed: proof(constant)
+      %107 = const 4088
+      %108 = add %55, %107
+      %109 = raw.load.64 %108
+      %110 = const 1071644803
+      %111 = cmp.ne %109, %110
+      branch %111, bb28, bb29)
+    (bb28 preds bb27
+      %112 = const 13
+      ret %112)
+    (bb29 preds bb27
+      ; check.bounds %115 -- removed: proof(constant)
+      %120 = raw.load.64 %108
+      arg %120
+      %122 = call entry_target/1
+      %123 = const 1071644672
+      %124 = cmp.ne %122, %123
+      branch %124, bb30, bb31)
+    (bb30 preds bb29
+      %125 = const 14
+      ret %125)
+    (bb31 preds bb29
+      %126 = const 42
+      ret %126))
+  (proc make_entry locals=2
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = const 4503599627366400
+      %3 = and %0, %2
+      %4 = or %3, %1
+      ret %4))
+  (proc entry_target locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 4503599627366400
+      %2 = and %0, %1
+      ret %2))
+  (proc entry_present locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 1
+      %2 = and %0, %1
+      %3 = const 0
+      %4 = cmp.ne %2, %3
+      ret %4))
+  (proc pml4_index locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 39
+      %2 = shr %0, %1
+      %3 = const 511
+      %4 = and %2, %3
+      ret %4))
+  (proc pdpt_index locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 30
+      %2 = shr %0, %1
+      %3 = const 511
+      %4 = and %2, %3
+      ret %4))
+  (proc pd_index locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 21
+      %2 = shr %0, %1
+      %3 = const 511
+      %4 = and %2, %3
+      ret %4))
+  (proc pt_index locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 12
+      %2 = shr %0, %1
+      %3 = const 511
+      %4 = and %2, %3
+      ret %4))
+  (proc page_offset locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 4095
+      %2 = and %0, %1
+      ret %2))
+  (proc huge_offset locals=1
+    (bb0
+      %0 = param 0
+      %1 = const 2097151
+      %2 = and %0, %1
+      ret %2))
+  (proc identity_2m locals=4
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = param 2
+      %3 = param 3
+      %4 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %5 = phi [bb0 %4] [bb2 %21]
+      %6 = cmp.lt %5, %1
+      branch %6, bb2, bb3)
+    (bb2 preds bb1
+      ; check.bounds %5 -- removed: proof(loop-bound)
+      %8 = const 8
+      %9 = mul %5, %8
+      %10 = add %0, %9
+      %11 = const 2097152
+      %12 = mul %5, %11
+      check.overflow %12
+      %13 = add %2, %12
+      check.overflow %13
+      arg %13
+      %15 = const 128
+      %16 = or %3, %15
+      arg %16
+      %18 = call make_entry/2
+      raw.store.64 %10, %18
+      %20 = const 1
+      %21 = add %5, %20
+      check.overflow %21
+      jump bb1)
+    (bb3 preds bb1
+      ret)))

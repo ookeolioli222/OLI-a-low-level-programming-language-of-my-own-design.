@@ -537,6 +537,71 @@ proc p_hwplace(cx: ref Ctx) -> u64
     ret n
 end
 
+proc tok_is_dot(cx: ref Ctx, i: u64) -> word
+    t := ctok(cx, i)
+    if t.kind == TK_OP
+        if t.sub == OP_DOT
+            ret 1
+        end
+    end
+    ret 0
+end
+
+proc cr_place_follows(cx: ref Ctx) -> word
+    -- `arch.x64.crN`: a control register as a place (design 0015). Any
+    -- other `arch` is an ordinary name.
+    i := tpos(cx)
+    if view_eq(tok_text(cx, i), "arch") == 0
+        ret 0
+    end
+    if tok_is_dot(cx, i + 1) == 0
+        ret 0
+    end
+    if view_eq(tok_text(cx, i + 2), "x64") == 0
+        ret 0
+    end
+    ret tok_is_dot(cx, i + 3)
+end
+
+proc cr_number(t: view u8) -> word
+    if view_eq(t, "cr0")
+        ret 0
+    end
+    if view_eq(t, "cr2")
+        ret 2
+    end
+    if view_eq(t, "cr3")
+        ret 3
+    end
+    if view_eq(t, "cr4")
+        ret 4
+    end
+    if view_eq(t, "cr8")
+        ret 8
+    end
+    ret -1
+end
+
+proc p_crplace(cx: ref Ctx) -> u64
+    -- `arch.x64.cr0/2/3/4/8`: a place of `sub` 1, the register in `val`.
+    n := mk(cx, N_HWPLACE, tpos(cx))
+    adv(cx)
+    adv(cx)
+    adv(cx)
+    adv(cx)
+    r := cr_number(tok_text(cx, tpos(cx)))
+    if r < 0
+        diag_at(cx, 11, tpos(cx))
+    end
+    adv(cx)
+    nd := node_at(cx, n)
+    nd.sub <- 1
+    if r >= 0
+        nd.val <- u64.bits(r)
+    end
+    ret n
+end
+
 proc p_typestart(cx: ref Ctx) -> u64
     -- A primitive or `port`/`be`/`le` type in expression position: a
     -- conversion when an operand follows, otherwise a type argument (§7.4).
@@ -637,6 +702,9 @@ proc p_primary(cx: ref Ctx) -> u64
         ret p_typestart(cx)
     end
     if at_ident(cx)
+        if cr_place_follows(cx) == 1
+            ret p_crplace(cx)
+        end
         ret p_simple(cx, N_NAME)
     end
     n2 := mk(cx, N_NAME, tpos(cx))

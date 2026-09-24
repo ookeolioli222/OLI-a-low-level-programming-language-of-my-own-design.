@@ -2,6 +2,7 @@
 -- load: 0x100000
 module kernel
 import core.x64
+import core.x64.paging
 -- M3 (docs/FREESTANDING.md §8) and the first steps of M4: a flat kernel
 -- image for QEMU or GRUB — a Multiboot2 header in `.text.boot`, its own
 -- entry with no frame, its own stack, a line on COM1 through port places
@@ -9,7 +10,9 @@ import core.x64
 -- `mmio` view, `cpuid` through a machine block, an interrupt descriptor
 -- table with `calls interrupt` handlers on vector 3 (reached by a software
 -- `int 3`) and vector 32 (the timer: the 8259 PICs remapped, the 8253 PIT at
--- 100 Hz, `sti`), a wait of one second in `hlt`, then `hlt` forever.
+-- 100 Hz, `sti`), its own page tables (the first gigabyte identity-mapped
+-- in two-megabyte pages, `core.x64.paging`, installed with
+-- `arch.x64.cr3 <- …`), a wait of one second in `hlt`, then `hlt` forever.
 -- No system calls, no libc: nothing in the image but this program.
 --
 --   bin/olic examples/kernel.oli -o kernel.elf
@@ -39,6 +42,15 @@ idt : [256]core.x64.IdtGate
 idtr : core.x64.TablePointer
 
 ticks : u64
+
+pml4 : [512]u64
+    align 4096
+
+pdpt : [512]u64
+    align 4096
+
+pd : [512]u64
+    align 4096
 
 proc start -> never
     entry
@@ -92,6 +104,21 @@ proc on_int3(frame : ref core.x64.InterruptFrame)
     serial_write("int 3 at ")
     serial_hex(frame.rip)
     serial_write("\n")
+end
+
+proc paging_init()
+    -- The first gigabyte identity-mapped in two-megabyte pages: one entry
+    -- of the PML4, one of the PDPT, all 512 of the page directory; then the
+    -- tables installed in cr3 and read back through it.
+    permit cpu.control
+    flags := paging.PRESENT | paging.WRITABLE
+    pml4[0] <- paging.make_entry(physaddr(u64(pdpt.addr)), flags)
+    pdpt[0] <- paging.make_entry(physaddr(u64(pd.addr)), flags)
+    paging.identity_2m(pd[..], 0, flags)
+    arch.x64.cr3 <- physaddr(u64(pml4.addr))
+    if u64.bits(arch.x64.cr3) != u64(pml4.addr)
+        serial_write("paging: cr3 differs\n")
+    end
 end
 
 proc pic_init()
@@ -204,6 +231,7 @@ proc main -> never
     else
         serial_write("cpu: other\n")
     end
+    paging_init()
     install_idt()
     machine x64
         int 3

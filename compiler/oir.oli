@@ -163,6 +163,10 @@ O_CPU := 38
 -- bytes; volatile, class KERNEL, never removed or merged.
 O_HWLOAD := 39
 O_HWSTORE := 40
+-- `hw.load arch.x64.crN` and `hw.store arch.x64.crN, %v` (design 0015): a
+-- control register read into a value or written from one; `val` is N.
+O_CRLOAD := 41
+O_CRSTORE := 42
 -- The arithmetic modes: plain arithmetic traps, `wrap` wraps, `sat` clamps,
 -- `checked` answers with a failure (design 0006).
 AM_TRAP := 0
@@ -661,6 +665,9 @@ proc op_uses_a(op: u64) -> word
         ret 1
     end
     if op == O_HWSTORE
+        ret 1
+    end
+    if op == O_CRSTORE
         ret 1
     end
     if op == O_CHKB
@@ -1418,9 +1425,14 @@ end
 -- Hardware places (design 0015, `permit io.port`) ----------------------------
 
 proc gen_hwload(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
-    -- `port.uN[p]` read: `hw.load port.uN %p` — one `in` at the width.
+    -- `port.uN[p]` read: `hw.load port.uN %p` — one `in` at the width;
+    -- `arch.x64.crN` read: `hw.load arch.x64.crN`, one `mov rax, crN`.
     cx := mod_ctx(pg, mi)
     nd := node_at(cx, n)
+    if nd.sub == 1
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_CRLOAD, 0, 0, 0, nd.val)
+    end
     p := gen_expr(pg, ob, mi, kid1(cx, n), "u16")
     ob.lastlen <- 0
     ret emit_ins(ob, O_HWLOAD, p, nd.val / 8, 0, 0)
@@ -1431,6 +1443,12 @@ proc gen_store_hw(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     cx := mod_ctx(pg, mi)
     tgt := kid1(cx, n)
     tn := node_at(cx, tgt)
+    if tn.sub == 1
+        -- `arch.x64.crN <- v`: `hw.store arch.x64.crN, %v`, one `mov crN, rax`.
+        cv := gen_expr(pg, ob, mi, kid2(cx, n), cr_type(tn.val))
+        emit_ins(ob, O_CRSTORE, cv, 0, 0, tn.val)
+        ret
+    end
     p := gen_expr(pg, ob, mi, kid1(cx, tgt), "u16")
     v := gen_expr(pg, ob, mi, kid2(cx, n), hw_type(tn.val))
     emit_ins(ob, O_HWSTORE, p, v, tn.val / 8, 0)
@@ -2014,8 +2032,12 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ce := kid1(cx, n)
     cn := node_at(cx, ce)
     if cn.kind != N_NAME
-        oir_err(ob, pg, mi, 900, n)
-        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        -- `module.proc(...)`: the member token names the procedure, which
+        -- the front end resolved as it does a bare name.
+        if cn.kind != N_FIELD
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
     end
     pi := proc_find(pg, tok_text(cx, cn.t0))
     if pi < 0
@@ -5228,6 +5250,12 @@ proc oir_op_name(op: u64) -> view u8
     if op == O_HWSTORE
         ret "hw.store"
     end
+    if op == O_CRLOAD
+        ret "hw.load"
+    end
+    if op == O_CRSTORE
+        ret "hw.store"
+    end
     if op == O_ZALLOC
         ret "zone.alloc"
     end
@@ -5555,6 +5583,13 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         pv(ob, pg, ins.b)
         ret
     end
+    if op == O_CRSTORE
+        put(1, "hw.store arch.x64.")
+        put(1, cr_name(ins.val))
+        put(1, ", ")
+        pv(ob, pg, ins.a)
+        ret
+    end
     if op == O_CHKB
         put(1, "check.bounds ")
         pv(ob, pg, ins.a)
@@ -5762,6 +5797,11 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         put(1, hw_type(ins.b * 8))
         put(1, " ")
         pv(ob, pg, ins.a)
+        ret
+    end
+    if op == O_CRLOAD
+        put(1, "hw.load arch.x64.")
+        put(1, cr_name(ins.val))
         ret
     end
     if op == O_ZALLOC

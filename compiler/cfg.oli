@@ -411,6 +411,9 @@ proc defines_value(op: u64) -> word
     if op == O_HWSTORE
         ret 0
     end
+    if op == O_CRSTORE
+        ret 0
+    end
     if op == O_CHKB
         ret 0
     end

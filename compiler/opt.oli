@@ -1332,6 +1332,9 @@ proc removable(ob: ref Oir, i: u64) -> word
         -- A port read: the `in` itself is the point.
         ret 0
     end
+    if ins.op == O_CRLOAD
+        ret 0
+    end
     if ins.site > 0
         ret 0
     end

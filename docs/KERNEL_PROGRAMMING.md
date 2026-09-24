@@ -18,7 +18,9 @@ construct answers each system-programming requirement.
 > `lib/core/x64.oli` holds `InterruptFrame`, `IdtGate` and `TablePointer`;
 > `mem.mmio` runs (stage 20): `mmio rw view T` with every element access a
 > volatile load or store (`tests/run/mmio.oli`; `examples/kernel.oli` writes
-> the VGA cells through it); `core.x64.paging` is still planned. See
+> the VGA cells through it); `core.x64.paging` (stage 22) builds entries and
+> indices and identity-maps a gigabyte, `arch.x64.cr3 <- physaddr(…)` installs
+> the tables, and a library's procedures are called across modules. See
 > `docs/LANGUAGE.md`.
 
 ## 1. Requirement → construct
@@ -35,14 +37,14 @@ construct answers each system-programming requirement.
 | explicit alignment | `align N` on layouts, fields, statics, procedures, zone allocations | V0 |
 | bit fields | `bit` and `bits N` field types inside `packed` layouts | V1 |
 | CPU intrinsics | `cpu.halt`, `cpu.pause`, `cpu.cpuid`, `cpu.rdmsr/wrmsr`, `cpu.cr3`, `cpu.interrupts(on/off)`, `cpu.tsc`, `cpu.lgdt/lidt` | V0 (halt, pause), V1 (rest) |
-| hardware places and commands | `cpu.stack <- a`, `cpu.call(p)`, `cpu.id(leaf)`, `arch.x64.cr3 <- p`, `arch.x64.gdt <- ref t`, `arch.x64.segments(...)`, `port.u8[n] <- b` (design 0015) | V0 (cpu.*), V1 (arch.x64.*, port.*) |
+| hardware places and commands | `arch.x64.cr0/2/3/4/8 <- p` and read (**runs**), `port.u8[n] <- b` (**runs**), `cpu.halt/pause/interrupts` (**runs**); `cpu.stack <- a`, `cpu.call(p)`, `cpu.id(leaf)`, `arch.x64.gdt <- ref t`, `arch.x64.segments(...)` (design 0015) | V0 (runs), V1 (the rest) |
 | inline machine code | `machine x64 ... end` with `in`/`out`/`clobber`, assembled by `olic` — the escape hatch | V0 |
 | physical memory | `physaddr` type; `zone ... at`; `memory.raw` | V0 |
-| virtual memory | `addr T` is a virtual address; page-table layouts in `core.x64.paging` | V0 type, V1 library |
+| virtual memory | `addr T` is a virtual address; `core.x64.paging` (`lib/core/x64/paging.oli`): entry flags, `make_entry`, `entry_target`, the four indices and two offsets, `identity_2m` — **runs** (`tests/run/paging.oli`); `arch.x64.cr3 <- physaddr(u64(pml4.addr))` in the kernel example | V0 |
 | MMIO | `mmio` views from `mem.mmio` + `memory.mmio` capability | V0 (**runs**) |
 | port I/O | `port.u8/u16/u32[n]` as a place under `io.port` — **runs**: one `in` or `out` each, volatile (`tests/run/hw.oli`; the kernel example programs COM1, the 8259 PICs and the 8253 PIT with them); the `port T` value type, `p.in()`, `p.out(v)` | V0 (place), V1 (type) |
 | syscalls | `os.syscall` (hosted programs); a kernel *implements* syscalls with `calls interrupt` or a `machine` `syscall` entry stub | V0 / V1 |
-| page tables | `layout` + `packed` + `bits` + `physaddr` | V1 |
+| page tables | `core.x64.paging` over `[512]u64` statics aligned 4096, installed through `arch.x64.cr3` | V0 (**runs**, structurally in the kernel) |
 | SIMD registers | `machine` blocks in V0; native vector types in V2 | V0 / V2 |
 | TLS | `cpu.fs_base`/`gs_base` intrinsics; `thread` statics | V2 |
 | custom allocators | `zone ... from HANDLE`; allocator layouts in `core.mem` | V0 / V1 |

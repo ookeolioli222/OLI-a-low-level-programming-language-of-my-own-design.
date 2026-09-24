@@ -257,6 +257,9 @@ proc infer(pg: ref Prog, mi: u64, n: u64) -> view u8
         ret elem_of(base)
     end
     if k == N_HWPLACE
+        if nd.sub == 1
+            ret cr_type(nd.val)
+        end
         ret hw_type(nd.val)
     end
     if k == N_FIELD

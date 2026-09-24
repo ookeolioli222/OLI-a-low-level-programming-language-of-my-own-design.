@@ -1006,12 +1006,41 @@ constant in `.rodata`).
   handler addresses) as before. No QEMU on this machine: the image is
   checked structurally.
 
+## Implemented in back-end stage 22 (2026-09-24): control registers, `core.x64.paging`, calls into libraries
+
+- **`arch.x64.cr0`, `cr2`, `cr3`, `cr4`, `cr8`** are places under
+  `permit cpu.control` (design 0015): read, one `mov rax, crN` (`hw.load
+  arch.x64.crN`); written with `<-`, one `mov crN, rax` (`hw.store
+  arch.x64.crN, %v`); cr3 is typed `physaddr` (design 0012), the others
+  `u64`. The parser recognises the five-token shape `arch . x64 . crN` and
+  leaves any other `arch` an ordinary name. Volatile like every hardware
+  place: kept by the passes, `KERNEL` in `--explain`.
+- **A library's procedures can be called.** `mod.proc(...)` was typed by
+  the front end but refused by the back end (`gen_call` took only a bare
+  name); it now takes the member name the front end resolved, so
+  `lib/core/mem.oli` and the new `lib/core/x64/paging.oli` are usable —
+  the first executed cross-module calls. Names stay program-wide: a
+  parameter of a library procedure may not shadow a static of the program
+  (`E0101`), which the kernel example met (`pd`) and renamed around.
+- **`core.x64.paging`** (`lib/core/x64/paging.oli`): the entry flags as
+  `pub` constants, `make_entry`, `entry_target`, `entry_present`, the four
+  indices and two offsets of a virtual address, and `identity_2m`, which
+  fills a page directory with two-megabyte pages. `tests/run/paging.oli`
+  runs fourteen checks against it, including the identity map of a
+  gigabyte built into a frame array.
+- **`examples/kernel.oli`** carries three 4096-aligned tables in `.bss`,
+  fills them (`paging_init`), installs them with
+  `arch.x64.cr3 <- physaddr(u64(pml4.addr))` and reads cr3 back; the
+  harness finds one `mov cr3, rax`, one `mov rax, cr3`, the `hw.store` in
+  the OIR and the call into `core.x64.paging`. `tests/run/hw.oli` pins all
+  seven control-register accesses once each by objdump.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 25,025 lines) into
+compiles its own source (`compiler/`, seventeen modules, 25,230 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 931,333 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 938,774 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

@@ -180,6 +180,12 @@ proc ins_class(ob: ref Oir, i: u64) -> u64
     if o == O_HWSTORE
         ret CL_KERNEL
     end
+    if o == O_CRLOAD
+        ret CL_KERNEL
+    end
+    if o == O_CRSTORE
+        ret CL_KERNEL
+    end
     if o == O_CPU
         if ins.val != 1
             -- `hlt`, `cli`, `sti`; `pause` is a hint, ZERO.

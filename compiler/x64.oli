@@ -864,6 +864,31 @@ proc lower_hwload(ob: rw ref Oir, mc: ref Mach, i: u64)
     st_val(ob, mc, R_AX, i)
 end
 
+proc cr_modrm(ob: rw ref Oir, r: u64, opcode: u64)
+    -- `0f 20 /r` (`mov r64, crN`) or `0f 22 /r` (`mov crN, r64`) with rax as
+    -- the register and crN in the reg field; cr8 needs REX.R.
+    if r == 8
+        cb(ob, 68)
+    end
+    cb(ob, 15)
+    cb(ob, opcode)
+    cb(ob, 192 + (r % 8) * 8)
+end
+
+proc lower_crload(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `hw.load arch.x64.crN`: `mov rax, crN`, the value in rax.
+    ins := ins_at(ob, i)
+    cr_modrm(ob, ins.val, 32)
+    st_val(ob, mc, R_AX, i)
+end
+
+proc lower_crstore(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `hw.store arch.x64.crN, %v`: the value in rax, `mov crN, rax`.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_AX, ins.a)
+    cr_modrm(ob, ins.val, 34)
+end
+
 proc lower_hwstore(ob: rw ref Oir, mc: ref Mach, i: u64)
     -- `hw.store port.uN %p, %v`: the port number in dx, the value in al,
     -- ax or eax, one `out`.
@@ -1617,6 +1642,14 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_HWSTORE
         lower_hwstore(ob, mc, i)
+        ret
+    end
+    if op == O_CRLOAD
+        lower_crload(ob, mc, i)
+        ret
+    end
+    if op == O_CRSTORE
+        lower_crstore(ob, mc, i)
         ret
     end
     if op == O_TRAP

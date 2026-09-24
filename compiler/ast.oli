@@ -241,6 +241,32 @@ proc hw_type(w: u64) -> view u8
     ret "u8"
 end
 
+proc cr_name(r: u64) -> view u8
+    -- The control register `arch.x64.crN` a place of `sub` 1 names.
+    if r == 0
+        ret "cr0"
+    end
+    if r == 2
+        ret "cr2"
+    end
+    if r == 4
+        ret "cr4"
+    end
+    if r == 8
+        ret "cr8"
+    end
+    ret "cr3"
+end
+
+proc cr_type(r: u64) -> view u8
+    -- cr3 holds the physical address of the page tables (design 0012); the
+    -- others are bit sets.
+    if r == 3
+        ret "physaddr"
+    end
+    ret "u64"
+end
+
 proc add_kid(cx: ref Ctx, parent: u64, kid: u64)
     if kid == 0
         ret
@@ -616,6 +642,12 @@ proc pe(cx: ref Ctx, n: u64)
         ret
     end
     if k == N_HWPLACE
+        if nd.sub == 1
+            emit(cx, "(arch.x64.")
+            emit(cx, cr_name(nd.val))
+            emit(cx, ")")
+            ret
+        end
         emit(cx, "(port.")
         emit(cx, hw_type(nd.val))
         emit(cx, " ")
