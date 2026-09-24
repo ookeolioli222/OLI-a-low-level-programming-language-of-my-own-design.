@@ -107,6 +107,9 @@ proc elem_of(v: view u8) -> view u8
     -- `rw view u8` and `view u8` both have element type `u8`, and so does
     -- the array place `[N]u8`.
     s : view u8 <- v
+    if starts_with(s, "mmio ")
+        s <- s[5..]
+    end
     if starts_with(s, "rw ")
         s <- s[3..]
     end

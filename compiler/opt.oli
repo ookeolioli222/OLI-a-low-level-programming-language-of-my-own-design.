@@ -1322,6 +1322,12 @@ proc removable(ob: ref Oir, i: u64) -> word
         -- What a machine block left in a register: read right after it.
         ret 0
     end
+    if ins.op == O_RLOAD
+        if ins.val == 1
+            -- A volatile load (space `mmio`): the access is the point.
+            ret 0
+        end
+    end
     if ins.site > 0
         ret 0
     end

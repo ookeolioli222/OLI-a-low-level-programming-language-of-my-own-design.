@@ -150,11 +150,29 @@ proc addr_kind(t: view u8) -> word
 end
 
 proc unqual(t: view u8) -> view u8
-    -- A type without its `rw`.
-    if starts_with(t, "rw ")
-        ret t[3..]
+    -- A type without its `mmio` and `rw`: the shape the classifications
+    -- read. Whether `mmio` is there is a fact of its own (`is_mmio`), and
+    -- no conversion drops it.
+    s := no_mmio(t)
+    if starts_with(s, "rw ")
+        ret s[3..]
+    end
+    ret s
+end
+
+proc no_mmio(t: view u8) -> view u8
+    if starts_with(t, "mmio ")
+        ret t[5..]
     end
     ret t
+end
+
+proc is_mmio(t: view u8) -> word
+    -- `mmio view T` / `mmio rw view T`: device memory, every access volatile.
+    if starts_with(t, "mmio ")
+        ret 1
+    end
+    ret 0
 end
 
 proc err_of(v: view u8) -> view u8
@@ -435,9 +453,12 @@ proc widens_to(a: view u8, b: view u8) -> word
 end
 
 proc ro_of(pg: ref Prog, t: view u8) -> view u8
-    -- `rw view T` seen as `view T`.
+    -- `rw view T` seen as `view T`; `mmio rw view T` as `mmio view T`.
     if starts_with(t, "rw ")
         ret t[3..]
+    end
+    if starts_with(t, "mmio rw ")
+        ret mk_type(pg, "mmio ", t[8..])
     end
     ret t
 end
@@ -456,6 +477,10 @@ proc coerce_kind(pg: ref Prog, have: view u8, want: view u8) -> word
     end
     if view_eq(have, "never")
         ret 0
+    end
+    if is_mmio(have) != is_mmio(want)
+        -- `mmio` is never dropped, and comes only from `mem.mmio`.
+        ret 6
     end
     if int_bits(have) > 0
         if int_bits(want) > 0
@@ -506,6 +531,24 @@ CK_TRYBYTES := 11
 CK_MAKE := 12
 CK_AT := 13
 CK_PROC := 14
+CK_MMIO := 15
+
+proc mmio_elem_ok(t: view u8) -> word
+    -- The element types `mem.mmio` takes: the unsigned widths.
+    if view_eq(t, "u8")
+        ret 1
+    end
+    if view_eq(t, "u16")
+        ret 1
+    end
+    if view_eq(t, "u32")
+        ret 1
+    end
+    if view_eq(t, "u64")
+        ret 1
+    end
+    ret 0
+end
 
 proc mem_width(name: view u8) -> word
     -- The width of a `mem.get_*` / `mem.put_*` accessor, 0 when it is not one.
@@ -603,6 +646,9 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
                 end
             end
             if view_eq(bname, "mem")
+                if view_eq(m, "mmio")
+                    ret CK_MMIO
+                end
                 if view_eq(m, "copy")
                     ret CK_COPY
                 end
@@ -683,6 +729,24 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
             ret "u32"
         end
         ret "u64"
+    end
+    if ck == CK_MMIO
+        -- `mem.mmio(T, a, n)`: a writable view of device memory over `T`,
+        -- one of the unsigned widths; anything else has no type here and
+        -- the checker refuses it.
+        ta := kid2(cx, n)
+        if ta == 0
+            ret b[0..0]
+        end
+        tn := node_at(cx, ta)
+        if tn.kind != N_TYPEARG
+            ret b[0..0]
+        end
+        tt := tok_text(cx, tn.t0)
+        if mmio_elem_ok(tt) == 0
+            ret b[0..0]
+        end
+        ret mk_type(pg, "mmio rw view ", tt)
     end
     if ck == CK_BYTES
         ret "rw view u8"
@@ -1248,7 +1312,7 @@ proc place_rw(pg: ref Prog, mi: u64, n: u64) -> word
     end
     if k == N_FIELD
         base := kid1(cx, n)
-        bt := ety(pg, mi, base, b[0..0])
+        bt := no_mmio(ety(pg, mi, base, b[0..0]))
         if starts_with(bt, "rw ")
             ret 1
         end
@@ -1258,7 +1322,7 @@ proc place_rw(pg: ref Prog, mi: u64, n: u64) -> word
         ret place_rw(pg, mi, base)
     end
     if k == N_INDEX
-        bt2 := ety(pg, mi, kid1(cx, n), b[0..0])
+        bt2 := no_mmio(ety(pg, mi, kid1(cx, n), b[0..0]))
         if starts_with(bt2, "rw ")
             ret 1
         end
@@ -1500,6 +1564,10 @@ proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
         put(1, "MemSecureZero")
         ret
     end
+    if ck == CK_MMIO
+        put(1, "MemMmio")
+        ret
+    end
     if ck == CK_GET
         put(1, "MemGet(")
     else
@@ -1653,7 +1721,14 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
     j : u64 <- 0
     while a2 != 0
         put(1, " ")
-        if ck == CK_PUT
+        if ck == CK_MMIO
+            if j == 0
+                tyn := node_at(cx, a2)
+                put(1, tok_text(cx, tyn.t0))
+            else
+                pexpr(pg, mi, a2, "uword")
+            end
+        elif ck == CK_PUT
             if j == 0
                 pexpr(pg, mi, a2, "rw view u8")
             else
@@ -2925,7 +3000,12 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
     a2 : u64 <- kid2(cx, n)
     j : u64 <- 0
     while a2 != 0
-        if ck == CK_PUT
+        if ck == CK_MMIO
+            -- The element type first, then an address and a count.
+            if j > 0
+                texpr(pg, mi, a2, "uword")
+            end
+        elif ck == CK_PUT
             if j == 0
                 texpr(pg, mi, a2, "rw view u8")
             else

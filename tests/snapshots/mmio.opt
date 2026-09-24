@@ -1,0 +1,200 @@
+(oir
+  (static 0 removed)
+  (static 1 len=27)
+  (static 2 removed)
+  (static 3 len=27)
+  (static 4 len=27)
+  (static 5 removed)
+  (static 6 removed)
+  (static 7 removed)
+  (static 8 removed)
+  (static 9 removed)
+  (static 10 removed)
+  (static 11 removed)
+  (static 12 removed)
+  (static 13 removed)
+  (static 14 removed)
+  (static 15 removed)
+  (static 16 removed)
+  (static 17 removed)
+  (static 18 removed)
+  (static 19 removed)
+  (proc fill locals=3
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = param 2
+      %3 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %4 = phi [bb0 %3] [bb2 %12]
+      %5 = cmp.lt %4, %1
+      branch %5, bb2, bb3)
+    (bb2 preds bb1
+      ; check.bounds %4 -- removed: proof(loop-bound)
+      %7 = const 2
+      %8 = mul %4, %7
+      %9 = add %0, %8
+      raw.store.16.mmio %9, %2
+      %11 = const 1
+      %12 = add %4, %11
+      check.overflow %12
+      jump bb1)
+    (bb3 preds bb1
+      ret))
+  (proc sum locals=3
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %4 = phi [bb0 %2] [bb2 %12]
+      %5 = phi [bb0 %2] [bb2 %14]
+      %6 = cmp.lt %5, %1
+      branch %6, bb2, bb3)
+    (bb2 preds bb1
+      ; check.bounds %5 -- removed: proof(loop-bound)
+      %8 = const 2
+      %9 = mul %5, %8
+      %10 = add %0, %9
+      %11 = raw.load.16.mmio %10
+      %12 = add %4, %11
+      check.overflow %12
+      %13 = const 1
+      %14 = add %5, %13
+      check.overflow %14
+      jump bb1)
+    (bb3 preds bb1
+      ret %4))
+  (proc start locals=6 temps=1 entry
+    (bb0
+      %0 = addr.of frame.1
+      %1 = const 2
+      %2 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %3 = phi [bb0 %2] [bb2 %10]
+      %4 = cmp.lt %3, %1
+      branch %4, bb2, bb3)
+    (bb2 preds bb1
+      %5 = const 8
+      %6 = mul %3, %5
+      %7 = add %0, %6
+      raw.store.64 %7, %2
+      %9 = const 1
+      %10 = add %3, %9
+      jump bb1)
+    (bb3 preds bb1
+      %12 = const 8
+      ; check.bounds %13 -- removed: proof(constant)
+      %17 = add %0, %2
+      jump bb5)
+    (bb5 preds bb3
+      %23 = const 3
+      ; check.bounds %23 -- removed: proof(constant)
+      %26 = const 6
+      %27 = add %17, %26
+      %28 = const 48879
+      raw.store.16.mmio %27, %28
+      ; check.bounds %32 -- removed: proof(constant)
+      %36 = add %0, %26
+      %37 = raw.load.16 %36
+      %39 = cmp.ne %37, %28
+      branch %39, bb6, bb7)
+    (bb6 preds bb5
+      ret %1)
+    (bb7 preds bb5
+      %43 = const 5
+      ; check.bounds %43 -- removed: proof(constant)
+      %46 = const 10
+      %47 = add %0, %46
+      %48 = const 4660
+      raw.store.16 %47, %48
+      ; check.bounds %50 -- removed: proof(constant)
+      %54 = add %17, %46
+      %55 = raw.load.16.mmio %54
+      %57 = cmp.ne %55, %48
+      branch %57, bb8, bb9)
+    (bb8 preds bb7
+      ret %23)
+    (bb9 preds bb7
+      arg %17
+      arg %12
+      %61 = const 7
+      arg %61
+      %63 = call fill/3
+      ; check.bounds %66 -- removed: proof(constant)
+      %69 = const 14
+      %70 = add %0, %69
+      %71 = raw.load.16 %70
+      %73 = cmp.ne %71, %61
+      branch %73, bb10, bb11)
+    (bb10 preds bb9
+      %74 = const 4
+      ret %74)
+    (bb11 preds bb9
+      ; check.bounds %77 -- removed: proof(constant)
+      %82 = raw.load.16 %17
+      %84 = cmp.ne %82, %61
+      branch %84, bb12, bb13)
+    (bb12 preds bb11
+      ret %43)
+    (bb13 preds bb11
+      arg %17
+      arg %12
+      %88 = call sum/2
+      %89 = const 56
+      %90 = cmp.ne %88, %89
+      branch %90, bb14, bb15)
+    (bb14 preds bb13
+      ret %26)
+    (bb15 preds bb13
+      ; check.bounds %92 -- removed: proof(constant)
+      %96 = const 4
+      %97 = add %17, %96
+      jump bb17)
+    (bb17 preds bb15
+      ; check.bounds %102 -- removed: proof(constant)
+      %106 = add %97, %2
+      %107 = const 9
+      raw.store.16.mmio %106, %107
+      ; check.bounds %111 -- removed: proof(constant)
+      %115 = add %0, %96
+      %116 = raw.load.16 %115
+      %118 = cmp.ne %116, %107
+      branch %118, bb18, bb19)
+    (bb18 preds bb17
+      ret %12)
+    (bb19 preds bb17
+      ; check.bounds %121 -- removed: proof(constant)
+      %124 = raw.load.8.mmio %97
+      %126 = cmp.ne %124, %107
+      branch %126, bb20, bb21)
+    (bb20 preds bb19
+      ret %107)
+    (bb21 preds bb19
+      ; check.bounds %128 -- removed: proof(constant)
+      %130 = add %17, %43
+      %131 = raw.load.8.mmio %130
+      %133 = cmp.ne %131, %2
+      branch %133, bb22, bb23)
+    (bb22 preds bb21
+      ret %46)
+    (bb23 preds bb21
+      ; check.bounds %135 -- removed: proof(constant)
+      %138 = const 171
+      raw.store.8.mmio %27, %138
+      ; check.bounds %142 -- removed: proof(constant)
+      %147 = raw.load.16 %36
+      %149 = cmp.ne %147, %138
+      branch %149, bb24, bb25)
+    (bb24 preds bb23
+      %150 = const 11
+      ret %150)
+    (bb25 preds bb23
+      ; check.bounds %151 -- removed: proof(constant)
+      %155 = add %17, %1
+      %156 = raw.load.16.mmio %155
+      %157 = const 42
+      ret %157)))

@@ -43,8 +43,11 @@ module olic.oir
 -- A `T or E` the register pair cannot carry — a view, a layout or a wide
 -- choice as the value, a layout or a wide choice as the failure — goes
 -- through an area the caller owns, as a wide layout result does.
+-- An element of an `mmio` view (`mem.mmio`) is `raw.load`/`raw.store` in
+-- space `mmio` — printed `.mmio`, volatile for every pass (OIR_SPEC §1.4).
 -- Anything else is refused with E0900 rather than approximated: an
--- aggregate constant, and a machine line the encoder does not know.
+-- aggregate constant, `each` or `Name.at` over device memory, and a
+-- machine line the encoder does not know.
 --
 -- Plain arithmetic traps on overflow (design 0006), so every `+ - * / %` and
 -- every `-x` carries the width of its type and the static that names its trap
@@ -1771,6 +1774,33 @@ proc gen_bytes(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ret r
 end
 
+proc gen_mmio(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- `mem.mmio(T, a, n)`: the view (a, n) of device memory — no instruction
+    -- of its own; what makes it `mmio` is every access through it, which
+    -- is in space `mmio` (`gen_index`, `gen_store_index`).
+    cx := mod_ctx(pg, mi)
+    ce := kid1(cx, n)
+    ta := sibling(cx, ce)
+    if ta == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    an := sibling(cx, ta)
+    if an == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    cn := sibling(cx, an)
+    if cn == 0
+        oir_err(ob, pg, mi, 900, n)
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    a := gen_expr(pg, ob, mi, an, "uword")
+    ln := gen_expr(pg, ob, mi, cn, "uword")
+    ob.lastlen <- ln
+    ret a
+end
+
 proc gen_mem_get(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `mem.get_u16/u32/u64(v)`, `mem.get_be*(v)`, `mem.get_le*(v)`: the
     -- view must hold the width (a range check, `bounds` when short), then
@@ -1910,6 +1940,9 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     if ck == CK_PUT
         ret gen_mem_put(pg, ob, mi, n)
+    end
+    if ck == CK_MMIO
+        ret gen_mmio(pg, ob, mi, n)
     end
     if ck == CK_HALT
         emit_ins(ob, O_CPU, 0, 0, 0, 0)
@@ -2474,9 +2507,16 @@ proc gen_index(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     p := gen_index_addr(pg, ob, mi, n)
     sz := ob.lastlen
-    et := view_elem(ety(pg, mi, kid1(cx, n), b[0..0]))
+    bt := ety(pg, mi, kid1(cx, n), b[0..0])
+    et := view_elem(bt)
     ob.lastlen <- 0
+    vol := u64.bits(is_mmio(bt))
     if layout_param(pg, et) > 0
+        if vol == 1
+            -- A layout in device memory would be read as plain memory.
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
         -- A layout element is its address.
         ret p
     end
@@ -2484,7 +2524,9 @@ proc gen_index(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     if int_signed(et) == 1
         sg <- 1
     end
-    ret emit_ins(ob, O_RLOAD, p, sz, sg, 0)
+    -- Through an `mmio` view the load is in space `mmio` (OIR_SPEC §1.4):
+    -- volatile, so no pass removes, merges or reorders it.
+    ret emit_ins(ob, O_RLOAD, p, sz, sg, vol)
 end
 
 proc gen_subview(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
@@ -3236,13 +3278,20 @@ proc gen_store_index(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     end
     p := gen_index_addr(pg, ob, mi, tgt)
     sz := ob.lastlen
-    et := view_elem(ety(pg, mi, kid1(cx, tgt), b[0..0]))
+    bt := ety(pg, mi, kid1(cx, tgt), b[0..0])
+    et := view_elem(bt)
     v := gen_expr(pg, ob, mi, kid2(cx, n), et)
+    vol := u64.bits(is_mmio(bt))
     if layout_param(pg, et) > 0
+        if vol == 1
+            oir_err(ob, pg, mi, 900, n)
+            ret
+        end
         gen_copy(ob, p, v, sz)
         ret
     end
-    emit_ins(ob, O_RSTORE, p, v, sz, 0)
+    -- Through an `mmio` view the store is volatile (space `mmio`).
+    emit_ins(ob, O_RSTORE, p, v, sz, vol)
 end
 
 proc gen_ret(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
@@ -4475,6 +4524,11 @@ proc gen_each(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
         oir_err(ob, pg, mi, 900, n)
         ret
     end
+    if is_mmio(bt) == 1
+        -- `each` over device memory is not lowered: index it.
+        oir_err(ob, pg, mi, 900, n)
+        ret
+    end
     sz := elem_bytes(pg, ob, mi, bt, n)
     et := view_elem(bt)
     sg : u64 <- 0
@@ -5417,6 +5471,9 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     if op == O_RSTORE
         put(1, "raw.store.")
         put_uint(1, tmp, ins.c * 8)
+        if ins.val == 1
+            put(1, ".mmio")
+        end
         put(1, " ")
         pv(ob, pg, ins.a)
         put(1, ", ")
@@ -5613,6 +5670,9 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         put_uint(1, tmp, ins.b * 8)
         if ins.c == 1
             put(1, ".s")
+        end
+        if ins.val == 1
+            put(1, ".mmio")
         end
         put(1, " ")
         pv(ob, pg, ins.a)

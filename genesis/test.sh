@@ -1140,7 +1140,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1149,7 +1149,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1171,7 +1171,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1269,6 +1269,13 @@ grep -q 'dominance=1' build/cse.explain || fail "explain: cse.oli must report th
 grep -q '(registers values=[1-9][0-9]* saved=rbx' build/cse.explain || fail "explain: the linear scan must give values of cse.oli registers, rbx first"
 grep -q 'SYSCALL=' build/zones.explain || fail "explain: a zone from the operating system must be a SYSCALL on its line"
 grep -q '(line [0-9]* .*ZONE=' build/zones.explain || fail "explain: an allocation from a zone must be ZONE on its line"
+# An access through an `mmio` view is in space mmio (OIR_SPEC 1.4): volatile,
+# so the passes keep every one - the unused load of tests/run/mmio.oli too -
+# and --explain bills each as KERNEL.
+[ "$(grep -c 'raw.load.[0-9]*.mmio' build/mmio.opt)" = 5 ] || fail "opt: mmio.oli must keep its five volatile loads, the unused one too"
+[ "$(grep -c 'raw.store.[0-9]*.mmio' build/mmio.opt)" = 4 ] || fail "opt: mmio.oli must keep its four volatile stores"
+( cd .. && genesis/build/explain < tests/run/mmio.oli > genesis/build/mmio.explain 2> genesis/build/explain.err ) || fail "explain: mmio.oli: $(head -1 build/explain.err)"
+[ "$(grep -o 'KERNEL=1' build/mmio.explain | wc -l | tr -d ' ')" = 9 ] || fail "explain: mmio.oli must bill its nine volatile accesses as KERNEL"
 echo "ok: --explain reports every procedure's frame, checks with their proofs, zones, calls, syscalls, the values the linear scan put in callee-saved registers, and the cost class of every line that produced an instruction"
 # Statics: an initialised one is bytes in the file, a zero one is memory past
 # it, and the image has the read+write segment ABI.md 7 asks for.
@@ -1331,7 +1338,7 @@ for f in ../tests/run/*.oli; do
         [ "$st" = 42 ] || fail "run: $n exited $st, want 42 (the check number that failed)"
     fi
 done
-echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, fallible results carried in the caller's area when a view, a layout or a wide choice is the value or the failure is wider than a word, a choice wider than a word held by its address as a local, a parameter and a result, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, a calls-interrupt handler entered through a frame pushed by hand and left through iretq, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
+echo "ok: olic compiles and runs every tests/run fixture - arithmetic in all four modes, control flow, procedures with register and stack arguments, constants, conversions, zones from every source with try_bytes and a release on every exit edge, views, each, layouts, refs, fallible results with else and case, choices as failures with variant patterns, fallible results carried in the caller's area when a view, a layout or a wide choice is the value or the failure is wider than a word, a choice wider than a word held by its address as a local, a parameter and a result, views of device memory from mem.mmio with every element access volatile and bounds-checked, case over a bool, an integer or a plain choice with its fields, each over a range, layouts by value in places, literals, parameters, arguments and results, a calls-interrupt handler entered through a frame pushed by hand and left through iretq, machine x64 blocks with in, out, clobber, local labels, a callee-saved register kept across a call and a system call by hand, a freestanding program with its own entry and stack, statics, arrays in frames, raw access and stdout"
 # The image of a program with statics has two loadable segments, the second
 # read+write on the page after the first; hello.elf still has one.
 [ "$(od -An -tu2 -j56 -N2 build/statics.elf | tr -d ' ')" = 2 ] || fail "elf: statics.elf should have two program headers"
@@ -1392,7 +1399,10 @@ echo "ok: examples/packet_demo.oli - the reference program of the language docum
 # length and checksum the loader will verify, port I/O and cpuid in its
 # blocks, and not one system call in any procedure.
 ( cd .. && genesis/build/olic < examples/kernel.oli > genesis/build/kernel.elf 2> genesis/build/kernel.err ) || fail "kernel: olic could not compile examples/kernel.oli: $(head -1 build/kernel.err)"
-readelf -h build/kernel.elf | grep -q 'Entry point address: *0x1001' || fail "kernel: the entry is not in the segment loaded at 0x100000"
+kentry=$(readelf -h build/kernel.elf | sed -n 's/.*Entry point address: *0x\([0-9a-f]*\).*/\1/p')
+ksize=$(readelf -lW build/kernel.elf | awk '$1=="LOAD"{print $5; exit}')
+[ "$((0x$kentry))" -ge "$((0x100000))" ] && [ "$((0x$kentry))" -lt "$((0x100000 + $ksize))" ] \
+    || fail "kernel: the entry 0x$kentry is not in the segment loaded at 0x100000 ($ksize bytes)"
 readelf -l build/kernel.elf | grep -q 'LOAD .*0x0000000000100000 0x0000000000100000' || fail "kernel: the first segment is not loaded at 0x100000"
 [ "$(od -An -tx1 -j176 -N24 build/kernel.elf | tr -d ' \n')" = "d65052e800000000180000001200ad17000000000800000000" ] \
     || [ "$(od -An -tx1 -j176 -N24 build/kernel.elf | tr -d ' \n')" = "d65052e8000000001800000012afad170000000008000000" ] \
@@ -1402,6 +1412,8 @@ grep -q '^    ee)' build/kernel.asm || fail "kernel: the COM1 write must be one 
 grep -q '0f a2' build/kernel.asm || fail "kernel: cpuid must be in its block"
 grep -q '^    cd 03)' build/kernel.asm || fail "kernel: the software interrupt must be int 3"
 grep -q '0f 01 1c 25' build/kernel.asm || fail "kernel: the descriptor table must be loaded with lidt"
+( cd .. && genesis/build/show_oir < examples/kernel.oli > genesis/build/kernel.oir 2>/dev/null ) || fail "kernel: show_oir"
+[ "$(grep -c 'raw.store.8.mmio' build/kernel.oir)" = 2 ] || fail "kernel: the VGA cells must be written through mem.mmio, volatile"
 [ "$(od -An -tx1 -v build/kernel.elf | tr -d '\n' | grep -o '48 cf' | wc -l)" = 1 ] || fail "kernel: exactly one calls-interrupt handler ends in iretq"
 ( cd .. && genesis/build/explain < examples/kernel.oli > genesis/build/kernel.explain 2>/dev/null ) || fail "kernel: explain"
 [ "$(grep -c 'syscalls=0' build/kernel.explain)" = "$(grep -c '(proc ' build/kernel.explain)" ] || fail "kernel: a procedure of the kernel makes a system call"

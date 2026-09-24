@@ -73,11 +73,15 @@ proc serial_write(s : view u8)
 end
 
 proc vga_write(s : view u8)
-    permit memory.raw
+    -- The VGA text buffer as device memory: every store volatile and
+    -- bounds-checked against the 80x25 cells (`mem.mmio`, capability
+    -- `memory.mmio`).
+    permit memory.mmio
+    vga := mem.mmio(u8, 0xB8000, 4000)
     i : uword <- 0
     while i < s.len
-        [addr u8 (0xB8000 + i * 2)] <- s[i]
-        [addr u8 (0xB8001 + i * 2)] <- 0x0F
+        vga[i * 2] <- s[i]
+        vga[i * 2 + 1] <- 0x0F
         i <- i + 1
     end
 end

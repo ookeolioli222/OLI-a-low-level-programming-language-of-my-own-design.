@@ -1,0 +1,11 @@
+module trap_mmio_bounds
+-- expect: trap: bounds at stdin:9
+proc start -> s32
+    entry
+    permit memory.mmio
+    buf : [4]u16
+    m := mem.mmio(u16, u64.bits(buf[..].addr), 4)
+    i : uword <- 4
+    m[i] <- 1
+    ret 0
+end

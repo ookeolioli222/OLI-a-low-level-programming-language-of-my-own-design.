@@ -168,7 +168,7 @@ end
 | `module a.b` | one file = one module; `cpu`/`mem`/`os` always in scope, `core` implicit | **runs** |
 | `import a.b [as x]`, `pub` | imports resolve under `lib/`, names are checked across modules | analysed as a whole program; no run fixture imports a module yet |
 | `proc NAME(params) -> T ... end` | a procedure: arguments in the six SysV registers, then on the stack right to left; a view that does not fit in the registers left goes to the stack whole and the next integer still takes a register (the SysV rule, `docs/ABI.md` §1–2); one result (a view: two words) | **runs** (`tests/run/args.oli`) |
-| `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw` and `cpu.asm` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`) / analysed (the rest) |
+| `permit cap, ...` | capabilities the body may use; `os.syscall`, `memory.raw`, `memory.mmio`, `cpu.asm` and `cpu.interrupt` are enforced by the checker (`E0401` without them) | **runs** (`os.syscall`, `memory.raw`, `memory.mmio`, `cpu.asm`, `cpu.interrupt`) / analysed (the rest) |
 | `calls sysv` | the default convention | analysed |
 | `calls none` | no prologue, no frame: the body is `machine` blocks alone, without `in`/`out` (boot code) | **runs** (`tests/run/freestanding.oli`) |
 | `calls interrupt` | an interrupt handler (`permit cpu.interrupt`): the prologue pushes every general register but rsp and rbp, the one parameter is `ref core.x64.InterruptFrame` — the rip, cs, rflags, rsp and ss the CPU pushed — and the return is `iretq`; no result | **runs** (`tests/run/interrupt.oli` enters one through a frame pushed by hand; `examples/kernel.oli` installs one on vector 3 and reaches it with `int 3`) |
@@ -278,7 +278,7 @@ check they remove is printed with its proof by `--show-oir=opt`.
 | `mem.secure_zero(dst)` | zero that no pass may delete (wipes a secret) | — | COPY | analysed |
 | `mem.get_u16/32/64`, `get_be*`, `get_le*` | read an integer of a given width and endianness from a view: `check.range` that the view holds it (`bounds`), one load, a byte swap for `be` | — | CHECK | **runs** (`tests/run/bytes.oli`) |
 | `mem.put_u16/32/64`, `put_be*`, `put_le*` | write one, the same way | — | CHECK | **runs** |
-| `mem.mmio(...)` | memory-mapped I/O access | `memory.mmio` | KERNEL | reserved (V1) |
+| `mem.mmio(T, a, n)` | a view of device memory, `mmio rw view T` (`T` one of `u8`…`u64`, `a` and `n` `uword`); every `v[i]` read or write through it is one volatile load or store (`raw.load.T.mmio` / `raw.store.T.mmio`: no pass removes, merges or reorders it) after the bounds check any view carries; `v[a..b]`, `.len`, `.addr` as for any view; `mmio` is never dropped (`E0200` where a plain view is wanted) | `memory.mmio` | KERNEL | **runs** (`tests/run/mmio.oli`, `examples/kernel.oli`); `each` and `Name.at` over it are E0900 |
 
 ---
 
@@ -330,7 +330,8 @@ Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 | `never` | a procedure that does not return | analysed |
 | `physaddr` | a physical address — never dereferenced; cannot mix with `addr` | analysed |
 | `be T` / `le T` | an integer stored big/little-endian, in a `layout` | **runs** |
-| `mmio ref T` / `mmio view T`, `port T`, `own T` | volatile device memory, port I/O, ownership | reserved (V1) |
+| `mmio view T` / `mmio rw view T` | a view of device memory: every element access volatile; made by `mem.mmio`, passed as a parameter, never converted to a plain view | **runs** |
+| `mmio ref T`, `port T`, `own T` | a ref into device memory, port I/O, ownership | reserved (V1) |
 | `f32 f64` | floating point | reserved (V2) |
 
 Type identity is nominal for `layout`/`choice`, structural for everything
@@ -374,7 +375,7 @@ tool).
 Everything marked *analysed* above is reported as `E0900` by the back end,
 with the position of the construct, and no file is written. As of this
 review that is:
-a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause` and the `mem.*` intrinsics beyond `get_*`/`put_*`,
+a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023, `bytes`), the `cpu.*` intrinsics beyond `halt`/`pause` and the `mem.*` intrinsics beyond `get_*`/`put_*`/`mmio`, `each` and `Name.at` over an `mmio` view,
 an `os.syscall` with more than seven words (the number and six
 arguments are all the registers a system call has) and aggregate constants (`NAME : [N]T := { … }` or a layout constant, which would live in `.rodata`; reading one is refused, and the harness probes that).
 The front end already checks all of them, so a program using them is

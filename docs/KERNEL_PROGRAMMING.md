@@ -13,16 +13,19 @@ construct answers each system-programming requirement.
 > plan, not the state: V1 and V2 rows report `E0900` (`feature not
 > implemented`) — `tests/sema/err/not_implemented.oli` pins that behaviour,
 > and `tests/parse/ok/kernel_sketch.oli` is checked to report `E0900` for
-> `mem.mmio` and `port u8 (…)` and `E0401` for the raw-address conversion it
-> performs without `permit memory.raw`. `calls interrupt` handlers run
-> (stage 17): `lib/core/x64.oli` holds `InterruptFrame`, `IdtGate` and
-> `TablePointer`; `core.x64.paging` is still planned. See `docs/LANGUAGE.md`.
+> `port u8 (…)` and `E0401` for the raw-address conversion it performs
+> without `permit memory.raw`. `calls interrupt` handlers run (stage 17):
+> `lib/core/x64.oli` holds `InterruptFrame`, `IdtGate` and `TablePointer`;
+> `mem.mmio` runs (stage 20): `mmio rw view T` with every element access a
+> volatile load or store (`tests/run/mmio.oli`; `examples/kernel.oli` writes
+> the VGA cells through it); `core.x64.paging` is still planned. See
+> `docs/LANGUAGE.md`.
 
 ## 1. Requirement → construct
 
 | Requirement | Oli-- construct | Version |
 |-------------|-----------------|---------|
-| volatile memory | `mmio view T` / `mmio ref T` — every access is a volatile instruction | V0 (type), V1 (intrinsic `mem.mmio`) |
+| volatile memory | `mmio view T` from `mem.mmio(T, a, n)` — every element access is a volatile instruction, kept by every pass (**runs**); `mmio ref T` | V0 (view, intrinsic), V1 (ref) |
 | atomic operations | `atomic.load/store/add/sub/and/or/xor/cas(ref rw T, ..., order)` | V1 |
 | memory barriers | `cpu.fence(order)` → `mfence`/`lfence`/`sfence` | V1 |
 | interrupt handlers | `proc h(frame : ref core.x64.InterruptFrame)` with `calls interrupt` — **runs**: every general register pushed, `iretq` on return (`tests/run/interrupt.oli`, `examples/kernel.oli`) | V0 |
@@ -36,7 +39,7 @@ construct answers each system-programming requirement.
 | inline machine code | `machine x64 ... end` with `in`/`out`/`clobber`, assembled by `olic` — the escape hatch | V0 |
 | physical memory | `physaddr` type; `zone ... at`; `memory.raw` | V0 |
 | virtual memory | `addr T` is a virtual address; page-table layouts in `core.x64.paging` | V0 type, V1 library |
-| MMIO | `mmio` views + `memory.mmio` capability | V0 type, V1 intrinsic |
+| MMIO | `mmio` views from `mem.mmio` + `memory.mmio` capability | V0 (**runs**) |
 | port I/O | `port T` type, `p.in()`, `p.out(v)`, `io.port` capability | V1 |
 | syscalls | `os.syscall` (hosted programs); a kernel *implements* syscalls with `calls interrupt` or a `machine` `syscall` entry stub | V0 / V1 |
 | page tables | `layout` + `packed` + `bits` + `physaddr` | V1 |
@@ -86,7 +89,7 @@ mb_header : Multiboot2Header := Multiboot2Header {
     section ".text.boot"
 ```
 
-### VGA text output through MMIO (V1 intrinsic, V0 type)
+### VGA text output through MMIO (runs)
 
 ```oli
 proc vga_put(col : uword, row : uword, ch : u8, attr : u8)

@@ -300,7 +300,8 @@ left at the end of a line is `E0032`.
 | `zone` | 8 bytes, a zone handle | **[runs]** |
 | `port T` | an I/O port (V1) | **[parses]** |
 | `be T` / `le T` | an integer with a fixed byte order; a `be` field is swapped on load and store | **[runs]** |
-| `mmio view/ref T` | memory-mapped I/O; never dropped by a conversion | **[parses]** |
+| `mmio view T` / `mmio rw view T` | memory-mapped I/O: every element access volatile; never dropped by a conversion (`E0200`); made by `mem.mmio` under `permit memory.mmio` | **[runs]** |
+| `mmio ref T` | a ref into device memory | **[parses]** |
 | `own T` | reserved in V0: parsed, rejected by the checker (`E0900`) | **[parses]** |
 
 `or` binds loosest in a type: `ref Header or E` is `(ref Header) or E`.
@@ -699,8 +700,8 @@ The capability rules of §11 are enforced today: a raw load or store, a raw
 address conversion and `zone … at` need `permit memory.raw`, and a `machine`
 block needs `permit cpu.asm` — without them the compiler reports `E0401` at the
 construct. Constructs the V0 front end accepts but does not implement — `own`,
-`f32`/`f64`, `<~`, `port T (…)`, `mem.mmio`, `calls interrupt` — report `E0900`
-rather than compiling to something approximate.
+`f32`/`f64`, `<~`, `port T (…)` — report `E0900` rather than compiling to
+something approximate; `mem.mmio` and `calls interrupt` run.
 
 With `-- target: freestanding` at the top of the program there is no
 operating system: the program supplies its own entry point (`entry` with
@@ -717,9 +718,9 @@ overflow, delivered to `traps`. `-- load: 0x100000` sets the load address,
 a static with `section ".text.boot"` goes in front of the code, so a
 Multiboot2 header is a static layout with an initialiser (`examples/kernel.oli`
 — a kernel that writes COM1 through `out dx, al`, the VGA text buffer through
-raw stores and reads `cpuid`; the harness checks the image structurally,
-QEMU runs it). Still planned: the TOML profile file, the section order beyond
-`.text.boot`, `mem.mmio`. See `docs/FREESTANDING.md` and
+an `mmio` view from `mem.mmio` and reads `cpuid`; the harness checks the image
+structurally, QEMU runs it). Still planned: the TOML profile file, the section
+order beyond `.text.boot`. See `docs/FREESTANDING.md` and
 `docs/KERNEL_PROGRAMMING.md`; `tests/sema/ok/freestanding.oli` and
 `tests/parse/ok/kernel_sketch.oli` are the reference shapes.
 

@@ -1,0 +1,342 @@
+(oir
+  (static 0 len=25)
+  (static 1 len=27)
+  (static 2 len=25)
+  (static 3 len=27)
+  (static 4 len=27)
+  (static 5 len=25)
+  (static 6 len=25)
+  (static 7 len=25)
+  (static 8 len=25)
+  (static 9 len=25)
+  (static 10 len=25)
+  (static 11 len=25)
+  (static 12 len=25)
+  (static 13 len=25)
+  (static 14 len=25)
+  (static 15 len=25)
+  (static 16 len=25)
+  (static 17 len=25)
+  (static 18 len=25)
+  (static 19 len=25)
+  (proc fill locals=3
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = param 2
+      store frame.2, %4
+      %6 = const 0
+      store frame.3, %6
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %9 = load frame.3
+      %10 = load frame.0
+      %11 = load frame.1
+      %12 = cmp.lt %9, %11
+      branch %12, bb2, bb3)
+    (bb2 preds bb1
+      %14 = load frame.0
+      %15 = load frame.1
+      %16 = load frame.3
+      check.bounds %16, %15
+      %18 = const 2
+      %19 = mul %16, %18
+      %20 = add %14, %19
+      %21 = load frame.2
+      raw.store.16.mmio %20, %21
+      %23 = load frame.3
+      %24 = const 1
+      %25 = add %23, %24
+      check.overflow %25
+      store frame.3, %25
+      jump bb1)
+    (bb3 preds bb1
+      ret))
+  (proc sum locals=3
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = const 0
+      store frame.2, %4
+      %6 = const 0
+      store frame.3, %6
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %9 = load frame.3
+      %10 = load frame.0
+      %11 = load frame.1
+      %12 = cmp.lt %9, %11
+      branch %12, bb2, bb3)
+    (bb2 preds bb1
+      %14 = load frame.2
+      %15 = load frame.0
+      %16 = load frame.1
+      %17 = load frame.3
+      check.bounds %17, %16
+      %19 = const 2
+      %20 = mul %17, %19
+      %21 = add %15, %20
+      %22 = raw.load.16.mmio %21
+      %23 = add %14, %22
+      check.overflow %23
+      store frame.2, %23
+      %25 = load frame.3
+      %26 = const 1
+      %27 = add %25, %26
+      check.overflow %27
+      store frame.3, %27
+      jump bb1)
+    (bb3 preds bb1
+      %31 = load frame.2
+      ret %31))
+  (proc start locals=6 temps=1 entry
+    (bb0
+      %0 = addr.of frame.1
+      %1 = const 2
+      %2 = const 0
+      store frame.10, %2
+      jump bb1)
+    (bb1 preds bb0 bb2
+      %5 = load frame.10
+      %6 = cmp.lt %5, %1
+      branch %6, bb2, bb3)
+    (bb2 preds bb1
+      %8 = const 8
+      %9 = mul %5, %8
+      %10 = add %0, %9
+      raw.store.64 %10, %2
+      %12 = const 1
+      %13 = add %5, %12
+      store frame.10, %13
+      jump bb1)
+    (bb3 preds bb1
+      %17 = addr.of frame.1
+      %18 = const 8
+      %19 = const 0
+      check.range %19, %18, %18
+      %21 = const 2
+      %22 = mul %19, %21
+      %23 = add %17, %22
+      %24 = sub %18, %19
+      store frame.2, %23
+      %26 = load frame.2
+      %27 = const 8
+      store frame.3, %26
+      store frame.4, %27
+      %30 = load frame.3
+      %31 = load frame.4
+      %32 = const 8
+      %33 = cmp.ne %31, %32
+      branch %33, bb4, bb5)
+    (bb4 preds bb3
+      %35 = const 1
+      ret %35)
+    (bb5 preds bb3
+      %38 = load frame.3
+      %39 = load frame.4
+      %40 = const 3
+      check.bounds %40, %39
+      %42 = const 2
+      %43 = mul %40, %42
+      %44 = add %38, %43
+      %45 = const 48879
+      raw.store.16.mmio %44, %45
+      %47 = addr.of frame.1
+      %48 = const 8
+      %49 = const 3
+      check.bounds %49, %48
+      %51 = const 2
+      %52 = mul %49, %51
+      %53 = add %47, %52
+      %54 = raw.load.16 %53
+      %55 = const 48879
+      %56 = cmp.ne %54, %55
+      branch %56, bb6, bb7)
+    (bb6 preds bb5
+      %58 = const 2
+      ret %58)
+    (bb7 preds bb5
+      %61 = addr.of frame.1
+      %62 = const 8
+      %63 = const 5
+      check.bounds %63, %62
+      %65 = const 2
+      %66 = mul %63, %65
+      %67 = add %61, %66
+      %68 = const 4660
+      raw.store.16 %67, %68
+      %70 = load frame.3
+      %71 = load frame.4
+      %72 = const 5
+      check.bounds %72, %71
+      %74 = const 2
+      %75 = mul %72, %74
+      %76 = add %70, %75
+      %77 = raw.load.16.mmio %76
+      %78 = const 4660
+      %79 = cmp.ne %77, %78
+      branch %79, bb8, bb9)
+    (bb8 preds bb7
+      %81 = const 3
+      ret %81)
+    (bb9 preds bb7
+      %84 = load frame.3
+      %85 = load frame.4
+      arg %84
+      arg %85
+      %88 = const 7
+      arg %88
+      %90 = call fill/3
+      %91 = addr.of frame.1
+      %92 = const 8
+      %93 = const 7
+      check.bounds %93, %92
+      %95 = const 2
+      %96 = mul %93, %95
+      %97 = add %91, %96
+      %98 = raw.load.16 %97
+      %99 = const 7
+      %100 = cmp.ne %98, %99
+      branch %100, bb10, bb11)
+    (bb10 preds bb9
+      %102 = const 4
+      ret %102)
+    (bb11 preds bb9
+      %105 = addr.of frame.1
+      %106 = const 8
+      %107 = const 0
+      check.bounds %107, %106
+      %109 = const 2
+      %110 = mul %107, %109
+      %111 = add %105, %110
+      %112 = raw.load.16 %111
+      %113 = const 7
+      %114 = cmp.ne %112, %113
+      branch %114, bb12, bb13)
+    (bb12 preds bb11
+      %116 = const 5
+      ret %116)
+    (bb13 preds bb11
+      %119 = load frame.3
+      %120 = load frame.4
+      arg %119
+      arg %120
+      %123 = call sum/2
+      %124 = const 56
+      %125 = cmp.ne %123, %124
+      branch %125, bb14, bb15)
+    (bb14 preds bb13
+      %127 = const 6
+      ret %127)
+    (bb15 preds bb13
+      %130 = load frame.3
+      %131 = load frame.4
+      %132 = const 2
+      %133 = const 6
+      check.range %132, %133, %131
+      %135 = const 2
+      %136 = mul %132, %135
+      %137 = add %130, %136
+      %138 = sub %133, %132
+      store frame.5, %137
+      store frame.6, %138
+      %141 = load frame.5
+      %142 = load frame.6
+      %143 = const 4
+      %144 = cmp.ne %142, %143
+      branch %144, bb16, bb17)
+    (bb16 preds bb15
+      %146 = const 7
+      ret %146)
+    (bb17 preds bb15
+      %149 = load frame.5
+      %150 = load frame.6
+      %151 = const 0
+      check.bounds %151, %150
+      %153 = const 2
+      %154 = mul %151, %153
+      %155 = add %149, %154
+      %156 = const 9
+      raw.store.16.mmio %155, %156
+      %158 = addr.of frame.1
+      %159 = const 8
+      %160 = const 2
+      check.bounds %160, %159
+      %162 = const 2
+      %163 = mul %160, %162
+      %164 = add %158, %163
+      %165 = raw.load.16 %164
+      %166 = const 9
+      %167 = cmp.ne %165, %166
+      branch %167, bb18, bb19)
+    (bb18 preds bb17
+      %169 = const 8
+      ret %169)
+    (bb19 preds bb17
+      %172 = load frame.2
+      %173 = const 16
+      store frame.7, %172
+      store frame.8, %173
+      %176 = load frame.7
+      %177 = load frame.8
+      %178 = const 4
+      check.bounds %178, %177
+      %180 = add %176, %178
+      %181 = raw.load.8.mmio %180
+      %182 = const 9
+      %183 = cmp.ne %181, %182
+      branch %183, bb20, bb21)
+    (bb20 preds bb19
+      %185 = const 9
+      ret %185)
+    (bb21 preds bb19
+      %188 = load frame.7
+      %189 = load frame.8
+      %190 = const 5
+      check.bounds %190, %189
+      %192 = add %188, %190
+      %193 = raw.load.8.mmio %192
+      %194 = const 0
+      %195 = cmp.ne %193, %194
+      branch %195, bb22, bb23)
+    (bb22 preds bb21
+      %197 = const 10
+      ret %197)
+    (bb23 preds bb21
+      %200 = load frame.7
+      %201 = load frame.8
+      %202 = const 6
+      check.bounds %202, %201
+      %204 = add %200, %202
+      %205 = const 171
+      raw.store.8.mmio %204, %205
+      %207 = addr.of frame.1
+      %208 = const 8
+      %209 = const 3
+      check.bounds %209, %208
+      %211 = const 2
+      %212 = mul %209, %211
+      %213 = add %207, %212
+      %214 = raw.load.16 %213
+      %215 = const 171
+      %216 = cmp.ne %214, %215
+      branch %216, bb24, bb25)
+    (bb24 preds bb23
+      %218 = const 11
+      ret %218)
+    (bb25 preds bb23
+      %221 = load frame.3
+      %222 = load frame.4
+      %223 = const 1
+      check.bounds %223, %222
+      %225 = const 2
+      %226 = mul %223, %225
+      %227 = add %221, %226
+      %228 = raw.load.16.mmio %227
+      store frame.9, %228
+      %230 = const 42
+      ret %230)))

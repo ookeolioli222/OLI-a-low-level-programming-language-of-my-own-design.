@@ -12,7 +12,7 @@ module olic.explain
 -- ZERO alone costs register moves and nothing else.
 
 LINE_MAX := 65536
-NCLASS := 8
+NCLASS := 9
 CL_ZERO := 0
 CL_CHECK := 1
 CL_STACK := 2
@@ -21,6 +21,7 @@ CL_ZONE := 4
 CL_CALL := 5
 CL_SYSCALL := 6
 CL_TRAP := 7
+CL_KERNEL := 8
 
 proc start -> s32
     entry
@@ -162,6 +163,17 @@ proc ins_class(ob: ref Oir, i: u64) -> u64
     if o == O_OVF
         ret CL_CHECK
     end
+    if o == O_RLOAD
+        if ins.val == 1
+            -- A volatile access to device memory (MACHINE_MODEL.md §3).
+            ret CL_KERNEL
+        end
+    end
+    if o == O_RSTORE
+        if ins.val == 1
+            ret CL_KERNEL
+        end
+    end
     if ins.site > 0
         ret CL_CHECK
     end
@@ -172,6 +184,9 @@ proc ins_class(ob: ref Oir, i: u64) -> u64
 end
 
 proc class_name(c: u64) -> view u8
+    if c == CL_KERNEL
+        ret "KERNEL"
+    end
     if c == CL_TRAP
         ret "TRAP"
     end

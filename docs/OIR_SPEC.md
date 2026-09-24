@@ -148,7 +148,7 @@ Blocks end in exactly one terminator: `jump`, `branch`, `ret`, `fail`, `trap`,
 | places | `load.T place`, `store.T place, %v` |
 | views | `view.make %addr, %len`, `view.sub %v, %a, %b`, `view.len %v`, `view.addr %v`, `view.load.T %v, %i`, `view.store.T %v, %i, %x` |
 | refs | `ref.field %r, FIELD`, `ref.load.T %r`, `ref.store.T %r, %x`, `ref.of_view %v, LAYOUT` (after `check.align`/`check.bounds`) |
-| raw | `raw.load.T %a` (space), `raw.store.T %a, %x` (space), `raw.add %a, %off` |
+| raw | `raw.load.T %a` (space), `raw.store.T %a, %x` (space), `raw.add %a, %off` — the space is printed as a suffix when it is not `normal`: `raw.load.16.mmio %a` is the element read of an `mmio` view, volatile, kept by every pass |
 | zones | `zone.new %size` (source: parent, os, raw, handle), `zone.alloc %z, %size, %align` → `%addr`, `zone.end %z` |
 | choices | `tag %c`, `payload.VARIANT %c`, `make.VARIANT %fields`, `ok %v`, `fail %e` |
 | checks | `check.bounds %i, %len`, `check.range %a, %b, %len`, `check.overflow %flag`, `check.align %addr, N`, `check.zone %z, %size` — each with a kind and a source site |

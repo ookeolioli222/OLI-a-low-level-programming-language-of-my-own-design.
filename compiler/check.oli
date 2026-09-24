@@ -491,7 +491,19 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
             if base.kind == N_NAME
                 if view_eq(tok_text(cx, base.t0), "mem")
                     if view_eq(tok_text(cx, callee.t0), "mmio")
-                        sdiag(pg, mi, 900, base.t0)
+                        -- `mem.mmio(T, a, n)`: device memory, under the
+                        -- capability; `T` one of the unsigned widths.
+                        need(pg, mi, "memory.mmio", base.t0)
+                        check_mmio_args(pg, mi, n)
+                    end
+                end
+                if view_eq(tok_text(cx, callee.t0), "at")
+                    av := kid2(cx, n)
+                    if av != 0
+                        if is_mmio(infer(pg, mi, av)) == 1
+                            -- A ref over device memory would drop `mmio`.
+                            sdiag(pg, mi, 900, callee.t0)
+                        end
                     end
                 end
                 if view_eq(tok_text(cx, base.t0), "os")
@@ -512,6 +524,42 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
     while c != 0
         check_expr(pg, mi, c)
         c <- sibling(cx, c)
+    end
+end
+
+proc check_mmio_args(pg: ref Prog, mi: u64, n: u64)
+    -- `mem.mmio(T, a, n)`: exactly three arguments, the first the name of
+    -- an unsigned width (E0900 otherwise).
+    cx := mod_ctx(pg, mi)
+    ta := kid2(cx, n)
+    if ta == 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, n))
+        ret
+    end
+    tn := node_at(cx, ta)
+    ok : u64 <- 0
+    if tn.kind == N_TYPEARG
+        if mmio_elem_ok(tok_text(cx, tn.t0)) == 1
+            ok <- 1
+        end
+    end
+    if ok == 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, ta))
+        ret
+    end
+    a := sibling(cx, ta)
+    if a == 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, n))
+        ret
+    end
+    c := sibling(cx, a)
+    if c == 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, n))
+        ret
+    end
+    extra := sibling(cx, c)
+    if extra != 0
+        sdiag(pg, mi, 900, first_tok(pg, mi, extra))
     end
 end
 
@@ -591,7 +639,7 @@ proc check_target(pg: ref Prog, mi: u64, lhs: u64, spot: u64)
         end
         ret
     end
-    ty := infer(pg, mi, b)
+    ty := no_mmio(infer(pg, mi, b))
     if ty.len == 0
         ret
     end

@@ -25,7 +25,7 @@
 > bytes at offset 176, port I/O and `cpuid` in the blocks, no system call
 > anywhere — and `qemu-system-x86_64 -kernel kernel.elf -serial stdio` runs
 > it. Not implemented: the profile *file* of §2, the section order beyond
-> `.text.boot`, `mem.mmio`, `own`, the red-zone rule, and every library name
+> `.text.boot`, `own`, the red-zone rule, and every library name
 > beyond `core.TrapKind`, `core.Site` and `core.CpuId`; `lib/core.oli` and
 > `lib/core/mem.oli` hold what is real. See `docs/LANGUAGE.md` §13 and
 > `docs/PROJECT_STATUS.md`.
@@ -171,8 +171,9 @@ A kernel imports `core` only. `olic --freestanding` rejects any import of `std`.
    `--explain` does not list (prologues, checks, trap calls are listed).
 2. No symbol is required from outside the program: no libc, no `memcpy`
    (`mem.copy` is generated inline or as an internal `core` procedure that is
-   part of the binary; the intrinsic itself is planned — `mem.mmio` and the
-   other `mem.*` intrinsics are currently `E0900`).
+   part of the binary; the intrinsic itself is planned — `mem.copy`, `mem.set`,
+   `mem.zero` and `mem.secure_zero` are currently `E0900`; `mem.mmio` and the
+   `get_*`/`put_*` accessors run).
 3. No red-zone use, no stack probes, no TLS access, no floating point unless
    the program uses `f32`/`f64` (then SSE must be enabled by the program before use).
 4. The image is deterministic: identical input produces identical bytes.
@@ -182,5 +183,7 @@ A kernel imports `core` only. `olic --freestanding` rejects any import of `std`.
 A binary that: has its own `entry`, installs its own stack, writes a string to
 the COM1 port (`io.port`) and the VGA text buffer (`memory.mmio`), reads
 `cpuid` through a `machine` block, and halts — with no syscalls and no libc.
+`examples/kernel.oli` is that program today: COM1 through `out dx, al` in a
+`machine` block (`port T` is still V1), the VGA cells through `mem.mmio`.
 It is run under QEMU as a flat kernel (`-kernel` with a Multiboot2 header
 placed in `.text.boot` as a static `layout` with `section`).

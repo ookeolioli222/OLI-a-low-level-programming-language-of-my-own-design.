@@ -945,12 +945,43 @@ constant in `.rodata`).
   and the subject of `case`), and every arm of `case` over them. Nothing in
   the `T or E` family is `E0900` now.
 
+## Implemented in back-end stage 20 (2026-09-24): `mem.mmio`, views of device memory
+
+- **`mem.mmio(T, a, n)`** — `T` one of `u8`…`u64`, `a` and `n` `uword`, under
+  `permit memory.mmio` (`E0401` without it) — is the view `(a, n)` of type
+  `mmio rw view T`. No instruction is emitted for the call itself: what
+  makes the view `mmio` is every element access through it. `v[i]` and
+  `v[i] <- x` are `raw.load.T.mmio` / `raw.store.T.mmio` — the OIR's memory
+  space on the instruction (OIR_SPEC §1.4), printed as a suffix — after the
+  bounds check any view carries; the dead-code pass keeps a volatile load
+  whatever reads it, common-subexpression elimination never merged loads,
+  and nothing reorders them; `--explain` bills each as `KERNEL`
+  (MACHINE_MODEL.md §3). `v[a..b]`, `.len`, `.addr` and passing the view to
+  a parameter typed `mmio view T` / `mmio rw view T` work as for any view.
+- **`mmio` is never dropped.** The classifications read a type without its
+  `mmio` (`unqual`, `elem_of`), but a conversion between an `mmio` view and
+  a plain one is a type mismatch (`E0200`) in either direction, so a plain
+  view cannot become device memory except through `mem.mmio`, and a
+  procedure that takes device memory says so in its signature. `mem.get_*`
+  / `mem.put_*` take plain views; `each` and `Name.at` over an `mmio` view
+  are `E0900` — a ref would drop the mark, a loop would read plain memory.
+- `tests/run/mmio.oli` pins eleven checks over an array in the frame taken
+  as device memory: stores and loads through `u16` and `u8` views of the
+  same bytes, a subview, the view passed as `mmio rw view u16` and as
+  `mmio view u16`, and an unused load that the passes keep;
+  `tests/run/trap/mmio_bounds.oli` traps `bounds`. The harness pins the
+  five loads and four stores of the fixture in `--show-oir=opt`, the nine
+  `KERNEL` lines of `--explain`, and the two volatile stores of
+  `examples/kernel.oli`, whose `vga_write` now goes through `mem.mmio`
+  instead of raw stores. `tests/sema/err/not_implemented.oli` reports
+  `E0401` for `mem.mmio` without the capability where it reported `E0900`.
+
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 24,509 lines) into
+compiles its own source (`compiler/`, seventeen modules, 24,721 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 912,621 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 920,052 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

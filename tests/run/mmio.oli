@@ -1,0 +1,55 @@
+module mmio
+-- `mem.mmio(T, a, n)`: a view of device memory, `mmio rw view T`. Every
+-- element access through it is a volatile load or store — `raw.load.T.mmio`
+-- / `raw.store.T.mmio` in the OIR, kept by every pass, class KERNEL in
+-- `--explain` — and bounds-checked like any view. `mmio` is never dropped: a
+-- procedure that takes the view says so in its parameter's type. Here the
+-- "device" is an array in the frame, so the stores can be read back through
+-- the array. The exit status is the number of the check that failed; 42
+-- when every one held.
+
+proc fill(v : mmio rw view u16, x : u16)
+    i : uword <- 0
+    while i < v.len
+        v[i] <- x
+        i <- i + 1
+    end
+end
+
+proc sum(v : mmio view u16) -> u64
+    s : u64 <- 0
+    i : uword <- 0
+    while i < v.len
+        s <- s + u64(v[i])
+        i <- i + 1
+    end
+    ret s
+end
+
+proc start -> s32
+    entry
+    permit memory.mmio
+    buf : [8]u16
+    a := u64.bits(buf[..].addr)
+    m := mem.mmio(u16, a, 8)
+    if m.len != 8 then ret 1
+    m[3] <- 0xBEEF
+    if buf[3] != 0xBEEF then ret 2
+    buf[5] <- 0x1234
+    if m[5] != 0x1234 then ret 3
+    fill(m, 7)
+    if buf[7] != 7 then ret 4
+    if buf[0] != 7 then ret 5
+    if sum(m) != 56 then ret 6
+    s := m[2..6]
+    if s.len != 4 then ret 7
+    s[0] <- 9
+    if buf[2] != 9 then ret 8
+    b := mem.mmio(u8, a, 16)
+    if b[4] != 9 then ret 9
+    if b[5] != 0 then ret 10
+    b[6] <- 0xAB
+    if buf[3] != 0xAB then ret 11
+    _x := m[1]
+    ret 42
+end
