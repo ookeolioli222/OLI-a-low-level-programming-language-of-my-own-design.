@@ -1317,6 +1317,27 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in back-end stage 35 (2026-09-24): aggregate constants
+
+- **`NAME : [N]T := { … }` and a layout constant** are lowered: the data
+  collection puts each in the read-only segment (`add_rodata`, as a static
+  placed there) and the ELF writer gives it a symbol `module.NAME`; a read
+  is the static read — an array the view of its bytes (index, `.len`,
+  `each`, a `view` argument), a layout its address — and `ref NAME` is its
+  address. A view constant is still E0900, an integer constant has no
+  address (`ref K` E0900), and a store into an aggregate constant is the
+  checker's E0111 as before. The harness's "unlowered construct" probe,
+  which was such a constant, now reads `arch.x64.gdt` (no `sgdt`).
+- **A bug found on the way**: `compact_statics` (compiler/opt.oli), which
+  drops the trap messages of checks the passes removed, closed the gaps
+  between the remaining statics without their alignment, so a static
+  placed in `.text.boot` or `.rodata` with `align N` could move to an
+  unaligned address (the kernel's Multiboot2 header stayed aligned only
+  because it came first). `Stat.alg` now records the alignment and the
+  compaction pads with zeros.
+- `tests/run/rodata.oli` runs ten checks over three arrays and a layout
+  constant; the harness pins each symbol read-only and at its alignment.
+
 ## Booted (2026-09-24), stage 34: the Multiboot path of `examples/kernel.oli`
 
 - **`addr32 NAME`** in a `machine x64` block (design 0023): the four-byte
@@ -1367,9 +1388,9 @@ constant in `.rodata`).
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 29,541 lines) into
+compiles its own source (`compiler/`, seventeen modules, 29,584 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,286,896 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,288,160 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

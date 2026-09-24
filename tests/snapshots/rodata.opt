@@ -1,0 +1,158 @@
+(oir
+  (static 0 len=4)
+  (static 1 len=24)
+  (static 2 len=10)
+  (static 3 len=8)
+  (static 4 removed)
+  (static 5 len=27)
+  (static 6 removed)
+  (static 7 removed)
+  (static 8 removed)
+  (static 9 removed)
+  (static 10 removed)
+  (static 11 removed)
+  (static 12 removed)
+  (static 13 len=27)
+  (static 14 len=27)
+  (proc sum locals=3 temps=1
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = const 0
+      jump bb1)
+    (bb1 preds bb0 bb3
+      %4 = phi [bb0 %2] [bb3 %10]
+      %5 = phi [bb0 %2] [bb3 %12]
+      %6 = cmp.lt %5, %1
+      branch %6, bb2, bb4)
+    (bb2 preds bb1
+      ; check.bounds %5 -- removed: proof(loop-bound)
+      %8 = add %0, %5
+      %9 = raw.load.8 %8
+      %10 = add %4, %9
+      check.overflow %10
+      jump bb3)
+    (bb3 preds bb2
+      %11 = const 1
+      %12 = add %5, %11
+      jump bb1)
+    (bb4 preds bb1
+      ret %4))
+  (proc px locals=1
+    (bb0
+      %0 = param 0
+      %1 = raw.load.32 %0
+      ret %1))
+  (proc start locals=2 entry
+    (bb0
+      %0 = addr.of static.0
+      %1 = const 4
+      %2 = const 2
+      ; check.bounds %2 -- removed: proof(constant)
+      %4 = add %0, %2
+      %5 = raw.load.8 %4
+      %6 = const 3
+      %7 = cmp.ne %5, %6
+      branch %7, bb1, bb2)
+    (bb1 preds bb0
+      %8 = const 1
+      ret %8)
+    (bb2 preds bb0
+      %12 = const 0
+      jump bb4)
+    (bb4 preds bb2
+      ; check.bounds %16 -- removed: proof(constant)
+      %18 = add %0, %12
+      arg %18
+      arg %1
+      %22 = call sum/2
+      %23 = const 10
+      %24 = cmp.ne %22, %23
+      branch %24, bb5, bb6)
+    (bb5 preds bb4
+      ret %6)
+    (bb6 preds bb4
+      %26 = addr.of static.1
+      %28 = const 1
+      ; check.bounds %28 -- removed: proof(constant)
+      %30 = const 8
+      %32 = add %26, %30
+      %33 = raw.load.64 %32
+      %34 = const 49427445715107839
+      %35 = cmp.ne %33, %34
+      branch %35, bb7, bb8)
+    (bb7 preds bb6
+      ret %1)
+    (bb8 preds bb6
+      ; check.bounds %39 -- removed: proof(constant)
+      %42 = const 16
+      %43 = add %26, %42
+      %44 = raw.load.64 %43
+      %45 = const 32
+      %46 = shr %44, %45
+      %47 = const 13603328
+      %48 = cmp.ne %46, %47
+      branch %48, bb9, bb10)
+    (bb9 preds bb8
+      %49 = const 5
+      ret %49)
+    (bb10 preds bb8
+      %50 = addr.of static.2
+      ; check.bounds %52 -- removed: proof(constant)
+      %55 = const 6
+      %56 = add %50, %55
+      %57 = raw.load.16 %56
+      %58 = const 9
+      %59 = cmp.ne %57, %58
+      branch %59, bb11, bb12)
+    (bb11 preds bb10
+      ret %55)
+    (bb12 preds bb10
+      ; check.bounds %63 -- removed: proof(constant)
+      %67 = add %50, %30
+      %68 = raw.load.16 %67
+      %70 = cmp.ne %68, %12
+      branch %70, bb13, bb14)
+    (bb13 preds bb12
+      %71 = const 7
+      ret %71)
+    (bb14 preds bb12
+      %72 = addr.of static.3
+      %74 = add %72, %1
+      %75 = raw.load.32 %74
+      %77 = cmp.ne %75, %58
+      branch %77, bb15, bb16)
+    (bb15 preds bb14
+      ret %30)
+    (bb16 preds bb14
+      arg %72
+      %81 = call px/1
+      %82 = const 7
+      %83 = cmp.ne %81, %82
+      branch %83, bb17, bb18)
+    (bb17 preds bb16
+      ret %58)
+    (bb18 preds bb16
+      jump bb19)
+    (bb19 preds bb18 bb20
+      %87 = phi [bb18 %12] [bb20 %98]
+      %88 = phi [bb18 %12] [bb20 %96]
+      %90 = cmp.lt %87, %1
+      branch %90, bb20, bb21)
+    (bb20 preds bb19
+      ; check.bounds %87 -- removed: proof(loop-bound)
+      %94 = add %0, %87
+      %95 = raw.load.8 %94
+      %96 = add %88, %95
+      check.overflow %96
+      %98 = add %87, %28
+      check.overflow %98
+      jump bb19)
+    (bb21 preds bb19
+      %100 = cmp.ne %88, %23
+      branch %100, bb22, bb23)
+    (bb22 preds bb21
+      ret %23)
+    (bb23 preds bb21
+      %102 = const 42
+      ret %102)))

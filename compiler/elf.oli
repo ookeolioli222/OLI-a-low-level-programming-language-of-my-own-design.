@@ -270,15 +270,15 @@ proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
     vi : u64 <- 0
     while vi < pg.nval
         v2 := val_at(pg, vi)
-        if v2.kind == 1
-            r := rodata_of(ob, vi)
-            if r >= 0
-                st := stat_at(ob, u64.bits(r))
-                cx2 := mod_ctx(pg, v2.mod)
-                vn2 := node_at(cx2, v2.node)
-                off2 := qualified(pg, w, v2.mod, tok_text(cx2, vn2.t0))
-                add_sym(w, off2, 17, 1, w.base + w.rodoff + st.off, st.len)
-            end
+        -- A static placed in the read-only segment, or an aggregate
+        -- constant: both are in `rmap`.
+        r := rodata_of(ob, vi)
+        if r >= 0
+            st := stat_at(ob, u64.bits(r))
+            cx2 := mod_ctx(pg, v2.mod)
+            vn2 := node_at(cx2, v2.node)
+            off2 := qualified(pg, w, v2.mod, tok_text(cx2, vn2.t0))
+            add_sym(w, off2, 17, 1, w.base + w.rodoff + st.off, st.len)
         end
         vi <- vi + 1
     end

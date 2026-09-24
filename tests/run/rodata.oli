@@ -1,0 +1,52 @@
+module rodata
+-- Aggregate constants (COMMANDS.md, LANGUAGE.md §6): `NAME : [N]T := { … }`
+-- and a layout constant live in the read-only segment, each under its own
+-- symbol, and are read as a static placed there is — an array as the view
+-- of its bytes (indexed, `.len`, `each`, passed to a procedure), a layout by
+-- its address. A store into one is E0111 (tests/sema/err/readonly.oli).
+-- The exit status is the number of the check that failed; 42 when every
+-- one held.
+
+TABLE : [4]u8 := { 1, 2, 3, 4 }
+WORDS : [3]u64 := { 0, 0x00AF9A000000FFFF, 0x00CF92000000FFFF }
+SQUARES : [5]u16 := { 0, 1, 4, 9 }
+
+layout Point
+    x : u32
+    y : u32
+end
+
+ORIGIN : Point := Point { x: 7, y: 9 }
+
+proc sum(v : view u8) -> u64
+    s : u64 <- 0
+    each b in v
+        s <- s + u64(b)
+    end
+    ret s
+end
+
+proc px(p : ref Point) -> u32
+    ret p.x
+end
+
+proc start -> s32
+    entry
+    if TABLE[2] != 3 then ret 1
+    if TABLE.len != 4 then ret 2
+    if sum(TABLE[..]) != 10 then ret 3
+    if WORDS[1] != 0x00AF9A000000FFFF then ret 4
+    if WORDS[2] >> 32 != 0x00CF9200 then ret 5
+    if SQUARES[3] != 9 then ret 6
+    if SQUARES[4] != 0 then ret 7
+    if ORIGIN.y != 9 then ret 8
+    if px(ref ORIGIN) != 7 then ret 9
+    i : u64 <- 0
+    t : u64 <- 0
+    while i < 4
+        t <- t + u64(TABLE[i])
+        i <- i + 1
+    end
+    if t != 10 then ret 10
+    ret 42
+end

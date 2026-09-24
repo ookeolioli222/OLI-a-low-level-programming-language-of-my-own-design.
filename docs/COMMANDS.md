@@ -179,7 +179,7 @@ end
 | `entry` | the program's start; `-> s32` hosted (the result is the exit status), `-> never` freestanding. There is no `main` | **runs** |
 | `traps` | the procedure that receives traps in a freestanding program: `(kind : core.TrapKind, site : core.Site) -> never`; every trap site jumps to a routine that passes the kind and builds the `Site` (file, line) on the stack; without one a trap is `ud2` | **runs** (`tests/freestanding/trap_line.oli` exits with the line of its overflow) |
 | `NAME := expr` | a module-level constant | **runs** |
-| `NAME : T := expr` (aggregate constant) | a constant that lives in `.rodata` | analysed |
+| `NAME : T := expr` (aggregate constant) | an array (`[N]T := { … }`, the rest zero) or a layout constant (`Name { f: c, … }`) in the read-only segment under its own symbol, at its natural alignment: read as a static placed there is — an array as the view of its bytes, a layout by its address, `ref NAME` its address; a store into one is `E0111`; a view constant is `E0900` | **runs** (`tests/run/rodata.oli`) |
 | `NAME : T [<- expr]` at module level | a static place: with an initialiser its bytes are in the file (`.data`), without one it is zero memory (`.bss`); the image gets a second, read+write segment | **runs** |
 | `NAME : [N]T` at module level | a static array, read as the view of its bytes: `.len`, `[i]`, `each`, passed where a view is | **runs** |
 | a static with an aggregate initialiser `:= { … }` | a constant in `.rodata` | analysed |
@@ -391,7 +391,7 @@ with the position of the construct, and no file is written. As of this
 review that is:
 a `machine` line the encoder does not know (the 8/16-bit and segment forms outside design 0023), a read of `arch.x64.gdt`/`idt`, a `calls none` body whose values would need a frame, an `extern proc` in an executable (only an object file can carry an unresolved symbol), `each` over an `mmio` view and a record held by value inside device memory, `each` and `Name.at` over an `mmio` view,
 an `os.syscall` with more than seven words (the number and six
-arguments are all the registers a system call has) and aggregate constants (`NAME : [N]T := { … }` or a layout constant, which would live in `.rodata`; reading one is refused, and the harness probes that).
+arguments are all the registers a system call has) and a constant of view type (`NAMES : [2]view u8 := …`); the harness probes a read of `arch.x64.gdt`.
 The front end already checks all of them, so a program using them is
 type-checked before it is refused.
 

@@ -1,0 +1,221 @@
+(oir
+  (static 0 len=4)
+  (static 1 len=24)
+  (static 2 len=10)
+  (static 3 len=8)
+  (static 4 len=25)
+  (static 5 len=27)
+  (static 6 len=25)
+  (static 7 len=25)
+  (static 8 len=25)
+  (static 9 len=25)
+  (static 10 len=25)
+  (static 11 len=25)
+  (static 12 len=25)
+  (static 13 len=27)
+  (static 14 len=27)
+  (proc sum locals=3 temps=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = param 1
+      store frame.1, %2
+      %4 = const 0
+      store frame.2, %4
+      %6 = load frame.0
+      %7 = load frame.1
+      %8 = const 0
+      store frame.4, %8
+      jump bb1)
+    (bb1 preds bb0 bb3
+      %11 = load frame.4
+      %12 = cmp.lt %11, %7
+      branch %12, bb2, bb4)
+    (bb2 preds bb1
+      check.bounds %11, %7
+      %15 = add %6, %11
+      %16 = raw.load.8 %15
+      store frame.3, %16
+      %18 = load frame.2
+      %19 = load frame.3
+      %20 = add %18, %19
+      check.overflow %20
+      store frame.2, %20
+      jump bb3)
+    (bb3 preds bb2
+      %23 = load frame.4
+      %24 = const 1
+      %25 = add %23, %24
+      store frame.4, %25
+      jump bb1)
+    (bb4 preds bb1
+      %29 = load frame.2
+      ret %29))
+  (proc px locals=1
+    (bb0
+      %0 = param 0
+      store frame.0, %0
+      %2 = load frame.0
+      %3 = raw.load.32 %2
+      ret %3))
+  (proc start locals=2 entry
+    (bb0
+      %0 = addr.of static.0
+      %1 = const 4
+      %2 = const 2
+      check.bounds %2, %1
+      %4 = add %0, %2
+      %5 = raw.load.8 %4
+      %6 = const 3
+      %7 = cmp.ne %5, %6
+      branch %7, bb1, bb2)
+    (bb1 preds bb0
+      %9 = const 1
+      ret %9)
+    (bb2 preds bb0
+      %12 = addr.of static.0
+      %13 = const 4
+      %14 = const 4
+      %15 = cmp.ne %13, %14
+      branch %15, bb3, bb4)
+    (bb3 preds bb2
+      %17 = const 2
+      ret %17)
+    (bb4 preds bb2
+      %20 = addr.of static.0
+      %21 = const 4
+      %22 = const 0
+      check.range %22, %21, %21
+      %24 = add %20, %22
+      %25 = sub %21, %22
+      arg %24
+      arg %25
+      %28 = call sum/2
+      %29 = const 10
+      %30 = cmp.ne %28, %29
+      branch %30, bb5, bb6)
+    (bb5 preds bb4
+      %32 = const 3
+      ret %32)
+    (bb6 preds bb4
+      %35 = addr.of static.1
+      %36 = const 3
+      %37 = const 1
+      check.bounds %37, %36
+      %39 = const 8
+      %40 = mul %37, %39
+      %41 = add %35, %40
+      %42 = raw.load.64 %41
+      %43 = const 49427445715107839
+      %44 = cmp.ne %42, %43
+      branch %44, bb7, bb8)
+    (bb7 preds bb6
+      %46 = const 4
+      ret %46)
+    (bb8 preds bb6
+      %49 = addr.of static.1
+      %50 = const 3
+      %51 = const 2
+      check.bounds %51, %50
+      %53 = const 8
+      %54 = mul %51, %53
+      %55 = add %49, %54
+      %56 = raw.load.64 %55
+      %57 = const 32
+      %58 = shr %56, %57
+      %59 = const 13603328
+      %60 = cmp.ne %58, %59
+      branch %60, bb9, bb10)
+    (bb9 preds bb8
+      %62 = const 5
+      ret %62)
+    (bb10 preds bb8
+      %65 = addr.of static.2
+      %66 = const 5
+      %67 = const 3
+      check.bounds %67, %66
+      %69 = const 2
+      %70 = mul %67, %69
+      %71 = add %65, %70
+      %72 = raw.load.16 %71
+      %73 = const 9
+      %74 = cmp.ne %72, %73
+      branch %74, bb11, bb12)
+    (bb11 preds bb10
+      %76 = const 6
+      ret %76)
+    (bb12 preds bb10
+      %79 = addr.of static.2
+      %80 = const 5
+      %81 = const 4
+      check.bounds %81, %80
+      %83 = const 2
+      %84 = mul %81, %83
+      %85 = add %79, %84
+      %86 = raw.load.16 %85
+      %87 = const 0
+      %88 = cmp.ne %86, %87
+      branch %88, bb13, bb14)
+    (bb13 preds bb12
+      %90 = const 7
+      ret %90)
+    (bb14 preds bb12
+      %93 = addr.of static.3
+      %94 = const 4
+      %95 = add %93, %94
+      %96 = raw.load.32 %95
+      %97 = const 9
+      %98 = cmp.ne %96, %97
+      branch %98, bb15, bb16)
+    (bb15 preds bb14
+      %100 = const 8
+      ret %100)
+    (bb16 preds bb14
+      %103 = addr.of static.3
+      arg %103
+      %105 = call px/1
+      %106 = const 7
+      %107 = cmp.ne %105, %106
+      branch %107, bb17, bb18)
+    (bb17 preds bb16
+      %109 = const 9
+      ret %109)
+    (bb18 preds bb16
+      %112 = const 0
+      store frame.0, %112
+      %114 = const 0
+      store frame.1, %114
+      jump bb19)
+    (bb19 preds bb18 bb20
+      %117 = load frame.0
+      %118 = const 4
+      %119 = cmp.lt %117, %118
+      branch %119, bb20, bb21)
+    (bb20 preds bb19
+      %121 = load frame.1
+      %122 = addr.of static.0
+      %123 = const 4
+      %124 = load frame.0
+      check.bounds %124, %123
+      %126 = add %122, %124
+      %127 = raw.load.8 %126
+      %128 = add %121, %127
+      check.overflow %128
+      store frame.1, %128
+      %130 = load frame.0
+      %131 = const 1
+      %132 = add %130, %131
+      check.overflow %132
+      store frame.0, %132
+      jump bb19)
+    (bb21 preds bb19
+      %136 = load frame.1
+      %137 = const 10
+      %138 = cmp.ne %136, %137
+      branch %138, bb22, bb23)
+    (bb22 preds bb21
+      %140 = const 10
+      ret %140)
+    (bb23 preds bb21
+      %143 = const 42
+      ret %143)))

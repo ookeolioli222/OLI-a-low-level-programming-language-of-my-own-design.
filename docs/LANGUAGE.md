@@ -395,7 +395,8 @@ boot_stack : [16K]u8              -- a static place, zero-filled
 ```
 
 `:=` at module level is a constant; `:` with `<-` or with no value is a static
-place. `section` and `align` clauses follow on their own lines. Constant
+place. An aggregate constant (`TABLE : [4]u8 := { 1, 2, 3, 4 }`, a layout
+constant) lives in the read-only segment and reads like a static. `section` and `align` clauses follow on their own lines. Constant
 expressions evaluate integers, `Name.size`, `Name.align`, `Name.field.offset`,
 `Name.field.size` and other constants.
 

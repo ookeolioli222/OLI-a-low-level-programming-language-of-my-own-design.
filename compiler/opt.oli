@@ -100,6 +100,15 @@ proc compact_statics(ob: rw ref Oir)
     while i < ob.nstat
         st2 := stat_at(ob, i)
         if st2.dead == 0
+            -- A static keeps its alignment (a placed static's `align N`, an
+            -- aggregate constant's natural one): the gap is zero bytes, and
+            -- never reaches past where the static was, because that offset
+            -- was aligned too.
+            d := ob.data
+            while cursor % st2.alg != 0
+                d[cursor] <- 0
+                cursor <- cursor + 1
+            end
             move_static(ob, i, cursor)
             cursor <- cursor + st2.len
         else

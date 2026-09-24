@@ -309,6 +309,7 @@ layout Stat
     off : u64
     len : u64
     dead : u64
+    alg : u64
 end
 
 layout Dat
@@ -1112,6 +1113,7 @@ proc open_static(ob: rw ref Oir) -> u64
     st := stat_at(ob, idx)
     st.off <- ob.ndata
     st.dead <- 0
+    st.alg <- 1
     ob.nstat <- idx + 1
     ret idx
 end
@@ -1226,6 +1228,7 @@ proc add_static(ob: rw ref Oir, raw: view u8) -> u64
     st := stat_at(ob, idx)
     st.off <- ob.ndata
     st.dead <- 0
+    st.alg <- 1
     i : u64 <- 1
     last : u64 <- raw.len
     if last > 0
@@ -1313,6 +1316,14 @@ proc collect_data(pg: rw ref Prog, ob: rw ref Oir)
                 add_data(pg, ob, i)
             end
         end
+        if v.kind == 0
+            -- An aggregate constant — `NAME : [N]T := { … }`, a layout
+            -- constant — lives in the read-only segment, like a static
+            -- placed there.
+            if is_aggregate_const(pg, i) == 1
+                add_rodata(pg, ob, i)
+            end
+        end
         i <- i + 1
     end
     -- The zero statics follow the initialised ones, section group by
@@ -1349,6 +1360,19 @@ proc collect_data(pg: rw ref Prog, ob: rw ref Oir)
         end
         g <- g + 1
     end
+end
+
+proc is_aggregate_const(pg: ref Prog, vi: u64) -> word
+    -- A constant of array or layout type (a view is not: its bytes are a
+    -- string's, which is E0900 still).
+    t := val_type(pg, vi)
+    if starts_with(t, "[")
+        ret 1
+    end
+    if layout_param(pg, t) > 0
+        ret 1
+    end
+    ret 0
 end
 
 proc static_align(pg: ref Prog, vi: u64, size: u64) -> u64
@@ -1462,6 +1486,9 @@ proc add_rodata(pg: rw ref Prog, ob: rw ref Oir, vi: u64)
         data_byte(ob, 0)
     end
     idx := open_static(ob)
+    ast := stat_at(ob, idx)
+    -- The alignment survives `compact_statics` (compiler/opt.oli).
+    ast.alg <- al
     off := ob.ndata
     i : u64 <- 0
     while i < sz
@@ -2749,22 +2776,28 @@ proc gen_name(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         ret v
     end
     if nk == 2
-        -- An integer constant is its value. An aggregate one — `[N]T`, a
-        -- layout, a view — would live in `.rodata`, which is not lowered:
-        -- E0900, never a zero in its place.
+        -- An integer constant is its value. An aggregate one — `[N]T` or a
+        -- layout — is read from the read-only segment like a static placed
+        -- there (an array as the view of its bytes, a layout by its
+        -- address); a view constant is E0900 still, never a zero in its
+        -- place.
         kb := pg.sbuf
         kt := ety(pg, mi, n, kb[0..0])
-        if is_array_type(kt) == 1
-            oir_err(ob, pg, mi, 900, n)
-            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
-        end
         if is_view_type(kt) == 1
             oir_err(ob, pg, mi, 900, n)
             ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
         end
+        if is_array_type(kt) == 1
+            kvi := val_find(pg, name)
+            if kvi >= 0
+                ret gen_static(pg, ob, mi, n, u64.bits(kvi))
+            end
+        end
         if layout_param(pg, kt) > 0
-            oir_err(ob, pg, mi, 900, n)
-            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+            kvi2 := val_find(pg, name)
+            if kvi2 >= 0
+                ret gen_static(pg, ob, mi, n, u64.bits(kvi2))
+            end
         end
         ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
     end
@@ -3541,9 +3574,10 @@ proc gen_unop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -
                 ob.lastlen <- 0
                 ret local_base(pg, ob, tok_text(cx, pn.t0))
             end
-            if name_kind(pg, mi, arg) == 3
+            if name_kind(pg, mi, arg) >= 2
                 -- A static: its address in the writable or the read-only
-                -- segment.
+                -- segment; an aggregate constant: its address in the
+                -- read-only one (an integer constant has none, E0900).
                 svi := val_find(pg, tok_text(cx, pn.t0))
                 if svi >= 0
                     ob.lastlen <- 0
