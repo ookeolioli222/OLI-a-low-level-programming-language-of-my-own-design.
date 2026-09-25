@@ -1439,6 +1439,10 @@ echo "ok: every image carries section headers and a symbol table (module.name, l
 hstart=$(grep -n '^proc start' ../examples/hello.oli | cut -d: -f1)
 [ "$(addr2line -e build/hello.elf 0x400084)" = "hello.oli:$hstart" ] || fail "dwarf: the entry of hello.elf must resolve to hello.oli:$hstart, got $(addr2line -e build/hello.elf 0x400084)"
 [ "$(readelf --debug-dump=line build/hello.elf 2>&1 | grep -ci 'warn\|error')" = 0 ] || fail "dwarf: readelf complains about hello.elf's line table"
+# The kernel image is built here, before its line table is read: the M3/M4
+# checks below compile it again, and must find the same bytes.
+( cd .. && genesis/build/olic < examples/kernel.oli > genesis/build/kernel.elf 2> genesis/build/kernel.err ) || fail "dwarf: olic could not compile examples/kernel.oli: $(head -1 build/kernel.err)"
+cp build/kernel.elf build/kernel.dwarf.elf
 kmain=$(grep -n '^proc main' ../examples/kernel.oli | cut -d: -f1)
 gdb -batch -ex 'info line kernel.main' build/kernel.elf 2>&1 | grep -q "Line $kmain of \"kernel.oli\" starts at address" || fail "dwarf: gdb must place kernel.main on kernel.oli:$kmain: $(gdb -batch -ex 'info line kernel.main' build/kernel.elf 2>&1 | tail -1)"
 objdump --dwarf=decodedline build/kernel.elf | grep -q '^core/x64/paging.oli' || fail "dwarf: the lines of the library module core.x64.paging must be in the kernel's line table"
@@ -1527,6 +1531,7 @@ echo "ok: examples/packet_demo.oli - the reference program of the language docum
 # blocks, and not one system call in any procedure. Then, when QEMU is on
 # the path (or OLI_QEMU names it), the image is booted for real.
 ( cd .. && genesis/build/olic < examples/kernel.oli > genesis/build/kernel.elf 2> genesis/build/kernel.err ) || fail "kernel: olic could not compile examples/kernel.oli: $(head -1 build/kernel.err)"
+cmp build/kernel.elf build/kernel.dwarf.elf || fail "kernel: a second compile of examples/kernel.oli gave other bytes"
 kentry=$(readelf -h build/kernel.elf | sed -n 's/.*Entry point address: *0x\([0-9a-f]*\).*/\1/p')
 ksize=$(readelf -lW build/kernel.elf | awk '$1=="LOAD"{print $5; exit}')
 [ "$((0x$kentry))" -ge "$((0x100000))" ] && [ "$((0x$kentry))" -lt "$((0x100000 + $ksize))" ] \
