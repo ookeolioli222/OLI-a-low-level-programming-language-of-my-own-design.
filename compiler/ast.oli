@@ -107,8 +107,8 @@ C_ENTRY := 5
 C_EXPORT := 6
 C_TRAPS := 7
 
-NODE_MAX := 200000
-TOK_MAX := 200000
+NODE_MAX := 400000
+TOK_MAX := 400000
 OUT_MAX := 4194304
 
 layout Node
@@ -274,7 +274,11 @@ end
 
 proc hwplace_name(sub: u64) -> view u8
     -- The name of a hardware place by its `sub`: 2 msr, 3 stack, 4 frame,
-    -- 5 gdt, 6 idt, 7 tr, 8 the `segments` command.
+    -- 5 gdt, 6 idt, 7 tr, 8 the `segments` command; 10 on the AArch64
+    -- system registers.
+    if sub >= 10
+        ret a64_place_name(sub)
+    end
     if sub == 2
         ret "arch.x64.msr"
     end
@@ -296,10 +300,41 @@ proc hwplace_name(sub: u64) -> view u8
     ret "arch.x64.tr"
 end
 
+proc a64_place_name(sub: u64) -> view u8
+    if sub == 10
+        ret "arch.a64.vbar"
+    end
+    if sub == 11
+        ret "arch.a64.cntv_ctl"
+    end
+    if sub == 12
+        ret "arch.a64.cntv_tval"
+    end
+    if sub == 13
+        ret "arch.a64.cntfrq"
+    end
+    if sub == 14
+        ret "arch.a64.esr"
+    end
+    if sub == 15
+        ret "arch.a64.elr"
+    end
+    if sub == 16
+        ret "arch.a64.far"
+    end
+    if sub == 18
+        ret "arch.a64.cpacr"
+    end
+    ret "arch.a64.vectors"
+end
+
 proc hwplace_type(sub: u64) -> view u8
     -- What each hardware place holds: `msr` a u64, the stack and frame
     -- pointers addresses, the descriptor tables a `ref core.x64.TablePointer`
-    -- (written only), `tr` a u16.
+    -- (written only), `tr` a u16; every AArch64 system register a u64.
+    if sub >= 10
+        ret "u64"
+    end
     if sub == 2
         ret "u64"
     end

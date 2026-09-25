@@ -6,7 +6,7 @@ module olic.show_sema
 proc start -> s32
     entry
     permit os.syscall
-    zone z 201326592
+    zone z 1073741824
         src := read_all(z, SRC_MAX)
         pg := prog_new(z)
         analyze(pg, z, src)

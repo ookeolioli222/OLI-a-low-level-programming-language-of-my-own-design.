@@ -41,6 +41,7 @@ AF_COND := 32
 AF_ADR := 33
 AF_ADRP := 34
 AF_TRAP := 35
+AF_VEC := 36
 -- The line table (DWARF, `compiler/elf.oli`): one record per change of
 -- source line along the code — position, line, module.
 LINE_REC_MAX := 262144
@@ -109,6 +110,9 @@ layout Mach
     lastmi : u64
     -- 1 when compiler/a64.oli lowers (the object writer's relocations).
     a64 : u64
+    -- The AArch64 vector table (design 0025): wanted, and where it went.
+    wantvec : u64
+    vecpos : u64
 end
 
 proc mach_new(z: zone) -> rw ref Mach
@@ -117,6 +121,8 @@ proc mach_new(z: zone) -> rw ref Mach
     mc.fixes <- z.bytes(FIX_MAX * Fix.size)
     mc.nfix <- 0
     mc.a64 <- 0
+    mc.wantvec <- 0
+    mc.vecpos <- 0
     mc.entrypos <- 0
     mc.curloc <- 0
     mc.curtmp <- 0

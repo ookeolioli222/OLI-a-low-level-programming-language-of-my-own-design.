@@ -1,0 +1,122 @@
+-- target: freestanding
+-- profile: tests/a64/free/virt.oli-target
+module atimer
+import core.a64
+-- Interrupts on bare-metal AArch64 (design 0025): `tick` is a `calls
+-- interrupt` procedure in `section ".vector.5"`, the IRQ slot for the
+-- current exception level on SP_EL1, so olic builds the vector table around
+-- it. `main` installs the table (`arch.a64.vbar <- arch.a64.vectors`),
+-- turns on the GICv2 distributor and CPU interface of QEMU's `virt` board
+-- for the virtual timer (INTID 27), arms the timer a millisecond ahead
+-- (`cntv_tval`, `cntv_ctl`), lets IRQs in and waits in `wfi`. Each
+-- interrupt acknowledges the GIC, counts, re-arms the timer and returns
+-- through the slot's `eret`; after a hundred the timer is stopped. The FP
+-- unit, off after reset, is turned on first (`arch.a64.cpacr`), so every
+-- slot also saves and restores v0-v7, and a float is computed at the end.
+
+stack : [16K]u8
+    align 16
+
+ticks : u64
+period : u64
+last_elr : u64
+
+GICD := 0x08000000
+GICC := 0x08010000
+TIMER_INTID := 27
+
+proc start -> never
+    entry
+    calls none
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stack.addr) + 16K)
+    cpu.call(main)
+    loop
+        cpu.halt()
+    end
+end
+
+proc tick(frame : ref core.a64.ExceptionFrame)
+    calls interrupt
+    section ".vector.5"
+    permit cpu.interrupt, cpu.control, memory.mmio
+    gicc := mem.mmio(u32, GICC, 8)
+    -- GICC_IAR: which interrupt, and the GIC now counts it as active.
+    id := gicc[3] & 1023
+    if id == TIMER_INTID
+        ticks <- ticks + 1
+        last_elr <- frame.elr
+        if ticks < 100
+            arch.a64.cntv_tval <- period
+        else
+            arch.a64.cntv_ctl <- 0
+        end
+    end
+    -- GICC_EOIR: done.
+    gicc[4] <- id
+end
+
+proc putc(c : u8)
+    permit memory.mmio
+    uart := mem.mmio(u32, 0x09000000, 16)
+    while (uart[6] >> 5) & 1 == 1
+    end
+    uart[0] <- u32(c)
+end
+
+proc puts(s : view u8)
+    each c in s
+        putc(c)
+    end
+end
+
+proc putu(v : u64)
+    if v >= 10
+        putu(v / 10)
+    end
+    putc(u8.wrap(48 + v % 10))
+end
+
+proc main -> never
+    permit cpu.control, cpu.interrupt, cpu.halt, memory.mmio
+    -- CPACR_EL1.FPEN = 3: EL1 and EL0 may use the FP registers.
+    arch.a64.cpacr <- arch.a64.cpacr | (3 << 20)
+    arch.a64.vbar <- arch.a64.vectors
+    if arch.a64.vbar % 2048 == 0
+        puts("vectors installed\n")
+    end
+    gicd := mem.mmio(u32, GICD, 1024)
+    gicc := mem.mmio(u32, GICC, 8)
+    -- GICD_ISENABLER0 bit 27; the distributor and the CPU interface on;
+    -- GICC_PMR lets every priority through.
+    gicd[64] <- 1 << TIMER_INTID
+    gicd[0] <- 1
+    gicc[1] <- 255
+    gicc[0] <- 1
+    period <- arch.a64.cntfrq / 1000
+    t0 := cpu.tsc()
+    arch.a64.cntv_tval <- period
+    arch.a64.cntv_ctl <- 1
+    cpu.interrupts(on)
+    while ticks < 100
+        cpu.halt()
+    end
+    cpu.interrupts(off)
+    t1 := cpu.tsc()
+    puts("ticks ")
+    putu(ticks)
+    puts("\n")
+    if t1 - t0 >= 100 * period
+        puts("a hundred periods passed\n")
+    end
+    if last_elr != 0
+        puts("resumed where it stopped\n")
+    end
+    half : f64 <- 0.5
+    if f64(ticks) * half == 50.0
+        puts("floats on\n")
+    end
+    loop
+        cpu.halt()
+    end
+end

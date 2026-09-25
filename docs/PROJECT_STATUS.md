@@ -1317,6 +1317,41 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 48 (2026-09-25): exceptions on AArch64
+
+- **System registers as places** (design 0025, `permit cpu.control`, every
+  one a `u64`): `arch.a64.vbar`, `cntv_ctl`, `cntv_tval` and `cpacr` read
+  with `mrs` and written with `msr` (VBAR_EL1 and CPACR_EL1 followed by
+  `isb`); `cntfrq`, `esr`, `elr` and `far` read only (a write is E0900);
+  `arch.a64.vectors` the address of the vector table, one `adr`. On x86-64
+  every `arch.a64` place is E0900.
+- **Handlers.** A `calls interrupt` procedure with `section ".vector.N"` is
+  the handler of slot N. The back end appends `.text.vectors`, 2 KiB
+  aligned, sixteen 128-byte slots; a filled slot branches to a stub that
+  saves x0-x18, x30, ELR_EL1, SPSR_EL1 and, when CPACR_EL1.FPEN allows it,
+  v0-v7 (304 bytes), passes their address as a `ref core.a64.ExceptionFrame`
+  (new in `lib/core/a64.oli`), calls the handler — an ordinary procedure —
+  and returns with `eret`; an empty slot is `wfi; b .-4`. A handler with no
+  slot, or a slot taken twice, is E0900, and so is either in an object file.
+- `tests/a64/free/timer.oli` boots on qemu-system-aarch64 `virt`: it turns
+  on the FP unit, installs the table, enables INTID 27 in the GICv2
+  distributor and CPU interface, arms the virtual timer a millisecond ahead
+  and waits in `wfi`; its handler acknowledges the GIC, counts, re-arms and
+  returns. It prints `ticks 100`, that a hundred periods of CNTVCT passed,
+  that the saved ELR was seen, and a float computed afterwards. The harness
+  also counts exactly 100 IRQs and no other exception in `qemu -d int`, and
+  refuses three probes with E0900: an `arch.a64` place on x86-64, a write to
+  ESR_EL1, a handler with no slot.
+- The first boot faulted inside the stub on `stp q0, q1` (ESR class 0x7:
+  the FP unit is off after reset), which is why the stub tests CPACR_EL1 and
+  why `arch.a64.cpacr` exists.
+- The compiler's own source passed 200,000 tokens in this stage, and the
+  front end's token table overflowed (a bounds trap in `tok_at`, found by
+  building the analyser with `olic`, whose traps name the line). `TOK_MAX`
+  and `NODE_MAX` are now 400,000, and the analyser's zone 1 GiB of address
+  space.
+- Not yet: nested exceptions, a synchronous-exception fixture, GICv3.
+
 ## Implemented in stage 47 (2026-09-25): freestanding traps on AArch64
 
 - A freestanding AArch64 trap now does what the x86-64 one does: each site
@@ -1368,9 +1403,9 @@ constant in `.rodata`).
   `OLI_QEMU_SYSTEM_AARCH64` is. The tools were Debian packages unpacked into
   a scratch directory for these runs (gcc-14-aarch64-linux-gnu,
   libc6-dev-arm64-cross, qemu-user, qemu-system-arm), not installed.
-- Left on AArch64: interrupt procedures and the exception vector table
-  (register allocation came in stage 46, the `traps` procedure with its
-  `core.Site` in stage 47).
+- Left on AArch64 then: interrupt procedures and the exception vector
+  table (stage 48), register allocation (stage 46), the `traps` procedure
+  with its `core.Site` (stage 47).
 
 ## Implemented in stage 44 (2026-09-25): AArch64 runs the corpus
 
@@ -1692,9 +1727,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 34,054 lines) into
+compiles its own source (`compiler/`, seventeen modules, 34,414 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,547,560 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,563,576 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

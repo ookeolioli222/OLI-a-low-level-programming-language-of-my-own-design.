@@ -564,8 +564,11 @@ proc cr_place_follows(cx: ref Ctx) -> word
     if tok_is_dot(cx, i + 1) == 0
         ret 0
     end
-    if view_eq(tok_text(cx, i + 2), "x64") == 0
-        ret 0
+    ns := tok_text(cx, i + 2)
+    if view_eq(ns, "x64") == 0
+        if view_eq(ns, "a64") == 0
+            ret 0
+        end
     end
     ret tok_is_dot(cx, i + 3)
 end
@@ -607,6 +610,40 @@ proc p_cpuplace(cx: ref Ctx) -> u64
     ret n
 end
 
+proc a64_kind(t: view u8) -> word
+    -- `arch.a64.NAME` (design 0025): 10 vbar, 11 cntv_ctl, 12 cntv_tval,
+    -- 13 cntfrq, 14 esr, 15 elr, 16 far, 17 vectors, 18 cpacr; -1 for
+    -- anything else.
+    if view_eq(t, "vbar")
+        ret 10
+    end
+    if view_eq(t, "cntv_ctl")
+        ret 11
+    end
+    if view_eq(t, "cntv_tval")
+        ret 12
+    end
+    if view_eq(t, "cntfrq")
+        ret 13
+    end
+    if view_eq(t, "esr")
+        ret 14
+    end
+    if view_eq(t, "elr")
+        ret 15
+    end
+    if view_eq(t, "far")
+        ret 16
+    end
+    if view_eq(t, "vectors")
+        ret 17
+    end
+    if view_eq(t, "cpacr")
+        ret 18
+    end
+    ret -1
+end
+
 proc arch_kind(t: view u8) -> word
     -- `arch.x64.NAME`: 1 a control register, 2 `msr`, 5 `gdt`, 6 `idt`,
     -- 7 `tr`, 8 `segments` (a command: the call's arguments follow);
@@ -635,14 +672,19 @@ end
 proc p_archplace(cx: ref Ctx) -> u64
     -- `arch.x64.cr0/2/3/4/8` (`sub` 1, the register in `val`),
     -- `arch.x64.msr[n]` (`sub` 2, the index a kid), `arch.x64.gdt` (5),
-    -- `arch.x64.idt` (6), `arch.x64.tr` (7).
+    -- `arch.x64.idt` (6), `arch.x64.tr` (7); `arch.a64.NAME` 10 to 17
+    -- (design 0025).
     n := mk(cx, N_HWPLACE, tpos(cx))
+    ns := tok_text(cx, tpos(cx) + 2)
     adv(cx)
     adv(cx)
     adv(cx)
     adv(cx)
     nm := tok_text(cx, tpos(cx))
-    k := arch_kind(nm)
+    k : word <- arch_kind(nm)
+    if view_eq(ns, "a64")
+        k <- a64_kind(nm)
+    end
     if k < 0
         diag_at(cx, 11, tpos(cx))
         adv(cx)

@@ -667,7 +667,9 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_PARAM
         if ins.c == 2
-            a_refuse(pg, ob, mc)
+            -- An exception handler's frame: the saved registers, whose
+            -- address its vector-table slot passes in x0 (design 0025).
+            a_st(ob, mc, 0, i)
             ret
         end
         if ins.a >= 1000
@@ -819,6 +821,18 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         elif ins.val == 9
             -- `cpu.jump(a)`: br x9
             aw(ob, 3592356128)
+        elif ins.val == 10
+            -- `arch.a64.vbar <-`: msr vbar_el1, x9; isb
+            a_sys(ob, 0, a_sysenc(10), 9)
+            aw(ob, 3573759967)
+        elif ins.val == 11
+            a_sys(ob, 0, a_sysenc(11), 9)
+        elif ins.val == 12
+            a_sys(ob, 0, a_sysenc(12), 9)
+        elif ins.val == 18
+            -- `arch.a64.cpacr <-`: msr cpacr_el1, x9; isb
+            a_sys(ob, 0, a_sysenc(18), 9)
+            aw(ob, 3573759967)
         else
             a_refuse(pg, ob, mc)
         end
@@ -833,6 +847,18 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         elif ins.val == 8
             -- `cpu.tsc()`: mrs x9, cntvct_el0
             aw(ob, 3577471049)
+        elif ins.val == 17
+            -- `arch.a64.vectors`: adr x9, the table (built after the code).
+            if mc.objmode == 1
+                a_refuse(pg, ob, mc)
+                ret
+            end
+            mc.wantvec <- 1
+            add_fix(mc, ob.ncode, AF_VEC, 0)
+            aw(ob, 268435465)
+        elif ins.val >= 10
+            -- mrs x9, the system register
+            a_sys(ob, 1, a_sysenc(ins.val), 9)
         else
             a_refuse(pg, ob, mc)
             ret
@@ -1540,8 +1566,14 @@ proc a_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
         ret
     end
     if op.isint == 1
-        a_refuse(pg, ob, mc)
-        ret
+        -- An exception handler is an ordinary procedure: its slot of the
+        -- vector table saves what it may clobber and returns with `eret`.
+        -- An object file has no place for the table.
+        mc.wantvec <- 1
+        if mc.objmode == 1
+            a_refuse(pg, ob, mc)
+            ret
+        end
     end
     -- The linear scan of compiler/x64.oli over the callee-saved registers
     -- (OIR_SPEC §7); a value it leaves out lives in its frame word.
@@ -1620,6 +1652,18 @@ proc a_apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
             a_or32(ob, f.pos, a_rel(codebase + l2.pos, here, 19) << 5)
         elif k == AF_TRAP
             a_or32(ob, f.pos, a_rel(codebase + mc.trappos, here, 26))
+        elif k == AF_VEC
+            -- adr: the vector table, a code offset.
+            tv := codebase + mc.vecpos
+            onev : u64 <- 1
+            offv : u64 <- 0
+            if tv >= here
+                offv <- tv - here
+            else
+                offv <- (onev << 21) - (here - tv)
+            end
+            offv <- offv & ((onev << 21) - 1)
+            a_or32(ob, f.pos, ((offv & 3) << 29) | ((offv >> 2) << 5))
         elif k == AF_ADR
             -- adr: a byte offset, immlo in bits 29-30, immhi in 5-23.
             t := database + f.target
@@ -1650,6 +1694,210 @@ proc a_apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
         end
         i <- i + 1
     end
+end
+
+-- Exception vectors (design 0025) ---------------------------------------------
+
+proc a_sysenc(r: u64) -> u64
+    -- op1, CRn, CRm and op2 of a system register, in place in `mrs`/`msr`:
+    -- 10 VBAR_EL1, 11 CNTV_CTL_EL0, 12 CNTV_TVAL_EL0, 13 CNTFRQ_EL0,
+    -- 14 ESR_EL1, 15 ELR_EL1, 16 FAR_EL1, 18 CPACR_EL1, 19 SPSR_EL1.
+    if r == 10
+        ret 49152
+    end
+    if r == 11
+        ret 254752
+    end
+    if r == 12
+        ret 254720
+    end
+    if r == 13
+        ret 253952
+    end
+    if r == 14
+        ret 20992
+    end
+    if r == 15
+        ret 16416
+    end
+    if r == 16
+        ret 24576
+    end
+    if r == 18
+        ret 4160
+    end
+    ret 16384
+end
+
+proc a_sys(ob: rw ref Oir, rd: u64, enc: u64, rt: u64)
+    -- `mrs xt, reg` (rd 1) or `msr reg, xt` (rd 0); op0 is 3 for all.
+    aw(ob, 3575119872 | (rd << 21) | enc | rt)
+end
+
+proc a_pair(ob: rw ref Oir, base: u64, r1: u64, r2: u64, off: u64)
+    -- stp/ldp (base 0xA9000000/0xA9400000 for x, 0xAD000000/0xAD400000
+    -- for q) with sp: `off` already scaled to the register size.
+    aw(ob, base | (off << 15) | (r2 << 10) | (31 << 5) | r1)
+end
+
+proc a_vec_slot(pg: ref Prog, pi: u64) -> u64
+    -- The slot of a handler: N of its `section ".vector.N"`, 0 to 15; 16
+    -- when it names none.
+    s := proc_sect(pg, pi)
+    if starts_with(s, ".vector.") == 0
+        ret 16
+    end
+    if s.len < 9
+        ret 16
+    end
+    if s.len > 10
+        ret 16
+    end
+    v : u64 <- 0
+    i : u64 <- 8
+    while i < s.len
+        c := u64(s[i])
+        if c < 48
+            ret 16
+        end
+        if c > 57
+            ret 16
+        end
+        v <- v * 10 + (c - 48)
+        i <- i + 1
+    end
+    if v > 15
+        ret 16
+    end
+    ret v
+end
+
+proc a_vec_handler(pg: ref Prog, ob: ref Oir, slot: u64) -> u64
+    -- The procedure (plus one) whose handler fills `slot`, or 0.
+    q : u64 <- 0
+    while q < ob.nproc
+        op := oproc_at(ob, q)
+        if op.isint == 1
+            if a_vec_slot(pg, op.pi) == slot
+                ret q + 1
+            end
+        end
+        q <- q + 1
+    end
+    ret 0
+end
+
+proc a_fp_skip(ob: rw ref Oir)
+    -- `mrs x9, cpacr_el1; tbz x9, #20, +20`: past the four `stp`/`ldp` of
+    -- v0-v7 when EL1 may not touch the FP registers (CPACR_EL1.FPEN, off
+    -- after reset): the interrupted code cannot have used them, and the
+    -- access would trap.
+    a_sys(ob, 1, a_sysenc(18), 9)
+    aw(ob, 916455593)
+end
+
+proc a_vec_stub(ob: rw ref Oir, mc: rw ref Mach, q: u64)
+    -- Save x0-x18, x30, ELR_EL1, SPSR_EL1 and, when the FP unit is on,
+    -- v0-v7 (what the handler may clobber: the back end keeps floats in
+    -- v0-v7) in 304 bytes of the
+    -- stack, x0 their address, `bl` the handler, restore, `eret`.
+    aw(ob, 3506750463)
+    k : u64 <- 0
+    while k < 9
+        a_pair(ob, 2835349504, 2 * k, 2 * k + 1, 2 * k)
+        k <- k + 1
+    end
+    a_pair(ob, 2835349504, 18, 30, 18)
+    a_sys(ob, 1, a_sysenc(15), 9)
+    a_sys(ob, 1, a_sysenc(19), 10)
+    a_pair(ob, 2835349504, 9, 10, 20)
+    a_fp_skip(ob)
+    k <- 0
+    while k < 4
+        a_pair(ob, 2902458368, 2 * k, 2 * k + 1, 11 + 2 * k)
+        k <- k + 1
+    end
+    -- mov x0, sp; bl handler
+    aw(ob, 2432697312)
+    add_fix(mc, ob.ncode, AF_CALL, q)
+    aw(ob, 2483027968)
+    a_fp_skip(ob)
+    k <- 0
+    while k < 4
+        a_pair(ob, 2906652672, 2 * k, 2 * k + 1, 11 + 2 * k)
+        k <- k + 1
+    end
+    a_pair(ob, 2839543808, 9, 10, 20)
+    a_sys(ob, 0, a_sysenc(15), 9)
+    a_sys(ob, 0, a_sysenc(19), 10)
+    k <- 0
+    while k < 9
+        a_pair(ob, 2839543808, 2 * k, 2 * k + 1, 2 * k)
+        k <- k + 1
+    end
+    a_pair(ob, 2839543808, 18, 30, 18)
+    -- add sp, sp, #304; eret
+    aw(ob, 2433008639)
+    aw(ob, 3600745440)
+end
+
+proc a_vectors(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
+    -- The table VBAR_EL1 names: 2 KiB aligned, sixteen slots of 128 bytes
+    -- in the architecture's order. A slot with a handler branches to its
+    -- stub after the table; one without stops the CPU in `wfi`.
+    q : u64 <- 0
+    while q < ob.nproc
+        op := oproc_at(ob, q)
+        if op.isint == 1
+            s := a_vec_slot(pg, op.pi)
+            bad : u64 <- 0
+            if s == 16
+                bad <- 1
+            elif a_vec_handler(pg, ob, s) != q + 1
+                bad <- 1
+            end
+            if bad == 1
+                -- No slot, or a slot another handler already has.
+                mc.curq <- q
+                a_refuse(pg, ob, mc)
+            end
+        end
+        q <- q + 1
+    end
+    while (database + ob.ndata + ob.ncode) % 2048 != 0
+        aw(ob, 0)
+    end
+    gv := sect_add(ob, ".text.vectors", 0)
+    sv := sect_at(ob, gv)
+    sv.start <- ob.ncode
+    mc.vecpos <- ob.ncode
+    slot : u64 <- 0
+    while slot < 16
+        h := a_vec_handler(pg, ob, slot)
+        if h > 0
+            -- b stub, patched below
+            aw(ob, 335544320)
+        else
+            -- wfi; b .-4
+            aw(ob, 3573751935)
+            aw(ob, 402653183)
+        end
+        while ob.ncode < mc.vecpos + (slot + 1) * 128
+            aw(ob, 0)
+        end
+        slot <- slot + 1
+    end
+    slot <- 0
+    while slot < 16
+        h2 := a_vec_handler(pg, ob, slot)
+        if h2 > 0
+            sp := mc.vecpos + slot * 128
+            a_or32(ob, sp, a_rel(ob.ncode, sp, 26))
+            a_vec_stub(ob, mc, h2 - 1)
+        end
+        slot <- slot + 1
+    end
+    sv.size <- ob.ncode - sv.start
 end
 
 proc a64_lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
@@ -1706,6 +1954,11 @@ proc a64_lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u
         st.start <- ob.ncode
         a_trap_routine(ob, mc)
         st.size <- ob.ncode - st.start
+    end
+    if mc.wantvec == 1
+        if mc.objmode == 0
+            a_vectors(pg, ob, mc, database)
+        end
     end
     mc.dbase <- ob.base + page_up(database - ob.base + ob.ndata + ob.ncode)
     a_apply_fixes(ob, mc, database)

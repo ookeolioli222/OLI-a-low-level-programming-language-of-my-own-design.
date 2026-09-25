@@ -6,7 +6,7 @@ module olic.show_ast
 proc start -> s32
     entry
     permit os.syscall
-    zone z 67108864
+    zone z 268435456
         src := read_all(z, 1048576)
         lx := lex_new(z, src, TOK_MAX)
         lex_all(lx)

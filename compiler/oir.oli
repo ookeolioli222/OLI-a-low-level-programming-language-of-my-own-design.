@@ -1833,6 +1833,13 @@ proc gen_hwload(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         ob.lastlen <- 0
         ret emit_ins(ob, O_MSRRD, mn, 0, 0, 0)
     end
+    if nd.sub >= 10
+        -- An AArch64 system register (design 0025): only on AArch64.
+        if pg.arch64 == 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+    end
     if nd.sub >= 3
         if nd.sub == 5
             -- The descriptor tables are written, not read (no `sgdt`).
@@ -1868,6 +1875,23 @@ proc gen_store_hw(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
         mv := gen_expr(pg, ob, mi, kid2(cx, n), "u64")
         emit_ins(ob, O_MSRWR, mn, mv, 0, 0)
         ret
+    end
+    if tn.sub >= 10
+        -- `vbar`, `cntv_ctl`, `cntv_tval` and `cpacr` are written; the rest
+        -- are read only, and none exists off AArch64 (design 0025).
+        bad : u64 <- 0
+        if pg.arch64 == 0
+            bad <- 1
+        end
+        if tn.sub > 12
+            if tn.sub != 18
+                bad <- 1
+            end
+        end
+        if bad == 1
+            oir_err(ob, pg, mi, 900, n)
+            ret
+        end
     end
     if tn.sub >= 3
         -- The stack or frame pointer, a descriptor table, the task register.

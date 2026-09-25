@@ -109,6 +109,20 @@ procedure with the kind in x0 and the `core.Site` on the stack, as on x86-64. Th
 `exit_group(x0)`; `core.trap` writes its message with write(2, …) and exits
 134, as on x86-64. The ELF is EM_AARCH64 (183), the DWARF frame base x29.
 
+**Exceptions (stage 48, design 0025).** When a program has a `calls
+interrupt` procedure or reads `arch.a64.vectors`, the back end appends the
+section `.text.vectors`: 2 KiB aligned, sixteen slots of 128 bytes in the
+architecture's order (synchronous, IRQ, FIQ, SError for the current EL with
+SP0, with SPx, then the lower EL in AArch64 and in AArch32). The handler in
+`section ".vector.N"` fills slot N with a branch to its stub after the table;
+an empty slot is `wfi; b .-4`. The stub reserves 304 bytes of the stack,
+stores x0-x17 and x18/x30 in pairs at 0-152, ELR_EL1 and SPSR_EL1 at
+160-168 and, if CPACR_EL1.FPEN bit 20 is set, q0-q7 at 176-303; x0 = sp;
+`bl` the handler (an ordinary AAPCS64 procedure that keeps x19-x28 itself);
+the same in reverse, ELR_EL1 and SPSR_EL1 written back; `eret`. The first
+176 bytes are `core.a64.ExceptionFrame` (`x : [19]u64, lr, elr, spsr`). An
+AArch64 object file cannot hold the table (E0900).
+
 ## 5. Linux syscall convention
 
 | Item | Register |
@@ -173,4 +187,5 @@ The CPU pushes `ss, rsp, rflags, cs, rip` (and an error code for some vectors).
 The compiler emits: save of all caller-saved and callee-saved registers the body
 touches, stack realignment, the body, restores, optional error-code pop, `iretq`.
 The procedure takes `frame : ref InterruptFrame` (a `core` layout of the pushed
-words) and returns nothing. It may not be called with `call`.
+words) and returns nothing. It may not be called with `call`. On AArch64 the
+compiler-built vector table does the saving instead (§4a).

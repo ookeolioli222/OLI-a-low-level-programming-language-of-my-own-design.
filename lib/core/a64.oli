@@ -1,0 +1,14 @@
+--- The AArch64 shapes a kernel written in Oli-- needs (design 0025).
+module core.a64
+
+--- What a slot of the vector table `olic` emits saves before it calls a
+--- `calls interrupt` procedure, from the address it passes upward: x0-x18,
+--- x30, ELR_EL1 and SPSR_EL1 (then v0-v7, not named here). The slot puts
+--- every one back and returns with `eret`, so `elr` is where the
+--- interrupted code resumes.
+pub layout ExceptionFrame
+    x : [19]u64
+    lr : u64
+    elr : u64
+    spsr : u64
+end

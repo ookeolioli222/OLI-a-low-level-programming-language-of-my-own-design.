@@ -1894,6 +1894,38 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
 else
     echo "ok: AArch64 bare metal - the kernel is an AArch64 executable at 0x40080000 (no qemu-system-aarch64 here: not booted; set OLI_QEMU_SYSTEM_AARCH64)"
 fi
+# Exceptions on AArch64 (design 0025): a `calls interrupt` procedure in
+# `section ".vector.5"` fills the IRQ slot of the table olic builds; the
+# kernel installs it through `arch.a64.vbar`, programs the GICv2 and the
+# virtual timer and takes a hundred interrupts, each returning by `eret`.
+( cd .. && genesis/build/olic < tests/a64/free/timer.oli > genesis/build/atimer.elf 2> genesis/build/atimer.err ) || fail "aarch64: olic could not compile the timer kernel: $(head -1 build/atimer.err)"
+readelf -SW build/atimer.elf | grep -q ' \.text\.vectors .* 00000000400[0-9a-f]\{2\}[08]00 ' || fail "aarch64: the vector table must be a .text.vectors section on a 2 KiB boundary"
+if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
+    rm -f build/atimer.serial
+    set +e
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/atimer.serial -kernel build/atimer.elf -d int -D build/atimer.qlog > /dev/null 2>&1
+    set -e
+    printf 'vectors installed\nticks 100\na hundred periods passed\nresumed where it stopped\nfloats on\n' > build/atimer.want
+    cmp build/atimer.serial build/atimer.want || fail "aarch64: the timer kernel printed [$(cat build/atimer.serial)]"
+    [ "$(grep -c 'Taking exception 5 \[IRQ\]' build/atimer.qlog)" = 100 ] || fail "aarch64: the timer kernel must take exactly a hundred IRQs"
+    [ "$(grep -c 'Taking exception' build/atimer.qlog)" = 100 ] || fail "aarch64: the timer kernel took an exception other than its IRQs"
+    echo "ok: AArch64 EXCEPTIONS - a calls-interrupt handler fills the IRQ slot of the vector table olic builds; the kernel installs it (arch.a64.vbar), turns on the FP unit (arch.a64.cpacr), programs the GICv2 and the virtual timer (cntv_tval, cntv_ctl) and takes exactly 100 IRQs (qemu -d int), each resuming where it stopped through eret"
+else
+    echo "ok: AArch64 exceptions - the timer kernel builds with its vector table on a 2 KiB boundary (no qemu-system-aarch64 here: not booted)"
+fi
+# What does not exist is refused: an AArch64 system register on x86-64, a
+# write to a read-only one, and a handler that names no slot.
+printf 'module p\nproc start -> s32\n    entry\n    permit cpu.control\n    arch.a64.vbar <- 0\n    ret 0\nend\n' > build/va1.oli
+printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.esr <- 0\n    loop\n        cpu.halt()\n    end\nend\n' > build/va2.oli
+printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc h\n    calls interrupt\n    permit cpu.interrupt\nend\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.vbar <- arch.a64.vectors\n    loop\n        cpu.halt()\n    end\nend\n' > build/va3.oli
+for v in va1:5 va2:7 va3:4; do
+    n=${v%%:*}
+    set +e; ( cd .. && genesis/build/olic < genesis/build/$n.oli > genesis/build/$n.elf 2> genesis/build/$n.err ); st=$?; set -e
+    [ "$st" = 1 ] || fail "aarch64: $n exited $st, want E0900"
+    grep -q "^ --> stdin:${v#*:}:" build/$n.err && grep -q 'E0900' build/$n.err || fail "aarch64: $n must be E0900 at line ${v#*:}: $(head -2 build/$n.err)"
+    [ ! -s build/$n.elf ] || fail "aarch64: the refused $n still wrote a file"
+done
+echo "ok: arch.a64 places are E0900 on x86-64, a read-only system register is not written, and a handler with no .vector.N slot is refused"
 echo "ok: an unknown target architecture is refused, and a calls-none context switch is exactly its block (switch.elf runs five round trips between two stacks)"
 echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"
 
