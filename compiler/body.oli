@@ -605,6 +605,8 @@ CK_VMAKE := 26
 CK_VSPLAT := 27
 CK_VLOAD := 28
 CK_VSTORE := 29
+CK_ERET := 30
+CK_SVC := 31
 
 proc ref_elem(t: view u8) -> view u8
     -- The `T` of `ref T` / `rw ref T`; empty for any other type.
@@ -716,6 +718,13 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
         -- `arch.x64.segments(code, data)`: the place is the command.
         if cn.sub == 8
             ret CK_SEGS
+        end
+        -- `arch.a64.eret(p)` and `arch.a64.svc(v)` (design 0025).
+        if cn.sub == 24
+            ret CK_ERET
+        end
+        if cn.sub == 25
+            ret CK_SVC
         end
         ret 0
     end
@@ -887,6 +896,12 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
     end
     if ck == CK_SEGS
         ret "(no value)"
+    end
+    if ck == CK_ERET
+        ret "(no value)"
+    end
+    if ck == CK_SVC
+        ret "u64"
     end
     if ck == CK_CPUJUMP
         ret "(no value)"
@@ -1911,6 +1926,14 @@ proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
         put(1, "Segments")
         ret
     end
+    if ck == CK_ERET
+        put(1, "Eret")
+        ret
+    end
+    if ck == CK_SVC
+        put(1, "Svc")
+        ret
+    end
     if ck == CK_CPUJUMP
         put(1, "CpuJump")
         ret
@@ -2106,6 +2129,11 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
             put(1, tok_text(cx, fnn.t0))
         elif ck == CK_SEGS
             pexpr(pg, mi, a2, "u16")
+        elif ck == CK_SVC
+            pexpr(pg, mi, a2, "u64")
+        elif ck == CK_ERET
+            enn := node_at(cx, a2)
+            put(1, tok_text(cx, enn.t0))
         elif ck == CK_CPUCALL
             cnn := node_at(cx, a2)
             put(1, tok_text(cx, cnn.t0))
@@ -3683,6 +3711,13 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
     end
     if ck == CK_VSTORE
         tvec_args(pg, mi, n, 3)
+        ret
+    end
+    if ck == CK_ERET
+        ret
+    end
+    if ck == CK_SVC
+        texpr(pg, mi, kid2(cx, n), "u64")
         ret
     end
     if ck == CK_SEGS

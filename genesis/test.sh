@@ -1923,6 +1923,19 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     [ "$(grep -c 'Taking exception 4 \[Data Abort\]' build/agic3.qlog)" = 2 ] || fail "aarch64: the GICv3 kernel must take exactly two data aborts"
     [ "$(grep -c 'Taking exception' build/agic3.qlog)" = 102 ] || fail "aarch64: the GICv3 kernel took an unexpected exception"
     echo "ok: AArch64 GICv3 + SYNC + NESTED - through the GICv3 CPU interface registers (icc_iar1, icc_eoir1, icc_pmr, icc_igrpen1, icc_sre) the kernel takes 100 timer IRQs; a data abort in main and one nested inside an IRQ reach the slot-4 handler, which reads ESR (class 0x25) and FAR and moves the saved ELR past the load"
+    # User mode: the kernel enters EL0 with eret; everything EL0 does
+    # reaches the kernel through svc, and a privileged read is refused.
+    ( cd .. && genesis/build/olic < tests/a64/free/user.oli > genesis/build/auser.elf 2> genesis/build/auser.err ) || fail "aarch64: olic could not compile the user-mode kernel: $(head -1 build/auser.err)"
+    rm -f build/auser.serial
+    set +e
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/auser.serial -kernel build/auser.elf -d int -D build/auser.qlog > /dev/null 2>&1
+    set -e
+    printf 'kernel: entering EL0\nhello from EL0\nthe kernel has served 16 calls\nkernel: user exited after 48 calls, 1 refused (class 0)\n' > build/auser.want
+    cmp build/auser.serial build/auser.want || fail "aarch64: the user-mode kernel printed [$(cat build/auser.serial)]"
+    [ "$(grep -A1 'Taking exception 2 \[SVC\]' build/auser.qlog | grep -c 'from EL0 to EL1')" = 48 ] || fail "aarch64: the user-mode kernel must take exactly 48 SVCs from EL0"
+    [ "$(grep -A1 'Taking exception 1 \[Undefined Instruction\]' build/auser.qlog | grep -c 'from EL0 to EL1')" = 1 ] || fail "aarch64: the privileged read at EL0 must be refused once"
+    [ "$(grep -c 'Taking exception' build/auser.qlog)" = 49 ] || fail "aarch64: the user-mode kernel took an unexpected exception"
+    echo "ok: AArch64 USER MODE - the kernel enters EL0 (arch.a64.sp_el0, spsr, eret(user_main)); EL0 prints only through 48 svc calls served by the slot-8 handler, which answers in x0, and its read of VBAR_EL1 is refused by the CPU (undefined instruction from EL0, skipped)"
 else
     echo "ok: AArch64 exceptions - the timer kernel builds with its vector table on a 2 KiB boundary (no qemu-system-aarch64 here: not booted)"
 fi
@@ -1933,14 +1946,15 @@ printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\n
 printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc h\n    calls interrupt\n    permit cpu.interrupt\nend\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.vbar <- arch.a64.vectors\n    loop\n        cpu.halt()\n    end\nend\n' > build/va3.oli
 printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    _x := arch.a64.icc_eoir1\n    loop\n        cpu.halt()\n    end\nend\n' > build/va4.oli
 printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.icc_iar1 <- 1\n    loop\n        cpu.halt()\n    end\nend\n' > build/va5.oli
-for v in va1:5 va2:7 va3:4 va4:7 va5:7; do
+printf 'module p\nproc start -> s32\n    entry\n    _r := arch.a64.svc(1)\n    ret 0\nend\n' > build/va6.oli
+for v in va1:5 va2:7 va3:4 va4:7 va5:7 va6:4; do
     n=${v%%:*}
     set +e; ( cd .. && genesis/build/olic < genesis/build/$n.oli > genesis/build/$n.elf 2> genesis/build/$n.err ); st=$?; set -e
     [ "$st" = 1 ] || fail "aarch64: $n exited $st, want E0900"
     grep -q "^ --> stdin:${v#*:}:" build/$n.err && grep -q 'E0900' build/$n.err || fail "aarch64: $n must be E0900 at line ${v#*:}: $(head -2 build/$n.err)"
     [ ! -s build/$n.elf ] || fail "aarch64: the refused $n still wrote a file"
 done
-echo "ok: arch.a64 places are E0900 on x86-64, a read-only system register is not written, the write-only icc_eoir1 is not read, and a handler with no .vector.N slot is refused"
+echo "ok: arch.a64 places are E0900 on x86-64, a read-only system register is not written, the write-only icc_eoir1 is not read, svc does not exist on x86-64, and a handler with no .vector.N slot is refused"
 echo "ok: an unknown target architecture is refused, and a calls-none context switch is exactly its block (switch.elf runs five round trips between two stacks)"
 echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"
 

@@ -687,7 +687,9 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
             need(pg, mi, "io.port", nd.t0)
         elif nd.sub == 2
             need(pg, mi, "cpu.msr", nd.t0)
-        else
+        elif nd.sub != 25
+            -- `arch.a64.svc(v)` is how unprivileged code asks the kernel:
+            -- it can do nothing by itself, so it needs no capability.
             need(pg, mi, "cpu.control", nd.t0)
         end
     end
@@ -724,6 +726,12 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
         if callee.kind == N_HWPLACE
             if callee.sub == 8
                 check_segments(pg, mi, n)
+            end
+            if callee.sub == 24
+                check_cpu_call(pg, mi, n)
+            end
+            if callee.sub == 25
+                check_one_arg(pg, mi, n)
             end
         end
         if callee.kind == N_FIELD

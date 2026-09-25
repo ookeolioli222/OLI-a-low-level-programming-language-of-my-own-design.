@@ -614,7 +614,8 @@ proc a64_kind(t: view u8) -> word
     -- `arch.a64.NAME` (design 0025): 10 vbar, 11 cntv_ctl, 12 cntv_tval,
     -- 13 cntfrq, 14 esr, 15 elr, 16 far, 17 vectors, 18 cpacr, and the
     -- GICv3 CPU interface: 19 icc_iar1, 20 icc_eoir1, 21 icc_pmr,
-    -- 22 icc_igrpen1, 23 icc_sre; -1 for anything else.
+    -- 22 icc_igrpen1, 23 icc_sre; the commands 24 eret(p) and 25 svc(v);
+    -- 26 spsr, 27 sp_el0; -1 for anything else.
     if view_eq(t, "vbar")
         ret 10
     end
@@ -656,6 +657,18 @@ proc a64_kind(t: view u8) -> word
     end
     if view_eq(t, "icc_sre")
         ret 23
+    end
+    if view_eq(t, "eret")
+        ret 24
+    end
+    if view_eq(t, "svc")
+        ret 25
+    end
+    if view_eq(t, "spsr")
+        ret 26
+    end
+    if view_eq(t, "sp_el0")
+        ret 27
     end
     ret -1
 end

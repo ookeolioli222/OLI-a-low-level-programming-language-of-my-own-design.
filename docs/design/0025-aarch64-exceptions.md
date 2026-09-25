@@ -32,6 +32,15 @@ kernel needs both, and neither may be a machine-code escape.
 | `arch.a64.icc_pmr` | ICC_PMR_EL1 | read, written |
 | `arch.a64.icc_igrpen1` | ICC_IGRPEN1_EL1 | read, written |
 | `arch.a64.icc_sre` | ICC_SRE_EL1 | read, written (then `isb`) |
+| `arch.a64.spsr` | SPSR_EL1 | read, written |
+| `arch.a64.sp_el0` | SP_EL0 | read, written |
+
+`arch.a64.elr` is written too (where the next `eret` goes). Two commands
+complete user mode: `arch.a64.eret(p)` puts the address of procedure `p`
+in ELR_EL1 and executes `eret` (with SPSR_EL1 = 0 it enters `p` at EL0 on
+SP_EL0), and `arch.a64.svc(v) -> u64` puts `v` in x0, executes `svc #0`
+and answers what the handler left in the saved x0. `svc` needs no `permit`:
+it is how unprivileged code asks, and does nothing by itself.
 | `arch.a64.vectors` | the vector table `olic` emits | read: its address |
 
 **Handlers.** A `calls interrupt` procedure with `section ".vector.N"`
@@ -80,6 +89,8 @@ places and takes 100 IRQs, a data abort in `main` and a data abort nested
 inside an IRQ handler; the slot-4 handler reads ESR (class 0x25) and FAR
 and moves the saved ELR past the load (`rw ref core.a64.ExceptionFrame`).
 Nesting works because each slot saves ELR_EL1 and SPSR_EL1 before it
-calls the handler. Not yet: a separate exception stack (all nesting uses
-SP_EL1), lower-EL (user-mode) entry, GICv3 SGIs and affinity routing
-beyond CPU 0.
+calls the handler. Stage 50: `tests/a64/free/user.oli` enters EL0 with
+`arch.a64.eret(user_main)`; EL0 code prints through 48 `svc` calls served
+from slot 8, and its read of VBAR_EL1 is refused by the CPU. Exceptions
+from EL0 run on SP_EL1, apart from the user stack. Not yet: an MMU (EL0
+still sees all physical memory), more than one CPU, GICv3 SGIs.

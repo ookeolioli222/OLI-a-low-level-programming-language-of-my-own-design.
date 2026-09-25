@@ -120,7 +120,7 @@ stores x0-x17 and x18/x30 in pairs at 0-152, ELR_EL1 and SPSR_EL1 at
 160-168 and, if CPACR_EL1.FPEN bit 20 is set, q0-q7 at 176-303; x0 = sp;
 `bl` the handler (an ordinary AAPCS64 procedure that keeps x19-x28 itself);
 the same in reverse, ELR_EL1 and SPSR_EL1 written back; `eret`. The first
-176 bytes are `core.a64.ExceptionFrame` (`x : [19]u64, lr, elr, spsr`). An
+176 bytes are `core.a64.ExceptionFrame` (`x0` … `x18`, `lr`, `elr`, `spsr`). An
 AArch64 object file cannot hold the table (E0900).
 
 ## 5. Linux syscall convention

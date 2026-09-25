@@ -715,7 +715,9 @@ block needs `permit cpu.asm`, a port place `port.u8[n]` / `port.u16[n]` /
 `cli`) need `permit cpu.interrupt`, a control register `arch.x64.cr0/2/3/4/8`,
 `cpu.stack`, `cpu.frame`, `arch.x64.gdt`/`idt`/`tr`, `cpu.call` and `cpu.jump`
 and the AArch64 system registers `arch.a64.vbar/cntv_ctl/cntv_tval/cntfrq/
-esr/elr/far/cpacr/vectors/icc_iar1/icc_eoir1/icc_pmr/icc_igrpen1/icc_sre`
+esr/elr/far/cpacr/vectors/icc_iar1/icc_eoir1/icc_pmr/icc_igrpen1/icc_sre/
+spsr/sp_el0` and the command `arch.a64.eret(p)` (`arch.a64.svc(v)` needs
+no permit)
 (design 0025, E0900 on x86-64)
 need `permit cpu.control`, and `arch.x64.msr[n]` needs `permit cpu.msr` —
 without them the compiler reports `E0401` at the construct. Constructs the

@@ -42,6 +42,7 @@ AF_ADR := 33
 AF_ADRP := 34
 AF_TRAP := 35
 AF_VEC := 36
+AF_PADR := 37
 -- The line table (DWARF, `compiler/elf.oli`): one record per change of
 -- source line along the code — position, line, module.
 LINE_REC_MAX := 262144

@@ -1844,6 +1844,15 @@ proc gen_hwload(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
             oir_err(ob, pg, mi, 900, n)
             ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
         end
+        if nd.sub == 24
+            -- `eret` and `svc` are commands, not places.
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        if nd.sub == 25
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
     end
     if nd.sub >= 3
         if nd.sub == 5
@@ -1891,9 +1900,18 @@ proc gen_store_hw(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
         end
         if tn.sub > 12
             if tn.sub < 18
-                bad <- 1
+                -- ELR_EL1 alone of these is written (user mode, design 0025).
+                if tn.sub != 15
+                    bad <- 1
+                end
             end
             if tn.sub == 19
+                bad <- 1
+            end
+            if tn.sub == 24
+                bad <- 1
+            end
+            if tn.sub == 25
                 bad <- 1
             end
         end
@@ -2732,6 +2750,34 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     if ck == CK_SEGS
         ret gen_segments(pg, ob, mi, n)
+    end
+    if ck == CK_ERET
+        -- `arch.a64.eret(p)`: ELR_EL1 the procedure's address, then `eret`
+        -- (`hw.cmd arch.a64.eret NAME`, O_HWCALL with `val` 1).
+        enn := node_at(cx, sibling(cx, kid1(cx, n)))
+        epi := proc_find(pg, tok_text(cx, enn.t0))
+        if epi < 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        if pg.arch64 == 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        emit_ins(ob, O_HWCALL, 0, 0, u64.bits(epi), 1)
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+    end
+    if ck == CK_SVC
+        -- `arch.a64.svc(v)`: v in x0, `svc #0`, the answer in x0
+        -- (`hw.cmd arch.a64.svc %v`, O_MSRRD with `val` 25).
+        if pg.arch64 == 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        sv := gen_expr(pg, ob, mi, sibling(cx, kid1(cx, n)), "u64")
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_MSRRD, sv, 0, 0, 25)
     end
     if ck == CK_CPUCALL
         -- `cpu.call(p)`: a bare `call` to the procedure, for an entry with
@@ -7189,7 +7235,11 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         ret
     end
     if op == O_HWCALL
-        put(1, "hw.cmd cpu.call ")
+        if ins.val == 1
+            put(1, "hw.cmd arch.a64.eret ")
+        else
+            put(1, "hw.cmd cpu.call ")
+        end
         cpv := proc_at(pg, ins.c)
         ccx := mod_ctx(pg, cpv.mod)
         cnd := node_at(ccx, cpv.node)
@@ -7432,7 +7482,11 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         ret
     end
     if op == O_MSRRD
-        put(1, "hw.load arch.x64.msr ")
+        if ins.val == 25
+            put(1, "hw.cmd arch.a64.svc ")
+        else
+            put(1, "hw.load arch.x64.msr ")
+        end
         pv(ob, pg, ins.a)
         ret
     end

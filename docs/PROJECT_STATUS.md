@@ -1317,6 +1317,29 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 50 (2026-09-25): user mode on AArch64
+
+- New places (design 0025): `arch.a64.spsr` (SPSR_EL1) and
+  `arch.a64.sp_el0` (SP_EL0), read and written; `arch.a64.elr` is now
+  written too. New commands: `arch.a64.eret(p)` — `adr` to procedure `p`
+  (a new fix-up, AF_PADR), `msr elr_el1`, `eret` — and `arch.a64.svc(v)
+  -> u64` — v in x0, `svc #0`, the answer from x0 — which needs no
+  `permit`. Both are E0900 on x86-64, and neither is a place.
+- `tests/a64/free/user.oli` boots on qemu-system-aarch64 `virt`: the kernel
+  gives EL0 a stack, sets SPSR_EL1 to EL0t and enters `user_main`. EL0
+  prints `hello from EL0` and a number the kernel answered, entirely
+  through `svc`; the slot-8 handler (synchronous, lower EL) serves each
+  request from the saved x0 and writes the answer back into it. A read of
+  VBAR_EL1 at EL0 compiles but the CPU refuses it (undefined instruction,
+  ESR class 0), and the kernel skips it. The harness pins the four lines
+  and exactly 48 SVCs and 1 undefined instruction from EL0 in `qemu -d
+  int`, and that `svc` is E0900 on x86-64.
+- `core.a64.ExceptionFrame` now names its registers `x0` … `x18`: an
+  array field indexed through a `ref` (`frame.x[0]`) is E0900 in this
+  compiler, a gap of the language, not of AArch64.
+- Not yet: an MMU and page tables on AArch64 (EL0 still reaches all of
+  physical memory), more than one CPU.
+
 ## Implemented in stage 49 (2026-09-25): GICv3, synchronous and nested exceptions on AArch64
 
 - **GICv3 CPU interface as places** (design 0025): `arch.a64.icc_iar1`
@@ -1337,8 +1360,8 @@ constant in `.rodata`).
 - An ordinary unused raw load `[addr u64 (a)]` is removed by dead-code
   elimination, as a load from ordinary memory may be; the fault is made
   with `mem.mmio`, whose reads are volatile.
-- Not yet: a separate exception stack, entry from a lower EL (user mode),
-  SGIs and more than one CPU.
+- Not yet then: a separate exception stack and user mode (stage 50), SGIs
+  and more than one CPU.
 
 ## Implemented in stage 48 (2026-09-25): exceptions on AArch64
 
@@ -1751,9 +1774,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 34,478 lines) into
+compiles its own source (`compiler/`, seventeen modules, 34,639 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,565,944 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,572,784 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,
