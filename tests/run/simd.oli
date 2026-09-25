@@ -1,0 +1,70 @@
+module simd
+-- 128-bit vectors (design 0024), SSE2 only: `f32x4(a, b, c, d)`,
+-- `T.splat(x)`, `T.load(v, i)` / `T.store(v, i, x)` bounds-checked on a view
+-- of the lane type, lanes `x[i]` read and written, `+ - * / & | ^` where
+-- SSE2 has the instruction (integer lanes wrap), whole-vector `==`/`!=` (a
+-- NaN lane is never equal), vectors passed to and returned from procedures
+-- and accumulated in a loop. The exit status is the number of the check
+-- that failed; 42 when every one held.
+data : [8]f32 <- { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 }
+bytes16 : [16]u8
+proc dot4(a : f32x4, b : f32x4) -> f32
+    p := a * b
+    ret p[0] + p[1] + p[2] + p[3]
+end
+proc twice(v : s32x4) -> s32x4
+    ret v + v
+end
+proc start -> s32
+    entry
+    a := f32x4(1.0, 2.0, 3.0, 4.0)
+    b := f32x4.splat(0.5)
+    c := a * b
+    if c[0] != 0.5 then ret 1
+    if c[3] != 2.0 then ret 2
+    if dot4(a, a) != 30.0 then ret 3
+    d := a - b
+    if d[1] != 1.5 then ret 4
+    q := a / f32x4.splat(2.0)
+    if q[2] != 1.5 then ret 5
+    if (a == f32x4(1.0, 2.0, 3.0, 4.0)) == false then ret 6
+    if a == b then ret 7
+    if (a != b) == false then ret 8
+    w := f32x4.load(data[..], 4)
+    if w[0] != 5.0 then ret 9
+    if w[3] != 8.0 then ret 10
+    f32x4.store(data[..], 0, w + a)
+    if data[0] != 6.0 then ret 11
+    if data[3] != 12.0 then ret 12
+    if data[4] != 5.0 then ret 13
+    i : s32x4 <- s32x4(1, -2, 3, 2147483647)
+    j := twice(i)
+    if j[1] != -4 then ret 14
+    if j[3] != -2 then ret 15
+    i[2] <- 100
+    if i[2] != 100 then ret 16
+    k := i & s32x4.splat(255)
+    if k[1] != 254 then ret 17
+    u := u8x16.splat(250) + u8x16.splat(10)
+    if u[15] != 4 then ret 18
+    h := u16x8.splat(300) * u16x8.splat(300)
+    if h[0] != 24464 then ret 19
+    z := f64x2(1.5, -2.5) + f64x2.splat(1.0)
+    if z[1] != -1.5 then ret 20
+    nan : f64 <- 0.0
+    n2 := f64x2.splat(nan / nan)
+    if n2 == n2 then ret 21
+    x := u64x2(0xFFFFFFFFFFFFFFFF, 1) + u64x2.splat(1)
+    if x[0] != 0 then ret 22
+    if x[1] != 2 then ret 23
+    m := u8x16.load(bytes16[..], 0)
+    if (m == u8x16.splat(0)) == false then ret 24
+    acc : f32x4 <- f32x4.splat(0.0)
+    t : u64 <- 0
+    while t < 5
+        acc <- acc + a
+        t <- t + 1
+    end
+    if acc[3] != 20.0 then ret 25
+    ret 42
+end

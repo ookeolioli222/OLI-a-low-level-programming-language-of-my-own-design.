@@ -1,0 +1,9 @@
+module simd_bounds
+-- expect: trap: bounds at stdin:6
+data : [6]f32
+proc start -> s32
+    entry
+    w := f32x4.load(data[..], 3)
+    if w[0] != 0.0 then ret 1
+    ret 42
+end

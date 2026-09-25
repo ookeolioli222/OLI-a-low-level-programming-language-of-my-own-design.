@@ -1,0 +1,22 @@
+proc main -> s32
+    entry
+    a := s32x4.splat(3)
+    b := a * a
+    c := a < a
+    d := f32x4(1.0, 2.0)
+    e := u8x16.splat(1, 2)
+    buf : [4]u32
+    f := f32x4.load(buf[..], 0)
+    g := a / a
+    h := a + f32x4.splat(1.0)
+    k := a + 1
+    ret 0
+end
+-- expect: E0900 @ 4:10
+-- expect: E0200 @ 5:10
+-- expect: E0205 @ 6:10
+-- expect: E0205 @ 7:10
+-- expect: E0200 @ 9:21
+-- expect: E0900 @ 10:10
+-- expect: E0200 @ 11:10
+-- expect: E0200 @ 12:10

@@ -293,6 +293,7 @@ left at the end of a line is `E0032`.
 | `word` / `uword` | 8 bytes, signed / unsigned machine word | **[parses]** |
 | `byte` / `bool` | 1 byte | **[parses]** |
 | `physaddr` | 8 bytes, a physical address | **[parses]** |
+| `f32x4 f64x2 s8x16 u8x16 s16x8 u16x8 s32x4 u32x4 s64x2 u64x2` | 16 bytes, 128-bit vectors (design 0024): `f32x4(a, b, c, d)`, `T.splat(x)`, `T.load(v, i)` / `T.store(v, i, x)` on a view of the lane type, lanes `x[i]`; `+ - & \| ^` on every type (integer lanes wrap), `*` on float and 16-bit lanes, `/` on float lanes, whole-vector `==`/`!=`; both operands of one type, anything SSE2 lacks E0900 (`tests/run/simd.oli`) | **[runs]** |
 | `f32` / `f64` | 4 / 8 bytes, IEEE-754 binary32 / binary64: `+ - * /` and the comparisons (every one false on a NaN but `!=`); literals `1.5`, `2e-3`, `1_000.25` rounded from the decimal text to the context's format (a literal needs one, E0201; beyond binary32 is E0212); no implicit conversion (E0200): `f64(n)` and `f32(n)` from any integer, `f64(f)` from an `f32`, `f32.wrap(d)` rounds an `f64`, `T.wrap(f)` truncates toward zero to an integer (a NaN or an out-of-range value gives the hardware's 2^63), `F.bits(u)` / `U.bits(f)` reinterpret; SSE, arguments and results in xmm registers (`tests/run/floats.oli`, `tests/c/float_side.oli`) | **[runs]** |
 | `addr T` | 8 bytes, a raw address of `T` (`addr` alone = `addr u8`) | **[runs]** |
 | `view T` / `rw view T` | 16 bytes: address + length, bounds-checked | **[runs]** |

@@ -97,6 +97,12 @@ proc mark_addr_taken(ob: rw ref Oir, op: ref OProc)
                 cell_set(ob.noprom, ins.a, 1)
             end
         end
+        if ins.op == O_VBIN
+            -- The area a vector operation writes its result into.
+            if ins.w < ob.nslot
+                cell_set(ob.noprom, ins.w, 1)
+            end
+        end
         i <- i + 1
     end
     if ob.dbgframe == 1

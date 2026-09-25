@@ -601,6 +601,10 @@ CK_TSC := 22
 CK_CPUCALL := 23
 CK_CPUJUMP := 24
 CK_SEGS := 25
+CK_VMAKE := 26
+CK_VSPLAT := 27
+CK_VLOAD := 28
+CK_VSTORE := 29
 
 proc ref_elem(t: view u8) -> view u8
     -- The `T` of `ref T` / `rw ref T`; empty for any other type.
@@ -702,6 +706,10 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
     ce := kid1(cx, n)
     cn := node_at(cx, ce)
     if cn.kind == N_NAME
+        if is_vector(tok_text(cx, cn.t0)) == 1
+            -- `f32x4(a, b, c, d)` (design 0024).
+            ret CK_VMAKE
+        end
         ret CK_PROC
     end
     if cn.kind == N_HWPLACE
@@ -727,6 +735,17 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
             end
             if view_eq(bname, "atomic")
                 ret CK_ATOMIC
+            end
+            if is_vector(bname) == 1
+                if view_eq(m, "splat")
+                    ret CK_VSPLAT
+                end
+                if view_eq(m, "load")
+                    ret CK_VLOAD
+                end
+                if view_eq(m, "store")
+                    ret CK_VSTORE
+                end
             end
             if view_eq(bname, "cpu")
                 if view_eq(m, "id")
@@ -810,11 +829,35 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
     ret CK_PROC
 end
 
+proc vcall_type(pg: ref Prog, mi: u64, n: u64) -> view u8
+    -- The vector type a `T(…)`, `T.splat`, `T.load` or `T.store` names.
+    cx := mod_ctx(pg, mi)
+    ce := kid1(cx, n)
+    cn := node_at(cx, ce)
+    if cn.kind == N_NAME
+        ret tok_text(cx, cn.t0)
+    end
+    bn := node_at(cx, kid1(cx, ce))
+    ret tok_text(cx, bn.t0)
+end
+
 proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
     -- The result type of a call; `(no value)` when it produces none.
     cx := mod_ctx(pg, mi)
     b := pg.sbuf
     ck := call_kind(pg, mi, n)
+    if ck == CK_VMAKE
+        ret vcall_type(pg, mi, n)
+    end
+    if ck == CK_VSPLAT
+        ret vcall_type(pg, mi, n)
+    end
+    if ck == CK_VLOAD
+        ret vcall_type(pg, mi, n)
+    end
+    if ck == CK_VSTORE
+        ret "(no value)"
+    end
     if ck == CK_SYSCALL
         ret "word"
     end
@@ -1846,6 +1889,22 @@ proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
     end
     if ck == CK_CPUCALL
         put(1, "CpuCall")
+        ret
+    end
+    if ck == CK_VMAKE
+        put(1, "VecMake")
+        ret
+    end
+    if ck == CK_VSPLAT
+        put(1, "VecSplat")
+        ret
+    end
+    if ck == CK_VLOAD
+        put(1, "VecLoad")
+        ret
+    end
+    if ck == CK_VSTORE
+        put(1, "VecStore")
         ret
     end
     if ck == CK_SEGS
@@ -3338,6 +3397,96 @@ proc tconv_lossless(src: view u8, dst: view u8) -> word
     ret 0
 end
 
+proc tvec_args(pg: rw ref Prog, mi: u64, n: u64, form: u64)
+    -- The arguments of `T(lanes…)` (0), `T.splat(x)` (1), `T.load(v, i)`
+    -- (2) and `T.store(v, i, x)` (3): each lane typed as the lane, the view
+    -- a view of the lane type (`rw` to store into), the index a `uword`.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    vt := vcall_type(pg, mi, n)
+    lane := vec_lane(vt)
+    a : u64 <- kid2(cx, n)
+    cnt : u64 <- 0
+    while a != 0
+        if form == 0
+            texpr(pg, mi, a, lane)
+        elif form == 1
+            texpr(pg, mi, a, lane)
+        elif cnt == 0
+            texpr(pg, mi, a, b[0..0])
+            vat := ety(pg, mi, a, b[0..0])
+            if view_eq(elem_of(vat), lane) == 0
+                terr(pg, mi, 200, a)
+            end
+            if form == 3
+                if starts_with(no_mmio(vat), "rw view ") == 0
+                    terr(pg, mi, 111, a)
+                end
+            end
+        elif cnt == 1
+            texpr(pg, mi, a, "uword")
+        else
+            texpr(pg, mi, a, vt)
+        end
+        cnt <- cnt + 1
+        a <- sibling(cx, a)
+    end
+    want : u64 <- vec_count(vt)
+    if form == 1
+        want <- 1
+    elif form == 2
+        want <- 2
+    elif form == 3
+        want <- 3
+    end
+    if cnt != want
+        terr(pg, mi, 205, n)
+    end
+end
+
+proc vec_op_ok(op: view u8, t: view u8) -> word
+    -- 1 an operator SSE2 has for this vector type, 2 one it has not
+    -- (E0900), 0 one with no vector meaning (E0200) — design 0024.
+    c := vec_code(t)
+    if view_eq(op, "+")
+        ret 1
+    end
+    if view_eq(op, "-")
+        ret 1
+    end
+    if view_eq(op, "&")
+        ret 1
+    end
+    if view_eq(op, "|")
+        ret 1
+    end
+    if view_eq(op, "^")
+        ret 1
+    end
+    if view_eq(op, "==")
+        ret 1
+    end
+    if view_eq(op, "!=")
+        ret 1
+    end
+    if view_eq(op, "*")
+        if c <= 1
+            ret 1
+        end
+        if c == 3
+            ret 1
+        end
+        ret 2
+    end
+    if view_eq(op, "/")
+        if c <= 1
+            ret 1
+        end
+        ret 2
+    end
+    ret 0
+end
+
 proc float_op_ok(op: view u8) -> word
     if view_eq(op, "+")
         ret 1
@@ -3391,6 +3540,34 @@ proc tbinop(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
         if float_op_ok(op) == 0
             -- `%`, the bit operations and the shifts have no float meaning.
             terr(pg, mi, 200, n)
+            ret
+        end
+    end
+    vt : view u8 <- b[0..0]
+    if is_vector(lt) == 1
+        vt <- lt
+    elif is_vector(rt) == 1
+        vt <- rt
+    end
+    if vt.len > 0
+        -- Both operands the same vector type: never a scalar or a literal
+        -- broadcast behind the reader's back (`T.splat(x)` says it).
+        if view_eq(lt, vt) == 0
+            terr(pg, mi, 200, n)
+            ret
+        end
+        if view_eq(rt, vt) == 0
+            terr(pg, mi, 200, n)
+            ret
+        end
+        vk := vec_op_ok(op, vt)
+        if vk == 0
+            terr(pg, mi, 200, n)
+            ret
+        end
+        if vk == 2
+            -- SSE2 has no instruction for it (design 0024).
+            terr(pg, mi, 900, n)
             ret
         end
     end
@@ -3490,6 +3667,22 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
         ret
     end
     if ck == CK_CPUCALL
+        ret
+    end
+    if ck == CK_VMAKE
+        tvec_args(pg, mi, n, 0)
+        ret
+    end
+    if ck == CK_VSPLAT
+        tvec_args(pg, mi, n, 1)
+        ret
+    end
+    if ck == CK_VLOAD
+        tvec_args(pg, mi, n, 2)
+        ret
+    end
+    if ck == CK_VSTORE
+        tvec_args(pg, mi, n, 3)
         ret
     end
     if ck == CK_SEGS
@@ -3791,6 +3984,10 @@ proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
         if is_float(have) == 1
             terr(pg, mi, 200, n)
         elif is_float(want) == 1
+            terr(pg, mi, 200, n)
+        elif is_vector(have) == 1
+            terr(pg, mi, 200, n)
+        elif is_vector(want) == 1
             terr(pg, mi, 200, n)
         end
     end

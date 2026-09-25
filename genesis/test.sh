@@ -1123,7 +1123,7 @@ grep -q 'E0200' build/chk.err || fail "checks: kernel_sketch must report its typ
 for f in ../tests/sema/ok/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli; do
     ( cd .. && genesis/build/show_sema < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
 done
-echo "ok: olic reports exactly the diagnostics of all eighteen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces, implicit narrowing, linear own values and members of scalars - and none on any positive fixture"
+echo "ok: olic reports exactly the diagnostics of all twenty tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces, implicit narrowing, linear own values, members of scalars, float rules and vector rules - and none on any positive fixture"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic front end and semantic analysis) passed"
 
@@ -1141,7 +1141,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli" "atomic tests/run/atomic.oli" "memops tests/run/memops.oli" "segments tests/run/segments.oli" "own tests/run/own.oli" "rodata tests/run/rodata.oli" "floats tests/run/floats.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli" "atomic tests/run/atomic.oli" "memops tests/run/memops.oli" "segments tests/run/segments.oli" "own tests/run/own.oli" "rodata tests/run/rodata.oli" "floats tests/run/floats.oli" "simd tests/run/simd.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1150,7 +1150,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging,atomic,memops,segments,own,rodata,floats}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging,atomic,memops,segments,own,rodata,floats,simd}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1172,7 +1172,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging atomic memops segments own rodata floats; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging atomic memops segments own rodata floats simd; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1402,6 +1402,21 @@ for want in '0.1 float 4591870180066957722 1036831949' '5e-324 float 1 0' '2.470
     grep -q "$rest" build/fl.tok || fail "floats: the literal $lit must lex as [$rest]"
 done
 echo "ok: f32/f64 run - SSE arithmetic, NaN-correct comparisons, conversions both ways (u64 past 2^63 too), .bits, float statics, arrays and fields, xmm arguments and results; literals correctly rounded to binary64 and binary32 from the decimal text"
+# tests/run/simd.oli: the SSE2 families of design 0024 in the image.
+objdump -d --no-show-raw-insn build/simd.elf > build/simd.dis
+for ins in movdqu addps subps mulps divps addpd paddd paddb paddq pmullw pand cmpeqps cmpeqpd pcmpeqb movmskps movmskpd pmovmskb; do
+    grep -q "$ins" build/simd.dis || fail "simd: $ins must be in simd.elf"
+done
+# A vector argument of an extern procedure is refused: SysV would pass it
+# in an xmm register, which the aggregate path does not do.
+printf -- '-- output: object\nmodule vx\nextern proc c_take(v : f32x4) -> s32\npub proc f() -> s32\n    ret c_take(f32x4.splat(1.0))\nend\n' > build/vx.oli
+set +e
+( cd .. && genesis/build/olic < genesis/build/vx.oli > genesis/build/vx.o 2> genesis/build/vx.err )
+st=$?
+set -e
+[ "$st" = 1 ] || fail "simd: a vector argument of an extern procedure exited $st, want E0900"
+grep -q 'E0900' build/vx.err || fail "simd: a vector argument of an extern procedure must be E0900"
+echo "ok: 128-bit vectors run - f32x4 f64x2 and the integer lanes: construction, splat, bounds-checked load/store and lanes, + - * / & | ^ and whole-vector ==/!= in SSE2 (objdump on simd.elf), passed and returned; what SSE2 lacks is E0900"
 echo "ok: own T and <~ run - a file descriptor acquired, moved, passed and released exactly once and never twice (own.elf exits 42 because closing it again fails), the wrap and the unwrap add no instruction, and the six linear diagnostics are exact"
 # Atomics (MACHINE_MODEL.md 5): every read-modify-write of tests/run/atomic.oli
 # is a lock-prefixed instruction at its width, and/or/xor a cmpxchg loop, a

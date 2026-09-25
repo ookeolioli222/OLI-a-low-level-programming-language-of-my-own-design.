@@ -1317,6 +1317,33 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 42 (2026-09-25): 128-bit vectors (design 0024)
+
+- **Ten types** — `f32x4 f64x2 s8x16 u8x16 s16x8 u16x8 s32x4 u32x4 s64x2
+  u64x2` — sixteen bytes each, values like a layout held by value (the
+  aggregate path gives locals, copies, parameters and results; `layout_param`
+  answers 16). SSE2 only, which every x86-64 CPU has.
+- **Forms.** `f32x4(a, b, c, d)` and `T.splat(x)` store the lanes into a
+  frame area; `T.load(v, i)` / `T.store(v, i, x)` copy sixteen bytes after
+  two bounds checks (first and last lane); `x[i]` and `x[i] <- e` reuse the
+  checked element access with the lane count as the length.
+- **Operators.** O_VBIN (`vadd.f32x4 %a, %b` …): `movdqu` of both operands,
+  the instruction, `movdqu` into its own frame area, whose address is the
+  value; O_VCMP: `cmpeqps`/`cmpeqpd`/`pcmpeqb`, the lane mask
+  (`movmskps/pd`, `pmovmskb`) against all ones. `+ - & | ^` everywhere
+  (integer lanes wrap), `*` on float lanes and `pmullw`, `/` on float lanes;
+  an operator SSE2 lacks is E0900, one with no vector meaning or with
+  operands of different types (a scalar, a literal) E0200.
+- `tests/run/simd.oli` runs twenty-five checks (dot product through a
+  procedure, u8 lanes wrapping 250 + 10 = 4, 300·300 in u16 lanes = 24464,
+  a NaN lane unequal, a u64 lane carrying no carry into its neighbour, an
+  accumulator in a loop); `tests/run/trap/simd_bounds.oli` traps on a load
+  past the end; `tests/sema/err/vectors.oli` pins eight diagnostics; the
+  harness finds every SSE2 family by objdump and refuses a vector argument
+  of an `extern` procedure (SysV would want an xmm register).
+- The negative-fixture count in the harness and README had stayed at
+  eighteen after stage 41 added `floats.oli`; it is twenty now, both.
+
 ## Implemented in stage 41 (2026-09-25): `f32` and `f64`
 
 - **Literals.** The lexer reads `1.5`, `2e-3`, `1_000.25`, `12E-1` as
@@ -1543,9 +1570,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 31,633 lines) into
+compiles its own source (`compiler/`, seventeen modules, 32,264 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,431,432 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,458,896 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

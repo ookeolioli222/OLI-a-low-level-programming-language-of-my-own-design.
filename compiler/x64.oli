@@ -1363,6 +1363,156 @@ proc lower_fcvt(ob: rw ref Oir, mc: ref Mach, i: u64)
     st_val(ob, mc, R_AX, i)
 end
 
+proc vload2(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `movdqu xmm0, [rax]`, `movdqu xmm1, [rcx]`: the two operands.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_AX, ins.a)
+    ld_val(ob, mc, R_CX, ins.b)
+    cb(ob, 243)
+    cb(ob, 15)
+    cb(ob, 111)
+    cb(ob, 0)
+    cb(ob, 243)
+    cb(ob, 15)
+    cb(ob, 111)
+    cb(ob, 9)
+end
+
+proc vop_opcode(c: u64, lane: u64) -> u64
+    -- The second opcode byte (after 0F) of the SSE2 instruction for B_*
+    -- operator `c` on lane code `lane`; the 66 prefix is the caller's.
+    if lane <= 1
+        if c == B_ADD
+            ret 88
+        end
+        if c == B_SUB
+            ret 92
+        end
+        if c == B_MUL
+            ret 89
+        end
+        if c == B_DIV
+            ret 94
+        end
+        if c == B_AND
+            ret 84
+        end
+        if c == B_OR
+            ret 86
+        end
+        ret 87
+    end
+    if c == B_AND
+        ret 219
+    end
+    if c == B_OR
+        ret 235
+    end
+    if c == B_XOR
+        ret 239
+    end
+    if c == B_MUL
+        -- pmullw, the 16-bit lanes (the checker allows no other).
+        ret 213
+    end
+    if c == B_ADD
+        if lane == 2
+            ret 252
+        end
+        if lane == 3
+            ret 253
+        end
+        if lane == 4
+            ret 254
+        end
+        ret 212
+    end
+    if lane == 2
+        ret 248
+    end
+    if lane == 3
+        ret 249
+    end
+    if lane == 4
+        ret 250
+    end
+    ret 251
+end
+
+proc lower_vbin(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- The operands into xmm0 and xmm1, the instruction, and xmm0 into the
+    -- result area (`movdqu [rax], xmm0`); the value is the area's address.
+    ins := ins_at(ob, i)
+    vload2(ob, mc, i)
+    if ins.val != 0
+        cb(ob, 102)
+    end
+    cb(ob, 15)
+    cb(ob, vop_opcode(ins.c, ins.val))
+    cb(ob, 193)
+    lea_slot(ob, R_AX, ins.w)
+    cb(ob, 243)
+    cb(ob, 15)
+    cb(ob, 127)
+    cb(ob, 0)
+    st_val(ob, mc, R_AX, i)
+end
+
+proc lower_vcmp(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- The whole vector equal: `cmpeqps`/`cmpeqpd` (a NaN lane is never
+    -- equal) or `pcmpeqb`, the lane mask into eax (`movmskps/pd`,
+    -- `pmovmskb`), compared with all ones.
+    ins := ins_at(ob, i)
+    vload2(ob, mc, i)
+    if ins.val == 0
+        cb(ob, 15)
+        cb(ob, 194)
+        cb(ob, 193)
+        cb(ob, 0)
+        cb(ob, 15)
+        cb(ob, 80)
+        cb(ob, 192)
+        cb(ob, 131)
+        cb(ob, 248)
+        cb(ob, 15)
+    elif ins.val == 1
+        cb(ob, 102)
+        cb(ob, 15)
+        cb(ob, 194)
+        cb(ob, 193)
+        cb(ob, 0)
+        cb(ob, 102)
+        cb(ob, 15)
+        cb(ob, 80)
+        cb(ob, 192)
+        cb(ob, 131)
+        cb(ob, 248)
+        cb(ob, 3)
+    else
+        cb(ob, 102)
+        cb(ob, 15)
+        cb(ob, 116)
+        cb(ob, 193)
+        cb(ob, 102)
+        cb(ob, 15)
+        cb(ob, 215)
+        cb(ob, 192)
+        cb(ob, 61)
+        c32(ob, 65535)
+    end
+    cb(ob, 15)
+    if ins.c == B_EQ
+        cb(ob, 148)
+    else
+        cb(ob, 149)
+    end
+    cb(ob, 192)
+    cb(ob, 15)
+    cb(ob, 182)
+    cb(ob, 192)
+    st_val(ob, mc, R_AX, i)
+end
+
 proc cvtsi2(ob: rw ref Oir, modrm: u64)
     -- The rest of `cvtsi2sd/ss xmm0, r64` after its prefix: REX.W 0F 2A /r.
     cb(ob, 72)
@@ -2367,6 +2517,14 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     if op == O_FRES
         movq_rx(ob, R_AX, 0)
         st_val(ob, mc, R_AX, i)
+        ret
+    end
+    if op == O_VBIN
+        lower_vbin(ob, mc, i)
+        ret
+    end
+    if op == O_VCMP
+        lower_vcmp(ob, mc, i)
         ret
     end
     if op == O_HWCALL

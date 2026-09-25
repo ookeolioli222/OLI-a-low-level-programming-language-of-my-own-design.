@@ -1,0 +1,742 @@
+(oir
+  (static 0 removed)
+  (static 1 removed)
+  (static 2 removed)
+  (static 3 removed)
+  (static 4 removed)
+  (static 5 removed)
+  (static 6 removed)
+  (static 7 removed)
+  (static 8 removed)
+  (static 9 removed)
+  (static 10 removed)
+  (static 11 removed)
+  (static 12 removed)
+  (static 13 removed)
+  (static 14 removed)
+  (static 15 removed)
+  (static 16 removed)
+  (static 17 removed)
+  (static 18 removed)
+  (static 19 removed)
+  (static 20 removed)
+  (static 21 removed)
+  (static 22 removed)
+  (static 23 len=27)
+  (static 24 removed)
+  (data 0 size=32 init)
+  (data 1 size=16 zero)
+  (proc dot4 locals=3 temps=2
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = addr.of frame.1
+      raw.store.64 %2, %0
+      %4 = const 8
+      %5 = add %2, %4
+      raw.store.64 %5, %1
+      %7 = param 2
+      %8 = param 3
+      %9 = addr.of frame.3
+      raw.store.64 %9, %7
+      %12 = add %9, %4
+      raw.store.64 %12, %8
+      vmul.f32x4 %2, %9
+      %17 = addr.of frame.5
+      %18 = raw.load.64 %16
+      raw.store.64 %17, %18
+      %21 = add %16, %4
+      %22 = add %17, %4
+      %23 = raw.load.64 %21
+      raw.store.64 %22, %23
+      %26 = const 4
+      %27 = const 0
+      ; check.bounds %27 -- removed: proof(constant)
+      %31 = add %17, %27
+      %32 = raw.load.32 %31
+      ; check.bounds %35 -- removed: proof(constant)
+      %39 = add %17, %26
+      %40 = raw.load.32 %39
+      fadd.32 %32, %40
+      ; check.bounds %44 -- removed: proof(constant)
+      %49 = raw.load.32 %22
+      fadd.32 %41, %49
+      ; check.bounds %53 -- removed: proof(constant)
+      %56 = const 12
+      %57 = add %17, %56
+      %58 = raw.load.32 %57
+      fadd.32 %50, %58
+      fret %59
+      ret %59))
+  (proc twice locals=1 temps=2
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = addr.of frame.1
+      raw.store.64 %2, %0
+      %4 = const 8
+      %5 = add %2, %4
+      raw.store.64 %5, %1
+      vadd.i32x4 %2, %2
+      %10 = raw.load.64 %9
+      %12 = add %9, %4
+      %13 = raw.load.64 %12
+      ret %10, %13))
+  (proc start locals=18 temps=60 entry
+    (bb0
+      %0 = addr.of frame.35
+      %1 = const 1065353216
+      %2 = const 0
+      %3 = add %0, %2
+      raw.store.32 %3, %1
+      %5 = const 1073741824
+      %6 = const 4
+      %7 = add %0, %6
+      raw.store.32 %7, %5
+      %9 = const 1077936128
+      %10 = const 8
+      %11 = add %0, %10
+      raw.store.32 %11, %9
+      %13 = const 1082130432
+      %14 = const 12
+      %15 = add %0, %14
+      raw.store.32 %15, %13
+      %17 = addr.of frame.1
+      %18 = raw.load.64 %0
+      raw.store.64 %17, %18
+      %22 = add %17, %10
+      %23 = raw.load.64 %11
+      raw.store.64 %22, %23
+      %25 = addr.of frame.37
+      %26 = const 1056964608
+      %28 = add %25, %2
+      raw.store.32 %28, %26
+      %31 = add %25, %6
+      raw.store.32 %31, %26
+      %34 = add %25, %10
+      raw.store.32 %34, %26
+      %37 = add %25, %14
+      raw.store.32 %37, %26
+      %39 = addr.of frame.3
+      %40 = raw.load.64 %25
+      raw.store.64 %39, %40
+      %44 = add %39, %10
+      %45 = raw.load.64 %34
+      raw.store.64 %44, %45
+      vmul.f32x4 %17, %39
+      %50 = addr.of frame.5
+      %51 = raw.load.64 %49
+      raw.store.64 %50, %51
+      %54 = add %49, %10
+      %55 = add %50, %10
+      %56 = raw.load.64 %54
+      raw.store.64 %55, %56
+      ; check.bounds %60 -- removed: proof(constant)
+      %64 = add %50, %2
+      %65 = raw.load.32 %64
+      fcmp.cmp.ne.32 %65, %26
+      branch %67, bb1, bb2)
+    (bb1 preds bb0
+      %68 = const 1
+      ret %68)
+    (bb2 preds bb0
+      %71 = const 3
+      ; check.bounds %71 -- removed: proof(constant)
+      %75 = add %50, %14
+      %76 = raw.load.32 %75
+      fcmp.cmp.ne.32 %76, %5
+      branch %78, bb3, bb4)
+    (bb3 preds bb2
+      %79 = const 2
+      ret %79)
+    (bb4 preds bb2
+      %81 = raw.load.64 %17
+      arg %81
+      %85 = raw.load.64 %22
+      arg %85
+      %88 = raw.load.64 %17
+      arg %88
+      %92 = raw.load.64 %22
+      arg %92
+      %94 = call dot4/4
+      fres
+      %96 = const 1106247680
+      fcmp.cmp.ne.32 %95, %96
+      branch %97, bb5, bb6)
+    (bb5 preds bb4
+      ret %71)
+    (bb6 preds bb4
+      vsub.f32x4 %17, %39
+      %102 = addr.of frame.7
+      %103 = raw.load.64 %101
+      raw.store.64 %102, %103
+      %106 = add %101, %10
+      %107 = add %102, %10
+      %108 = raw.load.64 %106
+      raw.store.64 %107, %108
+      %112 = const 1
+      ; check.bounds %112 -- removed: proof(constant)
+      %116 = add %102, %6
+      %117 = raw.load.32 %116
+      %118 = const 1069547520
+      fcmp.cmp.ne.32 %117, %118
+      branch %119, bb7, bb8)
+    (bb7 preds bb6
+      ret %6)
+    (bb8 preds bb6
+      %122 = addr.of frame.43
+      %125 = add %122, %2
+      raw.store.32 %125, %5
+      %128 = add %122, %6
+      raw.store.32 %128, %5
+      %131 = add %122, %10
+      raw.store.32 %131, %5
+      %134 = add %122, %14
+      raw.store.32 %134, %5
+      vdiv.f32x4 %17, %122
+      %137 = addr.of frame.9
+      %138 = raw.load.64 %136
+      raw.store.64 %137, %138
+      %141 = add %136, %10
+      %142 = add %137, %10
+      %143 = raw.load.64 %141
+      raw.store.64 %142, %143
+      %147 = const 2
+      ; check.bounds %147 -- removed: proof(constant)
+      %152 = raw.load.32 %142
+      fcmp.cmp.ne.32 %152, %118
+      branch %154, bb9, bb10)
+    (bb9 preds bb8
+      %155 = const 5
+      ret %155)
+    (bb10 preds bb8
+      %157 = addr.of frame.47
+      %160 = add %157, %2
+      raw.store.32 %160, %1
+      %164 = add %157, %6
+      raw.store.32 %164, %5
+      %168 = add %157, %10
+      raw.store.32 %168, %9
+      %172 = add %157, %14
+      raw.store.32 %172, %13
+      vcmp.cmp.eq.f32x4 %17, %157
+      %176 = cmp.eq %174, %2
+      branch %176, bb11, bb12)
+    (bb11 preds bb10
+      %177 = const 6
+      ret %177)
+    (bb12 preds bb10
+      vcmp.cmp.eq.f32x4 %17, %39
+      branch %180, bb13, bb14)
+    (bb13 preds bb12
+      %181 = const 7
+      ret %181)
+    (bb14 preds bb12
+      vcmp.cmp.ne.f32x4 %17, %39
+      %186 = cmp.eq %184, %2
+      branch %186, bb15, bb16)
+    (bb15 preds bb14
+      ret %10)
+    (bb16 preds bb14
+      %188 = addr.of data.0
+      ; check.bounds %190 -- removed: proof(constant)
+      %194 = add %188, %2
+      ; check.bounds %196 -- removed: proof(constant)
+      %199 = const 7
+      ; check.bounds %199 -- removed: proof(constant)
+      %202 = const 16
+      %203 = add %194, %202
+      %204 = addr.of frame.49
+      %205 = raw.load.64 %203
+      raw.store.64 %204, %205
+      %208 = add %203, %10
+      %209 = add %204, %10
+      %210 = raw.load.64 %208
+      raw.store.64 %209, %210
+      %212 = addr.of frame.11
+      %213 = raw.load.64 %204
+      raw.store.64 %212, %213
+      %217 = add %212, %10
+      %218 = raw.load.64 %209
+      raw.store.64 %217, %218
+      ; check.bounds %222 -- removed: proof(constant)
+      %226 = add %212, %2
+      %227 = raw.load.32 %226
+      %228 = const 1084227584
+      fcmp.cmp.ne.32 %227, %228
+      branch %229, bb17, bb18)
+    (bb17 preds bb16
+      %230 = const 9
+      ret %230)
+    (bb18 preds bb16
+      ; check.bounds %233 -- removed: proof(constant)
+      %237 = add %212, %14
+      %238 = raw.load.32 %237
+      %239 = const 1090519040
+      fcmp.cmp.ne.32 %238, %239
+      branch %240, bb19, bb20)
+    (bb19 preds bb18
+      %241 = const 10
+      ret %241)
+    (bb20 preds bb18
+      ; check.bounds %244 -- removed: proof(constant)
+      ; check.bounds %250 -- removed: proof(constant)
+      ; check.bounds %253 -- removed: proof(constant)
+      %257 = add %194, %2
+      vadd.f32x4 %212, %17
+      %261 = raw.load.64 %260
+      raw.store.64 %257, %261
+      %264 = add %260, %10
+      %265 = add %257, %10
+      %266 = raw.load.64 %264
+      raw.store.64 %265, %266
+      ; check.bounds %271 -- removed: proof(constant)
+      %276 = raw.load.32 %194
+      %277 = const 1086324736
+      fcmp.cmp.ne.32 %276, %277
+      branch %278, bb21, bb22)
+    (bb21 preds bb20
+      %279 = const 11
+      ret %279)
+    (bb22 preds bb20
+      ; check.bounds %282 -- removed: proof(constant)
+      %286 = add %188, %14
+      %287 = raw.load.32 %286
+      %288 = const 1094713344
+      fcmp.cmp.ne.32 %287, %288
+      branch %289, bb23, bb24)
+    (bb23 preds bb22
+      ret %14)
+    (bb24 preds bb22
+      ; check.bounds %293 -- removed: proof(constant)
+      %297 = add %188, %202
+      %298 = raw.load.32 %297
+      fcmp.cmp.ne.32 %298, %228
+      branch %300, bb25, bb26)
+    (bb25 preds bb24
+      %301 = const 13
+      ret %301)
+    (bb26 preds bb24
+      %302 = addr.of frame.53
+      %305 = add %302, %2
+      raw.store.32 %305, %112
+      %307 = const 18446744073709551614
+      %309 = add %302, %6
+      raw.store.32 %309, %307
+      %313 = add %302, %10
+      raw.store.32 %313, %71
+      %315 = const 2147483647
+      %317 = add %302, %14
+      raw.store.32 %317, %315
+      %319 = addr.of frame.13
+      %320 = raw.load.64 %302
+      raw.store.64 %319, %320
+      %324 = add %319, %10
+      %325 = raw.load.64 %313
+      raw.store.64 %324, %325
+      %328 = raw.load.64 %319
+      arg %328
+      %332 = raw.load.64 %324
+      arg %332
+      %334 = call twice/2
+      %335 = call.word1
+      %336 = addr.of frame.55
+      raw.store.64 %336, %334
+      %339 = add %336, %10
+      raw.store.64 %339, %335
+      %341 = addr.of frame.15
+      %342 = raw.load.64 %336
+      raw.store.64 %341, %342
+      %346 = add %341, %10
+      %347 = raw.load.64 %339
+      raw.store.64 %346, %347
+      ; check.bounds %351 -- removed: proof(constant)
+      %355 = add %341, %6
+      %356 = raw.load.32.s %355
+      %357 = const 18446744073709551612
+      %358 = cmp.ne.s %356, %357
+      branch %358, bb27, bb28)
+    (bb27 preds bb26
+      %359 = const 14
+      ret %359)
+    (bb28 preds bb26
+      ; check.bounds %362 -- removed: proof(constant)
+      %366 = add %341, %14
+      %367 = raw.load.32.s %366
+      %369 = cmp.ne.s %367, %307
+      branch %369, bb29, bb30)
+    (bb29 preds bb28
+      %370 = const 15
+      ret %370)
+    (bb30 preds bb28
+      ; check.bounds %373 -- removed: proof(constant)
+      %378 = const 100
+      raw.store.32 %324, %378
+      ; check.bounds %382 -- removed: proof(constant)
+      %387 = raw.load.32.s %324
+      %389 = cmp.ne.s %387, %378
+      branch %389, bb31, bb32)
+    (bb31 preds bb30
+      ret %202)
+    (bb32 preds bb30
+      %392 = addr.of frame.57
+      %393 = const 255
+      %395 = add %392, %2
+      raw.store.32 %395, %393
+      %398 = add %392, %6
+      raw.store.32 %398, %393
+      %401 = add %392, %10
+      raw.store.32 %401, %393
+      %404 = add %392, %14
+      raw.store.32 %404, %393
+      vand.i32x4 %319, %392
+      %407 = addr.of frame.17
+      %408 = raw.load.64 %406
+      raw.store.64 %407, %408
+      %411 = add %406, %10
+      %412 = add %407, %10
+      %413 = raw.load.64 %411
+      raw.store.64 %412, %413
+      ; check.bounds %417 -- removed: proof(constant)
+      %421 = add %407, %6
+      %422 = raw.load.32.s %421
+      %423 = const 254
+      %424 = cmp.ne.s %422, %423
+      branch %424, bb33, bb34)
+    (bb33 preds bb32
+      %425 = const 17
+      ret %425)
+    (bb34 preds bb32
+      %426 = addr.of frame.61
+      %427 = const 250
+      %429 = add %426, %2
+      raw.store.8 %429, %427
+      %432 = add %426, %112
+      raw.store.8 %432, %427
+      %435 = add %426, %147
+      raw.store.8 %435, %427
+      %438 = add %426, %71
+      raw.store.8 %438, %427
+      %441 = add %426, %6
+      raw.store.8 %441, %427
+      %443 = const 5
+      %444 = add %426, %443
+      raw.store.8 %444, %427
+      %446 = const 6
+      %447 = add %426, %446
+      raw.store.8 %447, %427
+      %450 = add %426, %199
+      raw.store.8 %450, %427
+      %453 = add %426, %10
+      raw.store.8 %453, %427
+      %455 = const 9
+      %456 = add %426, %455
+      raw.store.8 %456, %427
+      %458 = const 10
+      %459 = add %426, %458
+      raw.store.8 %459, %427
+      %461 = const 11
+      %462 = add %426, %461
+      raw.store.8 %462, %427
+      %465 = add %426, %14
+      raw.store.8 %465, %427
+      %467 = const 13
+      %468 = add %426, %467
+      raw.store.8 %468, %427
+      %470 = const 14
+      %471 = add %426, %470
+      raw.store.8 %471, %427
+      %473 = const 15
+      %474 = add %426, %473
+      raw.store.8 %474, %427
+      %476 = addr.of frame.63
+      %479 = add %476, %2
+      raw.store.8 %479, %458
+      %482 = add %476, %112
+      raw.store.8 %482, %458
+      %485 = add %476, %147
+      raw.store.8 %485, %458
+      %488 = add %476, %71
+      raw.store.8 %488, %458
+      %491 = add %476, %6
+      raw.store.8 %491, %458
+      %494 = add %476, %443
+      raw.store.8 %494, %458
+      %497 = add %476, %446
+      raw.store.8 %497, %458
+      %500 = add %476, %199
+      raw.store.8 %500, %458
+      %503 = add %476, %10
+      raw.store.8 %503, %458
+      %506 = add %476, %455
+      raw.store.8 %506, %458
+      %509 = add %476, %458
+      raw.store.8 %509, %458
+      %512 = add %476, %461
+      raw.store.8 %512, %458
+      %515 = add %476, %14
+      raw.store.8 %515, %458
+      %518 = add %476, %467
+      raw.store.8 %518, %458
+      %521 = add %476, %470
+      raw.store.8 %521, %458
+      %524 = add %476, %473
+      raw.store.8 %524, %458
+      vadd.i8x16 %426, %476
+      %527 = addr.of frame.19
+      %528 = raw.load.64 %526
+      raw.store.64 %527, %528
+      %531 = add %526, %10
+      %532 = add %527, %10
+      %533 = raw.load.64 %531
+      raw.store.64 %532, %533
+      ; check.bounds %537 -- removed: proof(constant)
+      %539 = add %527, %473
+      %540 = raw.load.8 %539
+      %542 = cmp.ne %540, %6
+      branch %542, bb35, bb36)
+    (bb35 preds bb34
+      %543 = const 18
+      ret %543)
+    (bb36 preds bb34
+      %544 = addr.of frame.67
+      %545 = const 300
+      %547 = add %544, %2
+      raw.store.16 %547, %545
+      %550 = add %544, %147
+      raw.store.16 %550, %545
+      %553 = add %544, %6
+      raw.store.16 %553, %545
+      %556 = add %544, %446
+      raw.store.16 %556, %545
+      %559 = add %544, %10
+      raw.store.16 %559, %545
+      %562 = add %544, %458
+      raw.store.16 %562, %545
+      %565 = add %544, %14
+      raw.store.16 %565, %545
+      %568 = add %544, %470
+      raw.store.16 %568, %545
+      %570 = addr.of frame.69
+      %573 = add %570, %2
+      raw.store.16 %573, %545
+      %576 = add %570, %147
+      raw.store.16 %576, %545
+      %579 = add %570, %6
+      raw.store.16 %579, %545
+      %582 = add %570, %446
+      raw.store.16 %582, %545
+      %585 = add %570, %10
+      raw.store.16 %585, %545
+      %588 = add %570, %458
+      raw.store.16 %588, %545
+      %591 = add %570, %14
+      raw.store.16 %591, %545
+      %594 = add %570, %470
+      raw.store.16 %594, %545
+      vmul.i16x8 %544, %570
+      %597 = addr.of frame.21
+      %598 = raw.load.64 %596
+      raw.store.64 %597, %598
+      %601 = add %596, %10
+      %602 = add %597, %10
+      %603 = raw.load.64 %601
+      raw.store.64 %602, %603
+      ; check.bounds %607 -- removed: proof(constant)
+      %611 = add %597, %2
+      %612 = raw.load.16 %611
+      %613 = const 24464
+      %614 = cmp.ne %612, %613
+      branch %614, bb37, bb38)
+    (bb37 preds bb36
+      %615 = const 19
+      ret %615)
+    (bb38 preds bb36
+      %616 = addr.of frame.73
+      %617 = const 4609434218613702656
+      %619 = add %616, %2
+      raw.store.64 %619, %617
+      %621 = const 4612811918334230528
+      %622 = const 9223372036854775808
+      %623 = xor %621, %622
+      %625 = add %616, %10
+      raw.store.64 %625, %623
+      %627 = addr.of frame.75
+      %628 = const 4607182418800017408
+      %630 = add %627, %2
+      raw.store.64 %630, %628
+      %633 = add %627, %10
+      raw.store.64 %633, %628
+      vadd.f64x2 %616, %627
+      %636 = addr.of frame.23
+      %637 = raw.load.64 %635
+      raw.store.64 %636, %637
+      %640 = add %635, %10
+      %641 = add %636, %10
+      %642 = raw.load.64 %640
+      raw.store.64 %641, %642
+      ; check.bounds %646 -- removed: proof(constant)
+      %651 = raw.load.64 %641
+      %654 = xor %617, %622
+      fcmp.cmp.ne.64 %651, %654
+      branch %655, bb39, bb40)
+    (bb39 preds bb38
+      %656 = const 20
+      ret %656)
+    (bb40 preds bb38
+      %658 = addr.of frame.79
+      fdiv.64 %2, %2
+      %661 = add %658, %2
+      raw.store.64 %661, %659
+      %664 = add %658, %10
+      raw.store.64 %664, %659
+      %666 = addr.of frame.26
+      %667 = raw.load.64 %658
+      raw.store.64 %666, %667
+      %671 = add %666, %10
+      %672 = raw.load.64 %664
+      raw.store.64 %671, %672
+      vcmp.cmp.eq.f64x2 %666, %666
+      branch %676, bb41, bb42)
+    (bb41 preds bb40
+      %677 = const 21
+      ret %677)
+    (bb42 preds bb40
+      %678 = addr.of frame.81
+      %679 = const 18446744073709551615
+      %681 = add %678, %2
+      raw.store.64 %681, %679
+      %685 = add %678, %10
+      raw.store.64 %685, %112
+      %687 = addr.of frame.83
+      %690 = add %687, %2
+      raw.store.64 %690, %112
+      %693 = add %687, %10
+      raw.store.64 %693, %112
+      vadd.i64x2 %678, %687
+      %696 = addr.of frame.28
+      %697 = raw.load.64 %695
+      raw.store.64 %696, %697
+      %700 = add %695, %10
+      %701 = add %696, %10
+      %702 = raw.load.64 %700
+      raw.store.64 %701, %702
+      ; check.bounds %706 -- removed: proof(constant)
+      %710 = add %696, %2
+      %711 = raw.load.64 %710
+      %713 = cmp.ne %711, %2
+      branch %713, bb43, bb44)
+    (bb43 preds bb42
+      %714 = const 22
+      ret %714)
+    (bb44 preds bb42
+      ; check.bounds %717 -- removed: proof(constant)
+      %722 = raw.load.64 %701
+      %724 = cmp.ne %722, %147
+      branch %724, bb45, bb46)
+    (bb45 preds bb44
+      %725 = const 23
+      ret %725)
+    (bb46 preds bb44
+      %726 = addr.of data.1
+      ; check.bounds %728 -- removed: proof(constant)
+      %730 = add %726, %2
+      ; check.bounds %732 -- removed: proof(constant)
+      ; check.bounds %735 -- removed: proof(constant)
+      %737 = add %730, %2
+      %738 = addr.of frame.87
+      %739 = raw.load.64 %737
+      raw.store.64 %738, %739
+      %742 = add %737, %10
+      %743 = add %738, %10
+      %744 = raw.load.64 %742
+      raw.store.64 %743, %744
+      %746 = addr.of frame.30
+      %747 = raw.load.64 %738
+      raw.store.64 %746, %747
+      %751 = add %746, %10
+      %752 = raw.load.64 %743
+      raw.store.64 %751, %752
+      %755 = addr.of frame.89
+      %758 = add %755, %2
+      raw.store.8 %758, %2
+      %761 = add %755, %112
+      raw.store.8 %761, %2
+      %764 = add %755, %147
+      raw.store.8 %764, %2
+      %767 = add %755, %71
+      raw.store.8 %767, %2
+      %770 = add %755, %6
+      raw.store.8 %770, %2
+      %773 = add %755, %443
+      raw.store.8 %773, %2
+      %776 = add %755, %446
+      raw.store.8 %776, %2
+      %779 = add %755, %199
+      raw.store.8 %779, %2
+      %782 = add %755, %10
+      raw.store.8 %782, %2
+      %785 = add %755, %455
+      raw.store.8 %785, %2
+      %788 = add %755, %458
+      raw.store.8 %788, %2
+      %791 = add %755, %461
+      raw.store.8 %791, %2
+      %794 = add %755, %14
+      raw.store.8 %794, %2
+      %797 = add %755, %467
+      raw.store.8 %797, %2
+      %800 = add %755, %470
+      raw.store.8 %800, %2
+      %803 = add %755, %473
+      raw.store.8 %803, %2
+      vcmp.cmp.eq.i8x16 %746, %755
+      %807 = cmp.eq %805, %2
+      branch %807, bb47, bb48)
+    (bb47 preds bb46
+      %808 = const 24
+      ret %808)
+    (bb48 preds bb46
+      %809 = addr.of frame.91
+      %812 = add %809, %2
+      raw.store.32 %812, %2
+      %815 = add %809, %6
+      raw.store.32 %815, %2
+      %818 = add %809, %10
+      raw.store.32 %818, %2
+      %821 = add %809, %14
+      raw.store.32 %821, %2
+      %823 = addr.of frame.32
+      %824 = raw.load.64 %809
+      raw.store.64 %823, %824
+      %828 = add %823, %10
+      %829 = raw.load.64 %818
+      raw.store.64 %828, %829
+      jump bb49)
+    (bb49 preds bb48 bb50
+      %832 = phi [bb48 %2] [bb50 %847]
+      %834 = cmp.lt %832, %443
+      branch %834, bb50, bb51)
+    (bb50 preds bb49
+      vadd.f32x4 %823, %17
+      %839 = raw.load.64 %837
+      raw.store.64 %823, %839
+      %842 = add %837, %10
+      %844 = raw.load.64 %842
+      raw.store.64 %828, %844
+      %847 = add %832, %112
+      check.overflow %847
+      jump bb49)
+    (bb51 preds bb49
+      ; check.bounds %850 -- removed: proof(constant)
+      %854 = add %823, %14
+      %855 = raw.load.32 %854
+      %856 = const 1101004800
+      fcmp.cmp.ne.32 %855, %856
+      branch %857, bb52, bb53)
+    (bb52 preds bb51
+      %858 = const 25
+      ret %858)
+    (bb53 preds bb51
+      %859 = const 42
+      ret %859)))

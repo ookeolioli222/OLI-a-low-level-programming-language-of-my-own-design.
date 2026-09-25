@@ -103,6 +103,82 @@ proc starts_with(s: view u8, p: view u8) -> word
     ret view_eq(s[..p.len], p)
 end
 
+proc vec_count(t: view u8) -> u64
+    -- The lanes of a 128-bit vector type (design 0024), 0 for any other.
+    if view_eq(t, "f32x4")
+        ret 4
+    end
+    if view_eq(t, "f64x2")
+        ret 2
+    end
+    if view_eq(t, "s8x16")
+        ret 16
+    end
+    if view_eq(t, "u8x16")
+        ret 16
+    end
+    if view_eq(t, "s16x8")
+        ret 8
+    end
+    if view_eq(t, "u16x8")
+        ret 8
+    end
+    if view_eq(t, "s32x4")
+        ret 4
+    end
+    if view_eq(t, "u32x4")
+        ret 4
+    end
+    if view_eq(t, "s64x2")
+        ret 2
+    end
+    if view_eq(t, "u64x2")
+        ret 2
+    end
+    ret 0
+end
+
+proc is_vector(t: view u8) -> word
+    if vec_count(t) > 0
+        ret 1
+    end
+    ret 0
+end
+
+proc vec_lane(t: view u8) -> view u8
+    -- `f32x4` -> `f32`: the name up to the `x`.
+    i : u64 <- 0
+    while i < t.len
+        if t[i] == 120
+            ret t[0..i]
+        end
+        i <- i + 1
+    end
+    ret t
+end
+
+proc vec_code(t: view u8) -> u64
+    -- 0 f32x4, 1 f64x2, then the integer lanes by width: 2 bytes, 3
+    -- 16-bit, 4 32-bit, 5 64-bit.
+    if view_eq(t, "f32x4")
+        ret 0
+    end
+    if view_eq(t, "f64x2")
+        ret 1
+    end
+    n := vec_count(t)
+    if n == 16
+        ret 2
+    end
+    if n == 8
+        ret 3
+    end
+    if n == 4
+        ret 4
+    end
+    ret 5
+end
+
 proc elem_of(v: view u8) -> view u8
     -- `rw view u8` and `view u8` both have element type `u8`, and so does
     -- the array place `[N]u8`.
@@ -124,6 +200,10 @@ proc elem_of(v: view u8) -> view u8
             end
             i <- i + 1
         end
+    end
+    if vec_count(s) > 0
+        -- A vector's element is its lane.
+        ret vec_lane(s)
     end
     ret s
 end

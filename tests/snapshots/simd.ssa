@@ -1,0 +1,1079 @@
+(oir
+  (static 0 len=25)
+  (static 1 len=25)
+  (static 2 len=25)
+  (static 3 len=25)
+  (static 4 len=25)
+  (static 5 len=25)
+  (static 6 len=25)
+  (static 7 len=25)
+  (static 8 len=25)
+  (static 9 len=25)
+  (static 10 len=25)
+  (static 11 len=25)
+  (static 12 len=25)
+  (static 13 len=25)
+  (static 14 len=25)
+  (static 15 len=25)
+  (static 16 len=25)
+  (static 17 len=25)
+  (static 18 len=25)
+  (static 19 len=25)
+  (static 20 len=25)
+  (static 21 len=25)
+  (static 22 len=25)
+  (static 23 len=27)
+  (static 24 len=25)
+  (data 0 size=32 init)
+  (data 1 size=16 zero)
+  (proc dot4 locals=3 temps=2
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = addr.of frame.1
+      raw.store.64 %2, %0
+      %4 = const 8
+      %5 = add %2, %4
+      raw.store.64 %5, %1
+      %7 = param 2
+      %8 = param 3
+      %9 = addr.of frame.3
+      raw.store.64 %9, %7
+      %11 = const 8
+      %12 = add %9, %11
+      raw.store.64 %12, %8
+      %14 = addr.of frame.1
+      %15 = addr.of frame.3
+      vmul.f32x4 %14, %15
+      %17 = addr.of frame.5
+      %18 = raw.load.64 %16
+      raw.store.64 %17, %18
+      %20 = const 8
+      %21 = add %16, %20
+      %22 = add %17, %20
+      %23 = raw.load.64 %21
+      raw.store.64 %22, %23
+      %25 = addr.of frame.5
+      %26 = const 4
+      %27 = const 0
+      check.bounds %27, %26
+      %29 = const 4
+      %30 = mul %27, %29
+      %31 = add %25, %30
+      %32 = raw.load.32 %31
+      %33 = addr.of frame.5
+      %34 = const 4
+      %35 = const 1
+      check.bounds %35, %34
+      %37 = const 4
+      %38 = mul %35, %37
+      %39 = add %33, %38
+      %40 = raw.load.32 %39
+      fadd.32 %32, %40
+      %42 = addr.of frame.5
+      %43 = const 4
+      %44 = const 2
+      check.bounds %44, %43
+      %46 = const 4
+      %47 = mul %44, %46
+      %48 = add %42, %47
+      %49 = raw.load.32 %48
+      fadd.32 %41, %49
+      %51 = addr.of frame.5
+      %52 = const 4
+      %53 = const 3
+      check.bounds %53, %52
+      %55 = const 4
+      %56 = mul %53, %55
+      %57 = add %51, %56
+      %58 = raw.load.32 %57
+      fadd.32 %50, %58
+      fret %59
+      ret %59))
+  (proc twice locals=1 temps=2
+    (bb0
+      %0 = param 0
+      %1 = param 1
+      %2 = addr.of frame.1
+      raw.store.64 %2, %0
+      %4 = const 8
+      %5 = add %2, %4
+      raw.store.64 %5, %1
+      %7 = addr.of frame.1
+      %8 = addr.of frame.1
+      vadd.i32x4 %7, %8
+      %10 = raw.load.64 %9
+      %11 = const 8
+      %12 = add %9, %11
+      %13 = raw.load.64 %12
+      ret %10, %13))
+  (proc start locals=18 temps=60 entry
+    (bb0
+      %0 = addr.of frame.35
+      %1 = const 1065353216
+      %2 = const 0
+      %3 = add %0, %2
+      raw.store.32 %3, %1
+      %5 = const 1073741824
+      %6 = const 4
+      %7 = add %0, %6
+      raw.store.32 %7, %5
+      %9 = const 1077936128
+      %10 = const 8
+      %11 = add %0, %10
+      raw.store.32 %11, %9
+      %13 = const 1082130432
+      %14 = const 12
+      %15 = add %0, %14
+      raw.store.32 %15, %13
+      %17 = addr.of frame.1
+      %18 = raw.load.64 %0
+      raw.store.64 %17, %18
+      %20 = const 8
+      %21 = add %0, %20
+      %22 = add %17, %20
+      %23 = raw.load.64 %21
+      raw.store.64 %22, %23
+      %25 = addr.of frame.37
+      %26 = const 1056964608
+      %27 = const 0
+      %28 = add %25, %27
+      raw.store.32 %28, %26
+      %30 = const 4
+      %31 = add %25, %30
+      raw.store.32 %31, %26
+      %33 = const 8
+      %34 = add %25, %33
+      raw.store.32 %34, %26
+      %36 = const 12
+      %37 = add %25, %36
+      raw.store.32 %37, %26
+      %39 = addr.of frame.3
+      %40 = raw.load.64 %25
+      raw.store.64 %39, %40
+      %42 = const 8
+      %43 = add %25, %42
+      %44 = add %39, %42
+      %45 = raw.load.64 %43
+      raw.store.64 %44, %45
+      %47 = addr.of frame.1
+      %48 = addr.of frame.3
+      vmul.f32x4 %47, %48
+      %50 = addr.of frame.5
+      %51 = raw.load.64 %49
+      raw.store.64 %50, %51
+      %53 = const 8
+      %54 = add %49, %53
+      %55 = add %50, %53
+      %56 = raw.load.64 %54
+      raw.store.64 %55, %56
+      %58 = addr.of frame.5
+      %59 = const 4
+      %60 = const 0
+      check.bounds %60, %59
+      %62 = const 4
+      %63 = mul %60, %62
+      %64 = add %58, %63
+      %65 = raw.load.32 %64
+      %66 = const 1056964608
+      fcmp.cmp.ne.32 %65, %66
+      branch %67, bb1, bb2)
+    (bb1 preds bb0
+      %68 = const 1
+      ret %68)
+    (bb2 preds bb0
+      %69 = addr.of frame.5
+      %70 = const 4
+      %71 = const 3
+      check.bounds %71, %70
+      %73 = const 4
+      %74 = mul %71, %73
+      %75 = add %69, %74
+      %76 = raw.load.32 %75
+      %77 = const 1073741824
+      fcmp.cmp.ne.32 %76, %77
+      branch %78, bb3, bb4)
+    (bb3 preds bb2
+      %79 = const 2
+      ret %79)
+    (bb4 preds bb2
+      %80 = addr.of frame.1
+      %81 = raw.load.64 %80
+      arg %81
+      %83 = const 8
+      %84 = add %80, %83
+      %85 = raw.load.64 %84
+      arg %85
+      %87 = addr.of frame.1
+      %88 = raw.load.64 %87
+      arg %88
+      %90 = const 8
+      %91 = add %87, %90
+      %92 = raw.load.64 %91
+      arg %92
+      %94 = call dot4/4
+      fres
+      %96 = const 1106247680
+      fcmp.cmp.ne.32 %95, %96
+      branch %97, bb5, bb6)
+    (bb5 preds bb4
+      %98 = const 3
+      ret %98)
+    (bb6 preds bb4
+      %99 = addr.of frame.1
+      %100 = addr.of frame.3
+      vsub.f32x4 %99, %100
+      %102 = addr.of frame.7
+      %103 = raw.load.64 %101
+      raw.store.64 %102, %103
+      %105 = const 8
+      %106 = add %101, %105
+      %107 = add %102, %105
+      %108 = raw.load.64 %106
+      raw.store.64 %107, %108
+      %110 = addr.of frame.7
+      %111 = const 4
+      %112 = const 1
+      check.bounds %112, %111
+      %114 = const 4
+      %115 = mul %112, %114
+      %116 = add %110, %115
+      %117 = raw.load.32 %116
+      %118 = const 1069547520
+      fcmp.cmp.ne.32 %117, %118
+      branch %119, bb7, bb8)
+    (bb7 preds bb6
+      %120 = const 4
+      ret %120)
+    (bb8 preds bb6
+      %121 = addr.of frame.1
+      %122 = addr.of frame.43
+      %123 = const 1073741824
+      %124 = const 0
+      %125 = add %122, %124
+      raw.store.32 %125, %123
+      %127 = const 4
+      %128 = add %122, %127
+      raw.store.32 %128, %123
+      %130 = const 8
+      %131 = add %122, %130
+      raw.store.32 %131, %123
+      %133 = const 12
+      %134 = add %122, %133
+      raw.store.32 %134, %123
+      vdiv.f32x4 %121, %122
+      %137 = addr.of frame.9
+      %138 = raw.load.64 %136
+      raw.store.64 %137, %138
+      %140 = const 8
+      %141 = add %136, %140
+      %142 = add %137, %140
+      %143 = raw.load.64 %141
+      raw.store.64 %142, %143
+      %145 = addr.of frame.9
+      %146 = const 4
+      %147 = const 2
+      check.bounds %147, %146
+      %149 = const 4
+      %150 = mul %147, %149
+      %151 = add %145, %150
+      %152 = raw.load.32 %151
+      %153 = const 1069547520
+      fcmp.cmp.ne.32 %152, %153
+      branch %154, bb9, bb10)
+    (bb9 preds bb8
+      %155 = const 5
+      ret %155)
+    (bb10 preds bb8
+      %156 = addr.of frame.1
+      %157 = addr.of frame.47
+      %158 = const 1065353216
+      %159 = const 0
+      %160 = add %157, %159
+      raw.store.32 %160, %158
+      %162 = const 1073741824
+      %163 = const 4
+      %164 = add %157, %163
+      raw.store.32 %164, %162
+      %166 = const 1077936128
+      %167 = const 8
+      %168 = add %157, %167
+      raw.store.32 %168, %166
+      %170 = const 1082130432
+      %171 = const 12
+      %172 = add %157, %171
+      raw.store.32 %172, %170
+      vcmp.cmp.eq.f32x4 %156, %157
+      %175 = const 0
+      %176 = cmp.eq %174, %175
+      branch %176, bb11, bb12)
+    (bb11 preds bb10
+      %177 = const 6
+      ret %177)
+    (bb12 preds bb10
+      %178 = addr.of frame.1
+      %179 = addr.of frame.3
+      vcmp.cmp.eq.f32x4 %178, %179
+      branch %180, bb13, bb14)
+    (bb13 preds bb12
+      %181 = const 7
+      ret %181)
+    (bb14 preds bb12
+      %182 = addr.of frame.1
+      %183 = addr.of frame.3
+      vcmp.cmp.ne.f32x4 %182, %183
+      %185 = const 0
+      %186 = cmp.eq %184, %185
+      branch %186, bb15, bb16)
+    (bb15 preds bb14
+      %187 = const 8
+      ret %187)
+    (bb16 preds bb14
+      %188 = addr.of data.0
+      %189 = const 8
+      %190 = const 0
+      check.range %190, %189, %189
+      %192 = const 4
+      %193 = mul %190, %192
+      %194 = add %188, %193
+      %195 = sub %189, %190
+      %196 = const 4
+      check.bounds %196, %195
+      %198 = const 3
+      %199 = add %196, %198
+      check.bounds %199, %195
+      %201 = const 4
+      %202 = mul %196, %201
+      %203 = add %194, %202
+      %204 = addr.of frame.49
+      %205 = raw.load.64 %203
+      raw.store.64 %204, %205
+      %207 = const 8
+      %208 = add %203, %207
+      %209 = add %204, %207
+      %210 = raw.load.64 %208
+      raw.store.64 %209, %210
+      %212 = addr.of frame.11
+      %213 = raw.load.64 %204
+      raw.store.64 %212, %213
+      %215 = const 8
+      %216 = add %204, %215
+      %217 = add %212, %215
+      %218 = raw.load.64 %216
+      raw.store.64 %217, %218
+      %220 = addr.of frame.11
+      %221 = const 4
+      %222 = const 0
+      check.bounds %222, %221
+      %224 = const 4
+      %225 = mul %222, %224
+      %226 = add %220, %225
+      %227 = raw.load.32 %226
+      %228 = const 1084227584
+      fcmp.cmp.ne.32 %227, %228
+      branch %229, bb17, bb18)
+    (bb17 preds bb16
+      %230 = const 9
+      ret %230)
+    (bb18 preds bb16
+      %231 = addr.of frame.11
+      %232 = const 4
+      %233 = const 3
+      check.bounds %233, %232
+      %235 = const 4
+      %236 = mul %233, %235
+      %237 = add %231, %236
+      %238 = raw.load.32 %237
+      %239 = const 1090519040
+      fcmp.cmp.ne.32 %238, %239
+      branch %240, bb19, bb20)
+    (bb19 preds bb18
+      %241 = const 10
+      ret %241)
+    (bb20 preds bb18
+      %242 = addr.of data.0
+      %243 = const 8
+      %244 = const 0
+      check.range %244, %243, %243
+      %246 = const 4
+      %247 = mul %244, %246
+      %248 = add %242, %247
+      %249 = sub %243, %244
+      %250 = const 0
+      check.bounds %250, %249
+      %252 = const 3
+      %253 = add %250, %252
+      check.bounds %253, %249
+      %255 = const 4
+      %256 = mul %250, %255
+      %257 = add %248, %256
+      %258 = addr.of frame.11
+      %259 = addr.of frame.1
+      vadd.f32x4 %258, %259
+      %261 = raw.load.64 %260
+      raw.store.64 %257, %261
+      %263 = const 8
+      %264 = add %260, %263
+      %265 = add %257, %263
+      %266 = raw.load.64 %264
+      raw.store.64 %265, %266
+      %268 = const 0
+      %269 = addr.of data.0
+      %270 = const 8
+      %271 = const 0
+      check.bounds %271, %270
+      %273 = const 4
+      %274 = mul %271, %273
+      %275 = add %269, %274
+      %276 = raw.load.32 %275
+      %277 = const 1086324736
+      fcmp.cmp.ne.32 %276, %277
+      branch %278, bb21, bb22)
+    (bb21 preds bb20
+      %279 = const 11
+      ret %279)
+    (bb22 preds bb20
+      %280 = addr.of data.0
+      %281 = const 8
+      %282 = const 3
+      check.bounds %282, %281
+      %284 = const 4
+      %285 = mul %282, %284
+      %286 = add %280, %285
+      %287 = raw.load.32 %286
+      %288 = const 1094713344
+      fcmp.cmp.ne.32 %287, %288
+      branch %289, bb23, bb24)
+    (bb23 preds bb22
+      %290 = const 12
+      ret %290)
+    (bb24 preds bb22
+      %291 = addr.of data.0
+      %292 = const 8
+      %293 = const 4
+      check.bounds %293, %292
+      %295 = const 4
+      %296 = mul %293, %295
+      %297 = add %291, %296
+      %298 = raw.load.32 %297
+      %299 = const 1084227584
+      fcmp.cmp.ne.32 %298, %299
+      branch %300, bb25, bb26)
+    (bb25 preds bb24
+      %301 = const 13
+      ret %301)
+    (bb26 preds bb24
+      %302 = addr.of frame.53
+      %303 = const 1
+      %304 = const 0
+      %305 = add %302, %304
+      raw.store.32 %305, %303
+      %307 = const 18446744073709551614
+      %308 = const 4
+      %309 = add %302, %308
+      raw.store.32 %309, %307
+      %311 = const 3
+      %312 = const 8
+      %313 = add %302, %312
+      raw.store.32 %313, %311
+      %315 = const 2147483647
+      %316 = const 12
+      %317 = add %302, %316
+      raw.store.32 %317, %315
+      %319 = addr.of frame.13
+      %320 = raw.load.64 %302
+      raw.store.64 %319, %320
+      %322 = const 8
+      %323 = add %302, %322
+      %324 = add %319, %322
+      %325 = raw.load.64 %323
+      raw.store.64 %324, %325
+      %327 = addr.of frame.13
+      %328 = raw.load.64 %327
+      arg %328
+      %330 = const 8
+      %331 = add %327, %330
+      %332 = raw.load.64 %331
+      arg %332
+      %334 = call twice/2
+      %335 = call.word1
+      %336 = addr.of frame.55
+      raw.store.64 %336, %334
+      %338 = const 8
+      %339 = add %336, %338
+      raw.store.64 %339, %335
+      %341 = addr.of frame.15
+      %342 = raw.load.64 %336
+      raw.store.64 %341, %342
+      %344 = const 8
+      %345 = add %336, %344
+      %346 = add %341, %344
+      %347 = raw.load.64 %345
+      raw.store.64 %346, %347
+      %349 = addr.of frame.15
+      %350 = const 4
+      %351 = const 1
+      check.bounds %351, %350
+      %353 = const 4
+      %354 = mul %351, %353
+      %355 = add %349, %354
+      %356 = raw.load.32.s %355
+      %357 = const 18446744073709551612
+      %358 = cmp.ne.s %356, %357
+      branch %358, bb27, bb28)
+    (bb27 preds bb26
+      %359 = const 14
+      ret %359)
+    (bb28 preds bb26
+      %360 = addr.of frame.15
+      %361 = const 4
+      %362 = const 3
+      check.bounds %362, %361
+      %364 = const 4
+      %365 = mul %362, %364
+      %366 = add %360, %365
+      %367 = raw.load.32.s %366
+      %368 = const 18446744073709551614
+      %369 = cmp.ne.s %367, %368
+      branch %369, bb29, bb30)
+    (bb29 preds bb28
+      %370 = const 15
+      ret %370)
+    (bb30 preds bb28
+      %371 = addr.of frame.13
+      %372 = const 4
+      %373 = const 2
+      check.bounds %373, %372
+      %375 = const 4
+      %376 = mul %373, %375
+      %377 = add %371, %376
+      %378 = const 100
+      raw.store.32 %377, %378
+      %380 = addr.of frame.13
+      %381 = const 4
+      %382 = const 2
+      check.bounds %382, %381
+      %384 = const 4
+      %385 = mul %382, %384
+      %386 = add %380, %385
+      %387 = raw.load.32.s %386
+      %388 = const 100
+      %389 = cmp.ne.s %387, %388
+      branch %389, bb31, bb32)
+    (bb31 preds bb30
+      %390 = const 16
+      ret %390)
+    (bb32 preds bb30
+      %391 = addr.of frame.13
+      %392 = addr.of frame.57
+      %393 = const 255
+      %394 = const 0
+      %395 = add %392, %394
+      raw.store.32 %395, %393
+      %397 = const 4
+      %398 = add %392, %397
+      raw.store.32 %398, %393
+      %400 = const 8
+      %401 = add %392, %400
+      raw.store.32 %401, %393
+      %403 = const 12
+      %404 = add %392, %403
+      raw.store.32 %404, %393
+      vand.i32x4 %391, %392
+      %407 = addr.of frame.17
+      %408 = raw.load.64 %406
+      raw.store.64 %407, %408
+      %410 = const 8
+      %411 = add %406, %410
+      %412 = add %407, %410
+      %413 = raw.load.64 %411
+      raw.store.64 %412, %413
+      %415 = addr.of frame.17
+      %416 = const 4
+      %417 = const 1
+      check.bounds %417, %416
+      %419 = const 4
+      %420 = mul %417, %419
+      %421 = add %415, %420
+      %422 = raw.load.32.s %421
+      %423 = const 254
+      %424 = cmp.ne.s %422, %423
+      branch %424, bb33, bb34)
+    (bb33 preds bb32
+      %425 = const 17
+      ret %425)
+    (bb34 preds bb32
+      %426 = addr.of frame.61
+      %427 = const 250
+      %428 = const 0
+      %429 = add %426, %428
+      raw.store.8 %429, %427
+      %431 = const 1
+      %432 = add %426, %431
+      raw.store.8 %432, %427
+      %434 = const 2
+      %435 = add %426, %434
+      raw.store.8 %435, %427
+      %437 = const 3
+      %438 = add %426, %437
+      raw.store.8 %438, %427
+      %440 = const 4
+      %441 = add %426, %440
+      raw.store.8 %441, %427
+      %443 = const 5
+      %444 = add %426, %443
+      raw.store.8 %444, %427
+      %446 = const 6
+      %447 = add %426, %446
+      raw.store.8 %447, %427
+      %449 = const 7
+      %450 = add %426, %449
+      raw.store.8 %450, %427
+      %452 = const 8
+      %453 = add %426, %452
+      raw.store.8 %453, %427
+      %455 = const 9
+      %456 = add %426, %455
+      raw.store.8 %456, %427
+      %458 = const 10
+      %459 = add %426, %458
+      raw.store.8 %459, %427
+      %461 = const 11
+      %462 = add %426, %461
+      raw.store.8 %462, %427
+      %464 = const 12
+      %465 = add %426, %464
+      raw.store.8 %465, %427
+      %467 = const 13
+      %468 = add %426, %467
+      raw.store.8 %468, %427
+      %470 = const 14
+      %471 = add %426, %470
+      raw.store.8 %471, %427
+      %473 = const 15
+      %474 = add %426, %473
+      raw.store.8 %474, %427
+      %476 = addr.of frame.63
+      %477 = const 10
+      %478 = const 0
+      %479 = add %476, %478
+      raw.store.8 %479, %477
+      %481 = const 1
+      %482 = add %476, %481
+      raw.store.8 %482, %477
+      %484 = const 2
+      %485 = add %476, %484
+      raw.store.8 %485, %477
+      %487 = const 3
+      %488 = add %476, %487
+      raw.store.8 %488, %477
+      %490 = const 4
+      %491 = add %476, %490
+      raw.store.8 %491, %477
+      %493 = const 5
+      %494 = add %476, %493
+      raw.store.8 %494, %477
+      %496 = const 6
+      %497 = add %476, %496
+      raw.store.8 %497, %477
+      %499 = const 7
+      %500 = add %476, %499
+      raw.store.8 %500, %477
+      %502 = const 8
+      %503 = add %476, %502
+      raw.store.8 %503, %477
+      %505 = const 9
+      %506 = add %476, %505
+      raw.store.8 %506, %477
+      %508 = const 10
+      %509 = add %476, %508
+      raw.store.8 %509, %477
+      %511 = const 11
+      %512 = add %476, %511
+      raw.store.8 %512, %477
+      %514 = const 12
+      %515 = add %476, %514
+      raw.store.8 %515, %477
+      %517 = const 13
+      %518 = add %476, %517
+      raw.store.8 %518, %477
+      %520 = const 14
+      %521 = add %476, %520
+      raw.store.8 %521, %477
+      %523 = const 15
+      %524 = add %476, %523
+      raw.store.8 %524, %477
+      vadd.i8x16 %426, %476
+      %527 = addr.of frame.19
+      %528 = raw.load.64 %526
+      raw.store.64 %527, %528
+      %530 = const 8
+      %531 = add %526, %530
+      %532 = add %527, %530
+      %533 = raw.load.64 %531
+      raw.store.64 %532, %533
+      %535 = addr.of frame.19
+      %536 = const 16
+      %537 = const 15
+      check.bounds %537, %536
+      %539 = add %535, %537
+      %540 = raw.load.8 %539
+      %541 = const 4
+      %542 = cmp.ne %540, %541
+      branch %542, bb35, bb36)
+    (bb35 preds bb34
+      %543 = const 18
+      ret %543)
+    (bb36 preds bb34
+      %544 = addr.of frame.67
+      %545 = const 300
+      %546 = const 0
+      %547 = add %544, %546
+      raw.store.16 %547, %545
+      %549 = const 2
+      %550 = add %544, %549
+      raw.store.16 %550, %545
+      %552 = const 4
+      %553 = add %544, %552
+      raw.store.16 %553, %545
+      %555 = const 6
+      %556 = add %544, %555
+      raw.store.16 %556, %545
+      %558 = const 8
+      %559 = add %544, %558
+      raw.store.16 %559, %545
+      %561 = const 10
+      %562 = add %544, %561
+      raw.store.16 %562, %545
+      %564 = const 12
+      %565 = add %544, %564
+      raw.store.16 %565, %545
+      %567 = const 14
+      %568 = add %544, %567
+      raw.store.16 %568, %545
+      %570 = addr.of frame.69
+      %571 = const 300
+      %572 = const 0
+      %573 = add %570, %572
+      raw.store.16 %573, %571
+      %575 = const 2
+      %576 = add %570, %575
+      raw.store.16 %576, %571
+      %578 = const 4
+      %579 = add %570, %578
+      raw.store.16 %579, %571
+      %581 = const 6
+      %582 = add %570, %581
+      raw.store.16 %582, %571
+      %584 = const 8
+      %585 = add %570, %584
+      raw.store.16 %585, %571
+      %587 = const 10
+      %588 = add %570, %587
+      raw.store.16 %588, %571
+      %590 = const 12
+      %591 = add %570, %590
+      raw.store.16 %591, %571
+      %593 = const 14
+      %594 = add %570, %593
+      raw.store.16 %594, %571
+      vmul.i16x8 %544, %570
+      %597 = addr.of frame.21
+      %598 = raw.load.64 %596
+      raw.store.64 %597, %598
+      %600 = const 8
+      %601 = add %596, %600
+      %602 = add %597, %600
+      %603 = raw.load.64 %601
+      raw.store.64 %602, %603
+      %605 = addr.of frame.21
+      %606 = const 8
+      %607 = const 0
+      check.bounds %607, %606
+      %609 = const 2
+      %610 = mul %607, %609
+      %611 = add %605, %610
+      %612 = raw.load.16 %611
+      %613 = const 24464
+      %614 = cmp.ne %612, %613
+      branch %614, bb37, bb38)
+    (bb37 preds bb36
+      %615 = const 19
+      ret %615)
+    (bb38 preds bb36
+      %616 = addr.of frame.73
+      %617 = const 4609434218613702656
+      %618 = const 0
+      %619 = add %616, %618
+      raw.store.64 %619, %617
+      %621 = const 4612811918334230528
+      %622 = const 9223372036854775808
+      %623 = xor %621, %622
+      %624 = const 8
+      %625 = add %616, %624
+      raw.store.64 %625, %623
+      %627 = addr.of frame.75
+      %628 = const 4607182418800017408
+      %629 = const 0
+      %630 = add %627, %629
+      raw.store.64 %630, %628
+      %632 = const 8
+      %633 = add %627, %632
+      raw.store.64 %633, %628
+      vadd.f64x2 %616, %627
+      %636 = addr.of frame.23
+      %637 = raw.load.64 %635
+      raw.store.64 %636, %637
+      %639 = const 8
+      %640 = add %635, %639
+      %641 = add %636, %639
+      %642 = raw.load.64 %640
+      raw.store.64 %641, %642
+      %644 = addr.of frame.23
+      %645 = const 2
+      %646 = const 1
+      check.bounds %646, %645
+      %648 = const 8
+      %649 = mul %646, %648
+      %650 = add %644, %649
+      %651 = raw.load.64 %650
+      %652 = const 4609434218613702656
+      %653 = const 9223372036854775808
+      %654 = xor %652, %653
+      fcmp.cmp.ne.64 %651, %654
+      branch %655, bb39, bb40)
+    (bb39 preds bb38
+      %656 = const 20
+      ret %656)
+    (bb40 preds bb38
+      %657 = const 0
+      %658 = addr.of frame.79
+      fdiv.64 %657, %657
+      %660 = const 0
+      %661 = add %658, %660
+      raw.store.64 %661, %659
+      %663 = const 8
+      %664 = add %658, %663
+      raw.store.64 %664, %659
+      %666 = addr.of frame.26
+      %667 = raw.load.64 %658
+      raw.store.64 %666, %667
+      %669 = const 8
+      %670 = add %658, %669
+      %671 = add %666, %669
+      %672 = raw.load.64 %670
+      raw.store.64 %671, %672
+      %674 = addr.of frame.26
+      %675 = addr.of frame.26
+      vcmp.cmp.eq.f64x2 %674, %675
+      branch %676, bb41, bb42)
+    (bb41 preds bb40
+      %677 = const 21
+      ret %677)
+    (bb42 preds bb40
+      %678 = addr.of frame.81
+      %679 = const 18446744073709551615
+      %680 = const 0
+      %681 = add %678, %680
+      raw.store.64 %681, %679
+      %683 = const 1
+      %684 = const 8
+      %685 = add %678, %684
+      raw.store.64 %685, %683
+      %687 = addr.of frame.83
+      %688 = const 1
+      %689 = const 0
+      %690 = add %687, %689
+      raw.store.64 %690, %688
+      %692 = const 8
+      %693 = add %687, %692
+      raw.store.64 %693, %688
+      vadd.i64x2 %678, %687
+      %696 = addr.of frame.28
+      %697 = raw.load.64 %695
+      raw.store.64 %696, %697
+      %699 = const 8
+      %700 = add %695, %699
+      %701 = add %696, %699
+      %702 = raw.load.64 %700
+      raw.store.64 %701, %702
+      %704 = addr.of frame.28
+      %705 = const 2
+      %706 = const 0
+      check.bounds %706, %705
+      %708 = const 8
+      %709 = mul %706, %708
+      %710 = add %704, %709
+      %711 = raw.load.64 %710
+      %712 = const 0
+      %713 = cmp.ne %711, %712
+      branch %713, bb43, bb44)
+    (bb43 preds bb42
+      %714 = const 22
+      ret %714)
+    (bb44 preds bb42
+      %715 = addr.of frame.28
+      %716 = const 2
+      %717 = const 1
+      check.bounds %717, %716
+      %719 = const 8
+      %720 = mul %717, %719
+      %721 = add %715, %720
+      %722 = raw.load.64 %721
+      %723 = const 2
+      %724 = cmp.ne %722, %723
+      branch %724, bb45, bb46)
+    (bb45 preds bb44
+      %725 = const 23
+      ret %725)
+    (bb46 preds bb44
+      %726 = addr.of data.1
+      %727 = const 16
+      %728 = const 0
+      check.range %728, %727, %727
+      %730 = add %726, %728
+      %731 = sub %727, %728
+      %732 = const 0
+      check.bounds %732, %731
+      %734 = const 15
+      %735 = add %732, %734
+      check.bounds %735, %731
+      %737 = add %730, %732
+      %738 = addr.of frame.87
+      %739 = raw.load.64 %737
+      raw.store.64 %738, %739
+      %741 = const 8
+      %742 = add %737, %741
+      %743 = add %738, %741
+      %744 = raw.load.64 %742
+      raw.store.64 %743, %744
+      %746 = addr.of frame.30
+      %747 = raw.load.64 %738
+      raw.store.64 %746, %747
+      %749 = const 8
+      %750 = add %738, %749
+      %751 = add %746, %749
+      %752 = raw.load.64 %750
+      raw.store.64 %751, %752
+      %754 = addr.of frame.30
+      %755 = addr.of frame.89
+      %756 = const 0
+      %757 = const 0
+      %758 = add %755, %757
+      raw.store.8 %758, %756
+      %760 = const 1
+      %761 = add %755, %760
+      raw.store.8 %761, %756
+      %763 = const 2
+      %764 = add %755, %763
+      raw.store.8 %764, %756
+      %766 = const 3
+      %767 = add %755, %766
+      raw.store.8 %767, %756
+      %769 = const 4
+      %770 = add %755, %769
+      raw.store.8 %770, %756
+      %772 = const 5
+      %773 = add %755, %772
+      raw.store.8 %773, %756
+      %775 = const 6
+      %776 = add %755, %775
+      raw.store.8 %776, %756
+      %778 = const 7
+      %779 = add %755, %778
+      raw.store.8 %779, %756
+      %781 = const 8
+      %782 = add %755, %781
+      raw.store.8 %782, %756
+      %784 = const 9
+      %785 = add %755, %784
+      raw.store.8 %785, %756
+      %787 = const 10
+      %788 = add %755, %787
+      raw.store.8 %788, %756
+      %790 = const 11
+      %791 = add %755, %790
+      raw.store.8 %791, %756
+      %793 = const 12
+      %794 = add %755, %793
+      raw.store.8 %794, %756
+      %796 = const 13
+      %797 = add %755, %796
+      raw.store.8 %797, %756
+      %799 = const 14
+      %800 = add %755, %799
+      raw.store.8 %800, %756
+      %802 = const 15
+      %803 = add %755, %802
+      raw.store.8 %803, %756
+      vcmp.cmp.eq.i8x16 %754, %755
+      %806 = const 0
+      %807 = cmp.eq %805, %806
+      branch %807, bb47, bb48)
+    (bb47 preds bb46
+      %808 = const 24
+      ret %808)
+    (bb48 preds bb46
+      %809 = addr.of frame.91
+      %810 = const 0
+      %811 = const 0
+      %812 = add %809, %811
+      raw.store.32 %812, %810
+      %814 = const 4
+      %815 = add %809, %814
+      raw.store.32 %815, %810
+      %817 = const 8
+      %818 = add %809, %817
+      raw.store.32 %818, %810
+      %820 = const 12
+      %821 = add %809, %820
+      raw.store.32 %821, %810
+      %823 = addr.of frame.32
+      %824 = raw.load.64 %809
+      raw.store.64 %823, %824
+      %826 = const 8
+      %827 = add %809, %826
+      %828 = add %823, %826
+      %829 = raw.load.64 %827
+      raw.store.64 %828, %829
+      %831 = const 0
+      jump bb49)
+    (bb49 preds bb48 bb50
+      %832 = phi [bb48 %831] [bb50 %847]
+      %833 = const 5
+      %834 = cmp.lt %832, %833
+      branch %834, bb50, bb51)
+    (bb50 preds bb49
+      %835 = addr.of frame.32
+      %836 = addr.of frame.1
+      vadd.f32x4 %835, %836
+      %838 = addr.of frame.32
+      %839 = raw.load.64 %837
+      raw.store.64 %838, %839
+      %841 = const 8
+      %842 = add %837, %841
+      %843 = add %838, %841
+      %844 = raw.load.64 %842
+      raw.store.64 %843, %844
+      %846 = const 1
+      %847 = add %832, %846
+      check.overflow %847
+      jump bb49)
+    (bb51 preds bb49
+      %848 = addr.of frame.32
+      %849 = const 4
+      %850 = const 3
+      check.bounds %850, %849
+      %852 = const 4
+      %853 = mul %850, %852
+      %854 = add %848, %853
+      %855 = raw.load.32 %854
+      %856 = const 1101004800
+      fcmp.cmp.ne.32 %855, %856
+      branch %857, bb52, bb53)
+    (bb52 preds bb51
+      %858 = const 25
+      ret %858)
+    (bb53 preds bb51
+      %859 = const 42
+      ret %859)))

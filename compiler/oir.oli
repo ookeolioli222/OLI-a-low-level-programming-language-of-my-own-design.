@@ -211,6 +211,12 @@ O_FCMP := 54
 O_FCVT := 55
 O_FRET := 56
 O_FRES := 57
+-- Vectors (design 0024): `vop.OP.T %a, %b` (O_VBIN: the two sixteen-byte
+-- operands at the addresses a and b, `c` the B_* operator, `val` the lane
+-- code, `w` the frame word of the result area; the value is its address)
+-- and `vcmp.OP.T %a, %b` (O_VCMP: a bool, the whole vector equal or not).
+O_VBIN := 58
+O_VCMP := 59
 
 -- A local as the debug information describes it (compiler/elf.oli): the
 -- procedure, its module and name token, a type class (DV_BASE and on) with
@@ -951,6 +957,12 @@ proc op_uses_a(op: u64) -> word
     if op == O_FCMP
         ret 1
     end
+    if op == O_VBIN
+        ret 1
+    end
+    if op == O_VCMP
+        ret 1
+    end
     if op == O_CPUID
         ret 1
     end
@@ -1019,6 +1031,12 @@ proc op_uses_b(op: u64) -> word
         ret 1
     end
     if op == O_FCMP
+        ret 1
+    end
+    if op == O_VBIN
+        ret 1
+    end
+    if op == O_VCMP
         ret 1
     end
     if op == O_CPUID
@@ -1945,7 +1963,11 @@ proc is_array_type(t: view u8) -> word
 end
 
 proc arr_or_view(t: view u8) -> word
-    -- A view, or an array place read as the view of its bytes.
+    -- A view, or an array place read as the view of its bytes, or a vector
+    -- whose lanes are indexed like elements.
+    if is_vector(t) == 1
+        ret 1
+    end
     if is_view_type(t) == 1
         ret 1
     end
@@ -1953,6 +1975,9 @@ proc arr_or_view(t: view u8) -> word
 end
 
 proc view_elem(t: view u8) -> view u8
+    if is_vector(t) == 1
+        ret vec_lane(t)
+    end
     if is_array_type(t) == 1
         ret arr_elem(t)
     end
@@ -2141,6 +2166,12 @@ proc gen_call_args(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, pi: word, h
         lay : u64 <- 0
         if pi >= 0
             lay <- layout_param(pg, want)
+            if is_vector(want) == 1
+                if proc_is_extern(pg, u64.bits(pi)) == 1
+                    -- SysV passes `__m128` in an xmm register (design 0024).
+                    oir_err(ob, pg, mi, 900, a)
+                end
+            end
         end
         v := gen_expr(pg, ob, mi, a, want)
         if lay > 0
@@ -2601,6 +2632,26 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ck := call_kind(pg, mi, n)
     if ck == CK_SYSCALL
         ret gen_syscall(pg, ob, mi, n)
+    end
+    if ck == CK_VMAKE
+        ret gen_vmake(pg, ob, mi, n, 0)
+    end
+    if ck == CK_VSPLAT
+        ret gen_vmake(pg, ob, mi, n, 1)
+    end
+    if ck == CK_VLOAD
+        vp := gen_vspan(pg, ob, mi, n)
+        varea := tmp_area(ob, 16)
+        gen_copy(ob, varea, vp, 16)
+        ret varea
+    end
+    if ck == CK_VSTORE
+        sp := gen_vspan(pg, ob, mi, n)
+        sx := sibling(cx, sibling(cx, kid2(cx, n)))
+        sval := gen_expr(pg, ob, mi, sx, vcall_type(pg, mi, n))
+        gen_copy(ob, sp, sval, 16)
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end
     if ck == CK_BYTES
         ret gen_bytes(pg, ob, mi, n)
@@ -3276,7 +3327,11 @@ proc gen_index_addr(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     sz := elem_bytes(pg, ob, mi, bt, n)
     a := gen_expr(pg, ob, mi, base, b[0..0])
-    ln := ob.lastlen
+    ln : u64 <- ob.lastlen
+    if is_vector(bt) == 1
+        -- A vector's lanes: its address, and the count as the length.
+        ln <- emit_ins(ob, O_CONST, 0, 0, 0, vec_count(bt))
+    end
     idx := gen_expr(pg, ob, mi, kid2(cx, n), "uword")
     ck := emit_ins(ob, O_CHKB, idx, ln, 0, 0)
     ci := ins_at(ob, ck)
@@ -3373,6 +3428,9 @@ proc gen_binop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) 
     ot := binop_operand_type(pg, mi, n)
     if is_float(ot) == 1
         ret gen_fbinop(pg, ob, mi, n, ot)
+    end
+    if is_vector(ot) == 1
+        ret gen_vbinop(pg, ob, mi, n, ot)
     end
     if ot.len == 0
         -- Two float literals: the context names the format.
@@ -5753,6 +5811,106 @@ proc hw_stmts_ok(pg: ref Prog, mi: u64, first: u64) -> word
     ret 1
 end
 
+proc vec_name(c: u64) -> view u8
+    if c == 0
+        ret "f32x4"
+    end
+    if c == 1
+        ret "f64x2"
+    end
+    if c == 2
+        ret "i8x16"
+    end
+    if c == 3
+        ret "i16x8"
+    end
+    if c == 4
+        ret "i32x4"
+    end
+    ret "i64x2"
+end
+
+proc area_word(ob: rw ref Oir, nbytes: u64) -> u64
+    -- The lowest frame word of a fresh area of `nbytes`, for an operation
+    -- that writes its result there itself (O_VBIN).
+    nw := (nbytes + 7) / 8
+    last : u64 <- 0
+    k : u64 <- 0
+    while k < nw
+        last <- new_tmp(ob)
+        k <- k + 1
+    end
+    ret last
+end
+
+proc gen_vbinop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, ot: view u8) -> u64
+    -- A vector operator: both operands are addresses of sixteen bytes.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    code := binop_code(tok_text(cx, nd.t0))
+    la := gen_expr(pg, ob, mi, kid1(cx, n), ot)
+    ra := gen_expr(pg, ob, mi, kid2(cx, n), ot)
+    ob.lastlen <- 0
+    if code >= B_EQ
+        ret emit_ins(ob, O_VCMP, la, ra, code, vec_code(ot))
+    end
+    w := area_word(ob, 16)
+    v := emit_ins(ob, O_VBIN, la, ra, code, vec_code(ot))
+    vi := ins_at(ob, v)
+    vi.w <- w
+    ret v
+end
+
+proc gen_vmake(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, splat: u64) -> u64
+    -- `T(lanes…)` / `T.splat(x)`: a sixteen-byte area of the frame, each
+    -- lane stored at its width.
+    cx := mod_ctx(pg, mi)
+    vt := vcall_type(pg, mi, n)
+    lane := vec_lane(vt)
+    lb := u64.bits(mem_bits(lane)) / 8
+    area := tmp_area(ob, 16)
+    a : u64 <- kid2(cx, n)
+    sv : u64 <- 0
+    if splat == 1
+        sv <- gen_expr(pg, ob, mi, a, lane)
+    end
+    k : u64 <- 0
+    while k < vec_count(vt)
+        v : u64 <- sv
+        if splat == 0
+            v <- gen_expr(pg, ob, mi, a, lane)
+            a <- sibling(cx, a)
+        end
+        off := emit_ins(ob, O_CONST, 0, 0, 0, k * lb)
+        emit_ins(ob, O_RSTORE, addr_add(ob, area, off), v, lb, 0)
+        k <- k + 1
+    end
+    ob.lastlen <- 0
+    ret area
+end
+
+proc gen_vspan(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
+    -- The address of lanes `v[i..i+N]` of the view argument of
+    -- `T.load`/`T.store`, with a bounds check on the first and the last.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    vt := vcall_type(pg, mi, n)
+    lb := u64.bits(mem_bits(vec_lane(vt))) / 8
+    a0 := kid2(cx, n)
+    va := gen_expr(pg, ob, mi, a0, b[0..0])
+    ln := ob.lastlen
+    idx := gen_expr(pg, ob, mi, sibling(cx, a0), "uword")
+    c1 := emit_ins(ob, O_CHKB, idx, ln, 0, 0)
+    i1 := ins_at(ob, c1)
+    i1.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+    lastv := emit_bin(ob, B_ADD, idx, emit_ins(ob, O_CONST, 0, 0, 0, vec_count(vt) - 1), 0)
+    c2 := emit_ins(ob, O_CHKB, lastv, ln, 0, 0)
+    i2 := ins_at(ob, c2)
+    i2.site <- trap_static(pg, ob, mi, TK_BOUNDS, n) + 1
+    ob.lastlen <- 0
+    ret addr_add(ob, va, scale_by(ob, idx, lb))
+end
+
 proc fcvt_name(k: u64) -> view u8
     if k == 0
         ret "fcvt.from_signed"
@@ -5972,7 +6130,11 @@ end
 proc layout_param(pg: ref Prog, t: view u8) -> u64
     -- The size of an aggregate held by its address — a layout by value, or
     -- a choice wider than a word, whose image lies in memory — and 0 for
-    -- any other type; a choice that fits a word travels as that word.
+    -- any other type; a choice that fits a word travels as that word. A
+    -- 128-bit vector (design 0024) is one of sixteen bytes.
+    if is_vector(t) == 1
+        ret 16
+    end
     if is_view_type(t) == 1
         ret 0
     end
@@ -6557,6 +6719,12 @@ proc oir_op_name(op: u64) -> view u8
     if op == O_FRES
         ret "fres"
     end
+    if op == O_VBIN
+        ret "vop"
+    end
+    if op == O_VCMP
+        ret "vcmp"
+    end
     if op == O_ZALLOC
         ret "zone.alloc"
     end
@@ -6956,6 +7124,28 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     end
     if op == O_FRES
         put(1, "fres")
+        ret
+    end
+    if op == O_VBIN
+        put(1, "v")
+        put(1, oir_bin_name(ins.c))
+        put(1, ".")
+        put(1, vec_name(ins.val))
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_VCMP
+        put(1, "vcmp.")
+        put(1, oir_bin_name(ins.c))
+        put(1, ".")
+        put(1, vec_name(ins.val))
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
         ret
     end
     if op == O_SEGS

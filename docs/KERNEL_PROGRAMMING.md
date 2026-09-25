@@ -48,7 +48,7 @@ construct answers each system-programming requirement.
 | port I/O | `port.u8/u16/u32[n]` as a place, and the `port T` value type with `p.in()` / `p.out(v)`, under `io.port` — **runs**: one `in` or `out` each, volatile (`tests/run/hw.oli`; the kernel example programs COM1, the 8259 PICs and the 8253 PIT with them) | V0 |
 | syscalls | `os.syscall` (hosted programs); a kernel *implements* syscalls with `calls interrupt` or a `machine` `syscall` entry stub | V0 / V1 |
 | page tables | `core.x64.paging` over `[512]u64` statics aligned 4096, installed through `arch.x64.cr3` | V0 (**runs**, structurally in the kernel) |
-| SIMD registers | `machine` blocks in V0; native vector types in V2 | V0 / V2 |
+| SIMD registers | `machine` blocks; native 128-bit vector types (`f32x4`, `u8x16`, … — design 0024, SSE2) **run** | V0 |
 | TLS | `cpu.fs_base`/`gs_base` intrinsics; `thread` statics | V2 |
 | custom allocators | `zone ... from HANDLE`; allocator layouts in `core.mem` | V0 / V1 |
 | manual stack manipulation | `machine` blocks (`lea rsp, [...]`), `calls none`, `boot_stack` statics | V0 |
