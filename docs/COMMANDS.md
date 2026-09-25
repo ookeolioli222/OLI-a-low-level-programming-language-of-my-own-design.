@@ -382,7 +382,7 @@ tool).
 | `--lib DIR` | where imported modules are found | planned; `lib/` under the working directory today |
 | `oli new/build/run/test/fmt/check/bench/doc/package/fuzz` | the project tool | planned |
 | `./genesis/test.sh` | build the whole chain from 322 hand-written bytes and run every test, layers 0–5 | **runs** |
-| `.vscode/tasks.json`, `tools/vscode-oli/` | build, run and inspect the current file from VS Code; syntax highlighting | **runs** (a convenience outside the toolchain; `olis`/`olide` of `docs/IDE_PLAN.md` replace it) |
+| `.vscode/tasks.json`, `.vscode/launch.json`, `tools/vscode-oli/`, `tools/run-kernel.sh` | build, run and inspect the current file from VS Code; syntax highlighting; boot the kernel under QEMU; debug a program or the kernel with gdb on `.oli` lines (`tools/vscode-oli/README.md` §5–6) | **runs** (a convenience outside the toolchain; `olis`/`olide` of `docs/IDE_PLAN.md` replace it) |
 
 ### What `olic` refuses today, in one list
 

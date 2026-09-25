@@ -1,0 +1,43 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "oli: debug current file (gdb)",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "oli: compile current file",
+            "program": "${fileDirname}/${fileBasenameNoExtension}",
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "miDebuggerPath": "gdb",
+            "stopAtEntry": false,
+            "setupCommands": [
+                {
+                    "description": "the DWARF names a module's file (a.b is a/b.oli): look beside the program and in lib/",
+                    "text": "directory ${fileDirname}:${workspaceFolder}/lib",
+                    "ignoreFailures": false
+                }
+            ]
+        },
+        {
+            "name": "oli: debug the kernel in QEMU (gdb)",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "oli: boot the kernel in QEMU, halted for gdb",
+            "postDebugTask": "oli: stop QEMU",
+            "program": "${workspaceFolder}/genesis/build/kernel.elf",
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "miDebuggerPath": "gdb",
+            "miDebuggerServerAddress": "localhost:1234",
+            "stopAtConnect": false,
+            "setupCommands": [
+                {
+                    "description": "the kernel's sources and the library's",
+                    "text": "directory ${workspaceFolder}/examples:${workspaceFolder}/lib",
+                    "ignoreFailures": false
+                }
+            ]
+        }
+    ]
+}

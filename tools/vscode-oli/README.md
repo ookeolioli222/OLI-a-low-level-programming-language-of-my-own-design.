@@ -68,7 +68,8 @@ Open the repository folder in VS Code (`File > Open Folder`), so that
 | `Run Task… > oli: check current file` | analyses without writing a file — the fastest way to see if a construct is accepted, or which `E0xxx` it gets |
 | `Run Task… > oli: show OIR after the passes` | the program after constant folding and check elision; every removed check is printed where it stood with its proof |
 | `Run Task… > oli: show semantic graph` | the type and region of every expression |
-| `Terminal > Run Test Task` (or `Run Task… > oli: build toolchain and run every test`) | `./genesis/test.sh`: the whole chain, layers 0–5 |
+| `Run Task… > oli: boot the kernel in QEMU` | compiles `examples/kernel.oli` and boots it (§5); COM1 is the terminal |
+| `Terminal > Run Test Task` (or `Run Task… > oli: build toolchain and run every test`) | `./genesis/test.sh`: the whole chain, layers 0–6 |
 
 The convention of the repository's own fixtures is the one to copy for a
 test program: exit **42** when every check held and **N** for the number of
@@ -97,9 +98,85 @@ exit 0; a `.in` file is its stdin, `/dev/null` otherwise) or into
 `tests/run/trap/`, and `./genesis/test.sh` picks it up on the next run; that
 is how every construct in `docs/COMMANDS.md` marked **runs** is pinned.
 
-## 5. What to expect
+## 5. Booting the kernel
+
+`examples/kernel.oli` is a kernel that boots from a Multiboot loader. QEMU
+runs it; install it once:
+
+```bash
+sudo apt install qemu-system-x86
+```
+
+In VS Code: `Terminal > Run Task… > oli: boot the kernel in QEMU`. From a
+terminal it is the same script:
+
+```bash
+tools/run-kernel.sh                  # examples/kernel.oli
+tools/run-kernel.sh my_kernel.oli    # any freestanding program with a Multiboot header
+OLI_QEMU_MEM=128 tools/run-kernel.sh # more memory: the kernel reports more free frames
+```
+
+The script compiles the file to `genesis/build/NAME.elf`, starts QEMU with no
+window and COM1 on the terminal, and ends when the kernel writes QEMU's
+isa-debug-exit port. The output is:
+
+```
+Oli-- kernel
+cpu: AuthenticAMD                          (or GenuineIntel)
+memory: 2 regions, 15840 frames free
+frame: 0000000000200000 written and read
+int 3 at 0000000000102229
+back from int 3
+timer: 100 ticks
+[the kernel finished: isa-debug-exit, qemu status 33]
+```
+
+To watch the VGA text screen too, run QEMU yourself without `-display none`:
+
+```bash
+qemu-system-x86_64 -kernel genesis/build/kernel.elf -serial stdio \
+    -device isa-debug-exit,iobase=0x501,iosize=1
+```
+
+## 6. Debugging
+
+Every executable carries DWARF line tables, so gdb stops on `.oli` lines,
+names procedures (`kernel.main`, `core.frames.alloc`) and prints the call
+stack. VS Code drives gdb through the **C/C++** extension
+(`ms-vscode.cpptools`); install it from the Extensions view. `gdb` itself
+comes with `sudo apt install gdb`.
+
+`.vscode/launch.json` has two configurations (`Run and Debug` view, or F5):
+
+| Configuration | What it does |
+|---------------|--------------|
+| **oli: debug current file (gdb)** | compiles the open `.oli` file (it must have `entry`) and runs it under gdb; a breakpoint set by clicking left of a line number stops there |
+| **oli: debug the kernel in QEMU (gdb)** | boots the kernel halted (`tools/run-kernel.sh --gdb`), attaches gdb to QEMU on port 1234, and runs; breakpoints in `examples/kernel.oli` and in `lib/` stop the virtual CPU; stopping the session stops QEMU |
+
+`.vscode/settings.json` sets `debug.allowBreakpointsEverywhere`, because VS
+Code only lets you click a breakpoint into a language a debugger declares.
+
+Two things to know. The line table names each module's file as the module
+path says (`core/frames.oli` for `core.frames`), so both configurations tell
+gdb where to look: next to the program, in `examples/`, and in `lib/`. Values
+of locals are not shown yet: the DWARF has lines and procedures but no
+variable locations (`docs/ABI.md` §7), so step, stop and read the stack, and
+use the registers view or `-exec p $rax` in the Debug Console for values.
+
+The same from a terminal:
+
+```bash
+bin/olic tests/run/pmm.oli -o /tmp/pmm
+gdb -ex 'directory tests/run:lib' -ex 'break pmm.oli:57' -ex run /tmp/pmm
+
+tools/run-kernel.sh --gdb &             # halted, gdb server on :1234
+gdb -ex 'directory examples:lib' -ex 'target remote :1234' \
+    -ex 'break kernel.memory_init' -ex continue genesis/build/kernel.elf
+```
+
+## 7. What to expect
 
 Everything marked **runs** in `docs/COMMANDS.md` compiles and runs; anything
 marked **analysed** is type-checked and then refused with `E0900` and no
-file — the compiler never approximates. There is no debugger, no formatter
-and no language server yet; those are I1–I4 of `docs/IDE_PLAN.md`.
+file — the compiler never approximates. There is no formatter and no
+language server yet; those are I1–I4 of `docs/IDE_PLAN.md`.
