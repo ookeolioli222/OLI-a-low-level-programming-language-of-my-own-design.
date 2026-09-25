@@ -1317,6 +1317,18 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 47 (2026-09-25): freestanding traps on AArch64
+
+- A freestanding AArch64 trap now does what the x86-64 one does: each site
+  loads the kind into x0 and its `core.Site` — the file's static and length
+  and the line — into x1-x3 and calls the trap routine, which lays the Site
+  on the stack (24 bytes, passed in memory as any layout that size) and
+  calls the program's `traps` procedure; a program without one stops on
+  `udf`. The branch that skips a site is patched once the site's length is
+  known. `tests/a64/free/kernel.oli` ends on a deliberate bounds violation,
+  and on qemu-system-aarch64 its `traps` procedure prints `trap at
+  stdin:107`, the line of the store.
+
 ## Implemented in stage 46 (2026-09-25): register allocation on AArch64
 
 - The linear scan of `compiler/x64.oli` (OIR_SPEC §7) runs for AArch64 too:
@@ -1356,9 +1368,9 @@ constant in `.rodata`).
   `OLI_QEMU_SYSTEM_AARCH64` is. The tools were Debian packages unpacked into
   a scratch directory for these runs (gcc-14-aarch64-linux-gnu,
   libc6-dev-arm64-cross, qemu-user, qemu-system-arm), not installed.
-- Left on AArch64: interrupt procedures and the exception vector table,
-  the `traps` procedure called with its `core.Site` (register allocation
-  came in stage 46).
+- Left on AArch64: interrupt procedures and the exception vector table
+  (register allocation came in stage 46, the `traps` procedure with its
+  `core.Site` in stage 47).
 
 ## Implemented in stage 44 (2026-09-25): AArch64 runs the corpus
 
@@ -1680,9 +1692,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 34,019 lines) into
+compiles its own source (`compiler/`, seventeen modules, 34,054 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,545,376 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,547,560 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

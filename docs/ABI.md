@@ -104,8 +104,8 @@ R_AARCH64_ADD_ABS_LO12_NC for a writable one — position-independent, so it
 links into an executable, a PIE or a shared library (`tests/c` under the
 AArch64 profile). A freestanding AArch64 image (`os = "none"`) is entered
 with no stack: its `calls none` entry keeps its values in x19-x28 and sets
-sp with `cpu.stack <-` (`mov sp`); a trap stops the CPU in `wfi` with the
-message in x0/x1. The entry procedure ends with
+sp with `cpu.stack <-` (`mov sp`); a trap calls the program's `traps`
+procedure with the kind in x0 and the `core.Site` on the stack, as on x86-64. The entry procedure ends with
 `exit_group(x0)`; `core.trap` writes its message with write(2, …) and exits
 134, as on x86-64. The ELF is EM_AARCH64 (183), the DWARF frame base x29.
 

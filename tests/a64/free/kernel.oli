@@ -7,7 +7,9 @@ module akernel
 -- (`cpu.stack <-`, `mov sp`), and calls `main`, which writes to the PL011
 -- UART through an `mmio` view (waiting on the FIFO-full flag), computes
 -- with frames, recursion, statics and a zone over a static buffer, reads the
--- generic timer (`cpu.tsc()`, cntvct_el0), and stops in `wfi`.
+-- generic timer (`cpu.tsc()`, cntvct_el0), then indexes past the end of an
+-- array: the `traps` procedure prints the `core.Site` it is handed and
+-- stops in `wfi`.
 
 stack : [16K]u8
     align 16
@@ -16,6 +18,8 @@ heap : [4096]u8
     align 16
 
 hits : u64
+
+small : [4]u8
 
 proc start -> never
     entry
@@ -28,9 +32,15 @@ proc start -> never
     end
 end
 
-proc on_trap(_kind : core.TrapKind, _site : core.Site) -> never
+proc on_trap(_kind : core.TrapKind, site : core.Site) -> never
+    -- The `traps` procedure: the site the compiler recorded, on the UART.
     traps
     permit cpu.halt
+    puts("trap at ")
+    puts(site.file)
+    puts(":")
+    putu(u64(site.line))
+    puts("\n")
     loop
         cpu.halt()
     end
@@ -92,6 +102,9 @@ proc main -> never
     if t2 >= t1
         puts("timer ok\n")
     end
+    -- A bounds violation on purpose: the `traps` procedure gets its site.
+    k : uword <- 4
+    small[k] <- 1
     loop
         cpu.halt()
     end

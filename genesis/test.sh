@@ -1887,9 +1887,10 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     set +e
     timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/akernel.serial -kernel build/akernel.elf > /dev/null 2>&1
     set -e
-    printf 'Oli-- on aarch64, bare metal\nfib(20) = 6765, calls 21891\nzone sum = 2016\ntimer ok\n' > build/akernel.want
+    kl=$(grep -n 'small\[k\] <- 1' ../tests/a64/free/kernel.oli | cut -d: -f1)
+    printf 'Oli-- on aarch64, bare metal\nfib(20) = 6765, calls 21891\nzone sum = 2016\ntimer ok\ntrap at stdin:%s\n' "$kl" > build/akernel.want
     cmp build/akernel.serial build/akernel.want || fail "aarch64: the bare-metal kernel printed [$(cat build/akernel.serial)]"
-    echo "ok: AArch64 BOOT - the kernel boots on qemu-system-aarch64 virt with no OS, sets its own stack from a calls-none entry, prints on the PL011 UART, recurses, runs a zone and reads the generic timer"
+    echo "ok: AArch64 BOOT - the kernel boots on qemu-system-aarch64 virt with no OS, sets its own stack from a calls-none entry, prints on the PL011 UART, recurses, runs a zone, reads the generic timer, and its traps procedure receives the core.Site of a bounds violation"
 else
     echo "ok: AArch64 bare metal - the kernel is an AArch64 executable at 0x40080000 (no qemu-system-aarch64 here: not booted; set OLI_QEMU_SYSTEM_AARCH64)"
 fi

@@ -221,8 +221,28 @@ end
 -- Traps -------------------------------------------------------------------
 
 proc a_trap_seq(ob: rw ref Oir, mc: rw ref Mach, si: u64)
-    -- x0 the message (`adr`, the read-only segment precedes the code), x1
-    -- its length, `bl` the trap routine: three words.
+    -- Hosted: x0 the message (`adr`, the read-only segment precedes the
+    -- code), x1 its length, `bl` the trap routine. Freestanding: x0 the
+    -- kind, x1/x2 the file's static and length, x3 the line — the
+    -- `core.Site` the routine hands to the `traps` procedure — or `udf`
+    -- when the program has none.
+    if mc.fstand == 1
+        if mc.trapproc == 0
+            aw(ob, 0)
+            ret
+        end
+        m := tmsg_of(ob, si - 1)
+        fs := stat_at(ob, m.fstat - 1)
+        a_imm(ob, 0, m.kind - 1)
+        add_fix(mc, ob.ncode, AF_ADR, fs.off)
+        aw(ob, 268435456 | 1)
+        a_imm(ob, 2, fs.len)
+        a_imm(ob, 3, m.line)
+        add_fix(mc, ob.ncode, AF_TRAP, 0)
+        aw(ob, 2483027968)
+        mc.ntrap <- mc.ntrap + 1
+        ret
+    end
     st := stat_at(ob, si - 1)
     add_fix(mc, ob.ncode, AF_ADR, st.off)
     aw(ob, 268435456)
@@ -237,8 +257,10 @@ proc a_trap_unless(ob: rw ref Oir, mc: rw ref Mach, cond: u64, si: u64)
     if si == 0
         ret
     end
-    aw(ob, 1409286144 | (4 << 5) | cond)
+    pos := ob.ncode
+    aw(ob, 1409286144 | cond)
     a_trap_seq(ob, mc, si)
+    a_or32(ob, pos, ((ob.ncode - pos) / 4) << 5)
 end
 
 proc a_width_check(ob: rw ref Oir, mc: rw ref Mach, w: u64, signd: u64, si: u64)
@@ -264,6 +286,15 @@ proc a_trap_routine(ob: rw ref Oir, mc: rw ref Mach)
     -- x86-64 is not called on AArch64 yet).
     mc.trappos <- ob.ncode
     if mc.fstand == 1
+        -- The `core.Site` (file address, length, line: 24 bytes, passed in
+        -- memory) on the stack at the call, the kind in x0, the `traps`
+        -- procedure called; it never returns, and `wfi` stands after it.
+        a_sub_imm(ob, 31, 31, 32)
+        a_str_off(ob, 1, 31, 0)
+        a_str_off(ob, 2, 31, 8)
+        a_str_off(ob, 3, 31, 16)
+        add_fix(mc, ob.ncode, AF_CALL, mc.trapproc - 1)
+        aw(ob, 2483027968)
         aw(ob, 3573751935)
         aw(ob, 335544320 | 67108863)
         ret
@@ -1644,6 +1675,10 @@ proc a64_lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u
     end
     mc.fstand <- pg.fstanding
     mc.trapproc <- 0
+    tp := proc_traps(pg)
+    if tp >= 0
+        mc.trapproc <- u64.bits(tp) + 1
+    end
     g : u64 <- 0
     while g < ob.nsect
         sg := sect_at(ob, g)
