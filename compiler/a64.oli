@@ -1,9 +1,9 @@
 module olic.a64
 -- The AArch64 back end (docs/COMPILER_ARCHITECTURE.md): the same OIR as
 -- compiler/x64.oli, lowered to A64 instructions for Linux, selected by a
--- target profile with `arch = "aarch64"`. This first form keeps every value
--- in its frame word — no register allocation — and lowers the core of the
--- OIR: constants, frame places, arithmetic with every trap of MACHINE_MODEL
+-- target profile with `arch = "aarch64"`. Values get the callee-saved
+-- registers x19-x23 from the linear scan of compiler/x64.oli (its rbx and
+-- r12-r15, one for one), the rest their frame words; the back end lowers: constants, frame places, arithmetic with every trap of MACHINE_MODEL
 -- §4 (the flags of `adds`/`subs`, `smulh`/`umulh`, the re-extension of a
 -- narrow type), comparisons, conversions of width, raw loads and stores,
 -- statics, views and their checks, calls (six argument words in x0-x5,
@@ -137,13 +137,27 @@ proc a_sub_imm(ob: rw ref Oir, d: u64, n: u64, imm: u64)
     aw(ob, 3506438144 | (imm << 10) | (n << 5) | d)
 end
 
+proc a_reg_of(l: u64) -> u64
+    -- The register `mc.loc` names: 100 + n is xn itself (a frameless
+    -- procedure, a_none_assign); otherwise the x86-64 code the linear scan
+    -- of compiler/x64.oli chose, mapped to its AArch64 callee-saved twin —
+    -- rbx x19, r12 x20, r13 x21, r14 x22, r15 x23.
+    if l >= 100
+        ret l - 100
+    end
+    if l == 3
+        ret 19
+    end
+    ret l + 8
+end
+
 proc a_ld(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
-    -- A value from its frame word, or, in a `calls none` procedure (no
-    -- frame), from the callee-saved register it was given (a_none_regs).
+    -- A value from the register the allocation gave it, else its frame word.
     l := cell_get(mc.loc, v)
     if l > 0
-        if l - 1 != r
-            a_mov(ob, r, l - 1)
+        x := a_reg_of(l - 1)
+        if x != r
+            a_mov(ob, r, x)
         end
         ret
     end
@@ -153,12 +167,31 @@ end
 proc a_st(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
     l := cell_get(mc.loc, v)
     if l > 0
-        if l - 1 != r
-            a_mov(ob, l - 1, r)
+        x := a_reg_of(l - 1)
+        if x != r
+            a_mov(ob, x, r)
         end
         ret
     end
     a_str_slot(ob, r, val_slot(mc, v))
+end
+
+proc a_save_regs(ob: rw ref Oir, mc: ref Mach, restore: u64)
+    -- The callee-saved registers the allocation used, into (or back from)
+    -- the frame words compiler/x64.oli `save_regs` keeps them in.
+    base := mc.curloc + mc.curtmp + mc.curnval + mc.curnphi + 5
+    k : u64 <- 0
+    while k < 5
+        r := alloc_reg(k)
+        if mc.usedmask & (1 << r) != 0
+            if restore == 1
+                a_ldr_slot(ob, a_reg_of(r), base + k)
+            else
+                a_str_slot(ob, a_reg_of(r), base + k)
+            end
+        end
+        k <- k + 1
+    end
 end
 
 proc a_extend(ob: rw ref Oir, d: u64, n: u64, w: u64, signd: u64)
@@ -1324,6 +1357,7 @@ proc a_ret(ob: rw ref Oir, mc: rw ref Mach, b: u64)
     if bk.tc == 2
         a_ld(ob, mc, 1, bk.tb)
     end
+    a_save_regs(ob, mc, 1)
     -- mov sp, x29; ldp x29, x30, [sp], #16; ret
     aw(ob, 2432697279)
     aw(ob, 2831252477)
@@ -1429,7 +1463,7 @@ proc a_none_assign(ob: rw ref Oir, mc: rw ref Mach, op: ref OProc)
         cell_set(mc.loc, i, 0)
         if ins.op != O_DEAD
             if defines_value(ins.op) == 1
-                cell_set(mc.loc, i, 20 + k)
+                cell_set(mc.loc, i, 101 + 19 + k)
                 k <- k + 1
             end
         end
@@ -1478,20 +1512,21 @@ proc a_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
         a_refuse(pg, ob, mc)
         ret
     end
-    ci : u64 <- op.first
-    while ci < op.first + op.n
-        cell_set(mc.loc, ci, 0)
-        ci <- ci + 1
-    end
+    -- The linear scan of compiler/x64.oli over the callee-saved registers
+    -- (OIR_SPEC §7); a value it leaves out lives in its frame word.
+    alloc_proc(ob, mc, op)
     -- stp x29, x30, [sp, #-16]!; mov x29, sp; sub sp, sp, frame (16-aligned)
     aw(ob, 2847898621)
     aw(ob, 2432697341)
-    w : u64 <- mc.curloc + op.ntmp + op.n + op.nphi
+    w : u64 <- mc.curloc + op.ntmp + op.n + op.nphi + op.nsave
     if w % 2 == 1
         w <- w + 1
     end
     a_imm(ob, 16, w * 8)
     aw(ob, 3408946175)
+    if op.isentry == 0
+        a_save_regs(ob, mc, 0)
+    end
     b : u64 <- op.bfirst
     while b < mc.curlast
         if live_blk(ob, b) == 1
