@@ -96,7 +96,16 @@ numbers are the target's (write 64, exit_group 94): `std.os` names them for
 either architecture (`os.WRITE`, `os.MMAP`, …), or a program says which it
 means with `when target.arch`. A float converted to an integer out of range
 (or a NaN) is target-defined: x86-64 gives the integer indefinite 2^63,
-AArch64 saturates and gives 0 for a NaN; every value in range agrees. The entry procedure ends with
+AArch64 saturates and gives 0 for a NaN; every value in range agrees.
+An AArch64 object file (`-- output: object`) carries R_AARCH64_CALL26 for a
+call to an `extern` procedure, R_AARCH64_ADR_PREL_LO21 for a string or other
+read-only static, and R_AARCH64_ADR_PREL_PG_HI21 with
+R_AARCH64_ADD_ABS_LO12_NC for a writable one — position-independent, so it
+links into an executable, a PIE or a shared library (`tests/c` under the
+AArch64 profile). A freestanding AArch64 image (`os = "none"`) is entered
+with no stack: its `calls none` entry keeps its values in x19-x28 and sets
+sp with `cpu.stack <-` (`mov sp`); a trap stops the CPU in `wfi` with the
+message in x0/x1. The entry procedure ends with
 `exit_group(x0)`; `core.trap` writes its message with write(2, …) and exits
 134, as on x86-64. The ELF is EM_AARCH64 (183), the DWARF frame base x29.
 

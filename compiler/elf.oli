@@ -1213,10 +1213,53 @@ proc put_rela(b: rw view u8, n: u64, pos: u64, info: u64, addend: u64)
     put_u64v(b, o + 16, addend)
 end
 
+proc a64_build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
+    -- The AArch64 object's relocations (ELF for the Arm 64-bit
+    -- Architecture): R_AARCH64_CALL26 (283) for a call to an `extern`
+    -- procedure, R_AARCH64_ADR_PREL_LO21 (274) for an `adr` into .rodata,
+    -- and for an `adrp`+`add` into .data or .bss the pair
+    -- R_AARCH64_ADR_PREL_PG_HI21 (275) and R_AARCH64_ADD_ABS_LO12_NC (277).
+    permit os.syscall
+    n : u64 <- 0
+    i : u64 <- 0
+    while i < mc.nfix
+        f := fix_at(mc, i)
+        if n + 2 >= RELA_MAX
+            put(2, "olic: relocation table exhausted\n")
+            os.syscall(60, 4)
+        end
+        if f.kind == AF_CALL
+            opc := oproc_at(ob, f.target)
+            if opc.isextern == 1
+                put_rela(rb, n, f.pos, opc.symidx * 4294967296 + 283, 0)
+                n <- n + 1
+            end
+        elif f.kind == AF_ADR
+            put_rela(rb, n, f.pos, 4294967296 + 274, f.target)
+            n <- n + 1
+        elif f.kind == AF_ADRP
+            sym : u64 <- 3
+            off : u64 <- f.target
+            if f.target >= ob.dsize
+                sym <- 4
+                off <- f.target - ob.dsize
+            end
+            put_rela(rb, n, f.pos, sym * 4294967296 + 275, off)
+            put_rela(rb, n + 1, f.pos + 4, sym * 4294967296 + 277, off)
+            n <- n + 2
+        end
+        i <- i + 1
+    end
+    ret n
+end
+
 proc build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
     -- The relocations, from the fixes the executable would have patched:
     -- `r_info` is the symbol index shifted by 32 over the type.
     permit os.syscall
+    if mc.a64 == 1
+        ret a64_build_rela(ob, mc, rb)
+    end
     n : u64 <- 0
     i : u64 <- 0
     while i < mc.nfix
@@ -1377,6 +1420,10 @@ proc write_object(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     shoff := round8(relaoff + nrela * RELA_SIZE)
     hdr := z.bytes(EHDR_SIZE)
     obj_header(hdr, shoff)
+    if mc.a64 == 1
+        -- EM_AARCH64
+        put_u16(hdr, 18, 183)
+    end
     put(1, hdr)
     d := ob.data
     put(1, d[..ob.ndata])

@@ -1846,6 +1846,53 @@ if [ -n "$QA" ]; then
 else
     echo "ok: AArch64 - tests/a64 and $np fixtures of tests/run compile to EM_AARCH64 executables (no qemu-aarch64 here: not run; set OLI_QEMU_AARCH64)"
 fi
+# AArch64 objects: the three C-interop programs of tests/c compiled for
+# AArch64 are ET_REL files with AArch64 relocations; with a cross C compiler
+# (OLI_CC_AARCH64) and its sysroot (OLI_AARCH64_SYSROOT) they link with C -
+# as an executable, a PIE and a shared library - and run under qemu-aarch64.
+for n in oli_side pic_side float_side; do
+    { echo '-- profile: tests/a64/linux-aarch64.oli-target'; cat "../tests/c/$n.oli"; } > build/a64o_$n.oli
+    ( cd .. && genesis/build/olic < genesis/build/a64o_$n.oli > genesis/build/a64o_$n.o 2> genesis/build/a64o_$n.err ) || fail "aarch64: olic could not compile tests/c/$n.oli for aarch64: $(head -1 build/a64o_$n.err)"
+    readelf -h build/a64o_$n.o | grep -q 'Type: *REL' || fail "aarch64: $n.o is not ET_REL"
+    readelf -h build/a64o_$n.o | grep -q 'Machine: *AArch64' || fail "aarch64: $n.o is not AArch64"
+done
+readelf -rW build/a64o_float_side.o | grep -q 'R_AARCH64_CALL26.*sqrt' || fail "aarch64: a call to an extern procedure must be R_AARCH64_CALL26"
+readelf -rW build/a64o_float_side.o | grep -q 'R_AARCH64_ADR_PREL_LO21' || fail "aarch64: a string must be reached through R_AARCH64_ADR_PREL_LO21"
+readelf -rW build/a64o_pic_side.o | grep -q 'R_AARCH64_ADR_PREL_PG_HI21' || fail "aarch64: a static in .data must be reached through R_AARCH64_ADR_PREL_PG_HI21"
+readelf -rW build/a64o_pic_side.o | grep -q 'R_AARCH64_ADD_ABS_LO12_NC' || fail "aarch64: and R_AARCH64_ADD_ABS_LO12_NC"
+if [ -n "${OLI_CC_AARCH64:-}" ] && [ -n "${OLI_AARCH64_SYSROOT:-}" ] && [ -n "$QA" ]; then
+    "$OLI_CC_AARCH64" -o build/a64_c ../tests/c/c_side.c build/a64o_oli_side.o || fail "aarch64: cc could not link oli_side.o"
+    "$QA" -L "$OLI_AARCH64_SYSROOT" build/a64_c > build/a64_c.out || fail "aarch64: the C program exited non-zero"
+    cmp build/a64_c.out ../tests/c/expected.out || fail "aarch64: the C program printed other than tests/c/expected.out"
+    "$OLI_CC_AARCH64" -o build/a64_pie ../tests/c/pic_main.c build/a64o_pic_side.o || fail "aarch64: cc could not link a PIE"
+    "$QA" -L "$OLI_AARCH64_SYSROOT" build/a64_pie > build/a64_pie.out && cmp build/a64_pie.out ../tests/c/pic_expected.out || fail "aarch64: the PIE's output differs"
+    "$OLI_CC_AARCH64" -shared -o build/liba64pic.so build/a64o_pic_side.o || fail "aarch64: cc could not make a shared library"
+    "$OLI_CC_AARCH64" -o build/a64_so ../tests/c/pic_main.c -Lbuild -la64pic || fail "aarch64: cc could not link against liba64pic.so"
+    "$QA" -L "$OLI_AARCH64_SYSROOT" -E LD_LIBRARY_PATH=build build/a64_so > build/a64_so.out && cmp build/a64_so.out ../tests/c/pic_expected.out || fail "aarch64: the shared-library program's output differs"
+    "$OLI_CC_AARCH64" -o build/a64_f ../tests/c/float_main.c build/a64o_float_side.o -lm || fail "aarch64: cc could not link float_side.o"
+    "$QA" -L "$OLI_AARCH64_SYSROOT" build/a64_f > build/a64_f.out && cmp build/a64_f.out ../tests/c/float_expected.out || fail "aarch64: the float program printed $(cat build/a64_f.out)"
+    echo "ok: AArch64 objects link with C both ways - an executable, a PIE, a shared library, floats and narrow integers across AAPCS64 - and run under qemu-aarch64"
+else
+    echo "ok: AArch64 objects carry CALL26, ADR_PREL_LO21 and ADR_PREL_PG_HI21/ADD_ABS_LO12_NC relocations (no cross C compiler here: not linked; set OLI_CC_AARCH64 and OLI_AARCH64_SYSROOT)"
+fi
+# AArch64 bare metal: tests/a64/free/kernel.oli is an AArch64 executable at
+# 0x40080000 whose entry sets its own stack; with qemu-system-aarch64
+# (OLI_QEMU_SYSTEM_AARCH64) it boots on the virt board and prints its lines
+# on the PL011 UART, then halts in wfi (the timeout ends QEMU).
+( cd .. && genesis/build/olic < tests/a64/free/kernel.oli > genesis/build/akernel.elf 2> genesis/build/akernel.err ) || fail "aarch64: olic could not compile the bare-metal kernel: $(head -1 build/akernel.err)"
+readelf -h build/akernel.elf | grep -q 'Machine: *AArch64' || fail "aarch64: the kernel is not AArch64"
+readelf -lW build/akernel.elf | grep -q 'LOAD .*0x0000000040080000' || fail "aarch64: the kernel must be loaded at 0x40080000"
+if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
+    rm -f build/akernel.serial
+    set +e
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/akernel.serial -kernel build/akernel.elf > /dev/null 2>&1
+    set -e
+    printf 'Oli-- on aarch64, bare metal\nfib(20) = 6765, calls 21891\nzone sum = 2016\ntimer ok\n' > build/akernel.want
+    cmp build/akernel.serial build/akernel.want || fail "aarch64: the bare-metal kernel printed [$(cat build/akernel.serial)]"
+    echo "ok: AArch64 BOOT - the kernel boots on qemu-system-aarch64 virt with no OS, sets its own stack from a calls-none entry, prints on the PL011 UART, recurses, runs a zone and reads the generic timer"
+else
+    echo "ok: AArch64 bare metal - the kernel is an AArch64 executable at 0x40080000 (no qemu-system-aarch64 here: not booted; set OLI_QEMU_SYSTEM_AARCH64)"
+fi
 echo "ok: an unknown target architecture is refused, and a calls-none context switch is exactly its block (switch.elf runs five round trips between two stacks)"
 echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"
 

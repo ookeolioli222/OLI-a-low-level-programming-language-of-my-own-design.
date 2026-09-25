@@ -46,14 +46,6 @@ proc start -> s32
         end
         mc := mach_new(z)
         if pg.arch64 == 1
-            if pg.fstanding == 1
-                put(2, "olic: aarch64: only a hosted Linux program is lowered yet\n")
-                ret 1
-            end
-            if pg.objmode == 1
-                put(2, "olic: aarch64: no object files yet\n")
-                ret 1
-            end
             a64_lower_all(pg, ob, mc, ob.base + hdr_size(ob))
         else
             lower_all(pg, ob, mc, ob.base + hdr_size(ob))

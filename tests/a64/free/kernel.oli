@@ -1,0 +1,98 @@
+-- target: freestanding
+-- profile: tests/a64/free/virt.oli-target
+module akernel
+-- A bare-metal AArch64 program (compiler/a64.oli, os = "none"): QEMU's
+-- `virt` board enters `start` with no stack; `start` is `calls none` — its
+-- values in x19-x28, no frame — sets sp to the top of its own static stack
+-- (`cpu.stack <-`, `mov sp`), and calls `main`, which writes to the PL011
+-- UART through an `mmio` view (waiting on the FIFO-full flag), computes
+-- with frames, recursion, statics and a zone over a static buffer, reads the
+-- generic timer (`cpu.tsc()`, cntvct_el0), and stops in `wfi`.
+
+stack : [16K]u8
+    align 16
+
+heap : [4096]u8
+    align 16
+
+hits : u64
+
+proc start -> never
+    entry
+    calls none
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stack.addr) + 16K)
+    cpu.call(main)
+    loop
+        cpu.halt()
+    end
+end
+
+proc on_trap(_kind : core.TrapKind, _site : core.Site) -> never
+    traps
+    permit cpu.halt
+    loop
+        cpu.halt()
+    end
+end
+
+proc putc(c : u8)
+    permit memory.mmio
+    uart := mem.mmio(u32, 0x09000000, 16)
+    -- UARTFR (offset 0x18) bit 5: the transmit FIFO is full.
+    while (uart[6] >> 5) & 1 == 1
+    end
+    uart[0] <- u32(c)
+end
+
+proc puts(s : view u8)
+    each c in s
+        putc(c)
+    end
+end
+
+proc putu(v : u64)
+    if v >= 10
+        putu(v / 10)
+    end
+    putc(u8.wrap(48 + v % 10))
+end
+
+proc fib(n : u64) -> u64
+    hits <- hits + 1
+    if n < 2 then ret n
+    ret fib(n - 1) + fib(n - 2)
+end
+
+proc main -> never
+    permit cpu.halt, memory.raw
+    puts("Oli-- on aarch64, bare metal\n")
+    puts("fib(20) = ")
+    putu(fib(20))
+    puts(", calls ")
+    putu(hits)
+    puts("\n")
+    zone z 4096 from heap
+        b := z.bytes(64)
+        i : uword <- 0
+        while i < 64
+            b[i] <- u8.wrap(i)
+            i <- i + 1
+        end
+        s : u64 <- 0
+        each x in b
+            s <- s + u64(x)
+        end
+        puts("zone sum = ")
+        putu(s)
+        puts("\n")
+    end
+    t1 := cpu.tsc()
+    t2 := cpu.tsc()
+    if t2 >= t1
+        puts("timer ok\n")
+    end
+    loop
+        cpu.halt()
+    end
+end

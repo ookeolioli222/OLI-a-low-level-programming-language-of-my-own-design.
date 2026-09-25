@@ -1317,6 +1317,37 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 45 (2026-09-25): AArch64 objects, C interop and bare metal
+
+- **Objects.** `-- output: object` under the AArch64 profile writes an
+  EM_AARCH64 ET_REL: calls inside the file resolved, a call to an `extern`
+  procedure R_AARCH64_CALL26, an `adr` into .rodata R_AARCH64_ADR_PREL_LO21,
+  an `adrp`+`add` into .data/.bss R_AARCH64_ADR_PREL_PG_HI21 and
+  R_AARCH64_ADD_ABS_LO12_NC. The three C-interop programs of `tests/c`,
+  compiled for AArch64 and linked by a cross gcc 14 against glibc, run under
+  qemu-aarch64 with exactly the x86-64 outputs: C calls Oli-- and back
+  (`expected.out`), a PIE and a shared library (`pic_expected.out`), floats
+  in d0-d7 with libm's `sqrt` and narrow integers re-extended across AAPCS64
+  (`float_expected.out`).
+- **Bare metal.** `calls none` procedures lower with their values in
+  x19-x28 (no frame; E0900 if more are needed), the generic hardware
+  commands map to AArch64 (`cpu.stack <-` `mov sp`, `cpu.frame`, `cpu.call`
+  `bl`, `cpu.jump` `br`, `cpu.halt` `wfi`, `cpu.pause` `yield`,
+  `cpu.interrupts` `msr daifset/daifclr`, `cpu.tsc` `mrs cntvct_el0`), and
+  a freestanding trap stops in `wfi`. `tests/a64/free/kernel.oli` boots on
+  qemu-system-aarch64 10.0.13's `virt` board (`-kernel`, EL1, MMU off),
+  sets its stack, and prints on the PL011 UART: `fib(20) = 6765, calls
+  21891` (2·fib(21) − 1), `zone sum = 2016`, `timer ok`.
+- The harness checks the objects' types and relocations and the kernel's
+  load address always, links and runs them when `OLI_CC_AARCH64` and
+  `OLI_AARCH64_SYSROOT` are set, and boots the kernel when
+  `OLI_QEMU_SYSTEM_AARCH64` is. The tools were Debian packages unpacked into
+  a scratch directory for these runs (gcc-14-aarch64-linux-gnu,
+  libc6-dev-arm64-cross, qemu-user, qemu-system-arm), not installed.
+- Left on AArch64: a register allocator (every value in its frame word),
+  interrupt procedures and the exception vector table, the `traps`
+  procedure called with its `core.Site`.
+
 ## Implemented in stage 44 (2026-09-25): AArch64 runs the corpus
 
 - **The rest of a hosted program on AArch64**: zones (mmap 222 with the
@@ -1637,9 +1668,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 33,776 lines) into
+compiles its own source (`compiler/`, seventeen modules, 33,984 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,534,096 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,543,776 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

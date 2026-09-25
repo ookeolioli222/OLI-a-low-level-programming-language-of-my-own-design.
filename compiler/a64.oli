@@ -11,22 +11,20 @@ module olic.a64
 -- entry's exit, zones (mmap/munmap), `mem.copy`/`set`/`zero`, the
 -- `sat`/`checked` modes, `f32`/`f64` (FP registers, d0-d7 across calls),
 -- 128-bit vectors (NEON), atomics (`ldaxr`/`stlxr`) and fences (`dmb`).
--- What is x86 by nature — machine blocks, ports, control registers,
--- interrupt procedures, `calls none` — and objects and freestanding images
--- are E0900 at the procedure, never an approximation.
+-- the generic hardware commands (`cpu.stack`/`frame`, `cpu.call`/`jump`,
+-- `cpu.halt` as `wfi`, `cpu.interrupts` as `msr daif…`, `cpu.tsc` as
+-- cntvct_el0), `calls none` procedures (their values in x19-x28, no frame),
+-- object files (R_AARCH64_* relocations) and freestanding images. What is
+-- x86 by nature — machine x64 blocks, ports, control registers, MSRs,
+-- descriptor tables, interrupt procedures — is E0900 at the procedure,
+-- never an approximation.
 --
 -- Registers: x0-x5 arguments and results, x8 the system-call number, x9-x12
 -- scratch, x16/x17 address scratch, x29 the frame pointer, x30 the link.
 -- A value's word is [x29 - 8 * (slot + 1)], the slot numbering of
 -- compiler/x64.oli (`val_slot`, `scratch_slot`).
 
--- Fixup kinds of this back end (Mach.fixes, applied by a64_apply_fixes).
-AF_CALL := 30
-AF_JUMP := 31
-AF_COND := 32
-AF_ADR := 33
-AF_ADRP := 34
-AF_TRAP := 35
+-- Fixup kinds: AF_* in compiler/x64.oli, beside that back end's own.
 
 -- Condition codes.
 AC_EQ := 0
@@ -140,10 +138,26 @@ proc a_sub_imm(ob: rw ref Oir, d: u64, n: u64, imm: u64)
 end
 
 proc a_ld(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
+    -- A value from its frame word, or, in a `calls none` procedure (no
+    -- frame), from the callee-saved register it was given (a_none_regs).
+    l := cell_get(mc.loc, v)
+    if l > 0
+        if l - 1 != r
+            a_mov(ob, r, l - 1)
+        end
+        ret
+    end
     a_ldr_slot(ob, r, val_slot(mc, v))
 end
 
 proc a_st(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
+    l := cell_get(mc.loc, v)
+    if l > 0
+        if l - 1 != r
+            a_mov(ob, l - 1, r)
+        end
+        ret
+    end
     a_str_slot(ob, r, val_slot(mc, v))
 end
 
@@ -212,7 +226,15 @@ end
 
 proc a_trap_routine(ob: rw ref Oir, mc: rw ref Mach)
     -- `core.trap` for a hosted program: write(2, x0, x1), exit_group(134).
+    -- Freestanding: the CPU stops where it trapped — `wfi` forever, the
+    -- message still in x0/x1 for a debugger (the `traps` procedure of
+    -- x86-64 is not called on AArch64 yet).
     mc.trappos <- ob.ncode
+    if mc.fstand == 1
+        aw(ob, 3573751935)
+        aw(ob, 335544320 | 67108863)
+        ret
+    end
     a_mov(ob, 2, 1)
     a_mov(ob, 1, 0)
     a_movz(ob, 0, 2, 0)
@@ -555,11 +577,6 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         ret
     end
     if op == O_CALL
-        opc := oproc_at(ob, ins.a)
-        if opc.isextern == 1
-            a_refuse(pg, ob, mc)
-            ret
-        end
         -- Stack words (ins.c) below the caller's sp, sixteen-byte aligned.
         stk := (ins.c * 8 + 15) / 16 * 16
         if stk > 0
@@ -715,12 +732,54 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         ret
     end
     if op == O_CPU
-        if ins.val == 1
-            -- `cpu.pause()`: yield
+        -- halt `wfi`, pause `yield`, interrupts off/on `msr daifset/daifclr, #2`
+        if ins.val == 0
+            aw(ob, 3573751935)
+        elif ins.val == 1
             aw(ob, 3573751871)
+        elif ins.val == 2
+            aw(ob, 3573760735)
+        else
+            aw(ob, 3573760767)
+        end
+        ret
+    end
+    if op == O_HWWR
+        a_ld(ob, mc, 9, ins.a)
+        if ins.val == 3
+            -- `cpu.stack <-`: mov sp, x9
+            aw(ob, 2432696639)
+        elif ins.val == 4
+            -- `cpu.frame <-`: mov x29, x9
+            a_mov(ob, 29, 9)
+        elif ins.val == 9
+            -- `cpu.jump(a)`: br x9
+            aw(ob, 3592356128)
+        else
+            a_refuse(pg, ob, mc)
+        end
+        ret
+    end
+    if op == O_HWRD
+        if ins.val == 3
+            -- mov x9, sp
+            aw(ob, 2432697321)
+        elif ins.val == 4
+            a_mov(ob, 9, 29)
+        elif ins.val == 8
+            -- `cpu.tsc()`: mrs x9, cntvct_el0
+            aw(ob, 3577471049)
+        else
+            a_refuse(pg, ob, mc)
             ret
         end
-        a_refuse(pg, ob, mc)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_HWCALL
+        -- `cpu.call(p)`: bl
+        add_fix(mc, ob.ncode, AF_CALL, ins.c)
+        aw(ob, 2483027968)
         ret
     end
     if op == O_RLOAD
@@ -1237,6 +1296,15 @@ end
 
 proc a_ret(ob: rw ref Oir, mc: rw ref Mach, b: u64)
     bk := blk_at(ob, b)
+    if mc.curnone == 1
+        -- The end of a `calls none` or `never` body is unreachable: `udf`.
+        aw(ob, 0)
+        ret
+    end
+    if mc.curnever == 1
+        aw(ob, 0)
+        ret
+    end
     if mc.curentry == 1
         -- The entry's result is the exit status: exit_group(x0).
         if bk.tc > 0
@@ -1325,6 +1393,50 @@ proc a_blk(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, b: u64)
     a_term(ob, mc, b)
 end
 
+proc a_none_regs(ob: rw ref Oir, op: ref OProc) -> word
+    -- Registers x19-x28 for the values of a frameless procedure, in order;
+    -- 0 when there are more values than registers, or a phi.
+    mc0 : u64 <- 0
+    k : u64 <- 0
+    i : u64 <- op.first
+    last := op.first + op.n
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op == O_PHI
+            ret 0
+        end
+        if ins.op != O_DEAD
+            if defines_value(ins.op) == 1
+                if k >= 10
+                    ret 0
+                end
+                mc0 <- mc0 + 1
+                k <- k + 1
+            end
+        end
+        i <- i + 1
+    end
+    ret 1
+end
+
+proc a_none_assign(ob: rw ref Oir, mc: rw ref Mach, op: ref OProc)
+    -- The assignment a_none_regs checked is possible: value k gets x(19+k).
+    k : u64 <- 0
+    i : u64 <- op.first
+    last := op.first + op.n
+    while i < last
+        ins := ins_at(ob, i)
+        cell_set(mc.loc, i, 0)
+        if ins.op != O_DEAD
+            if defines_value(ins.op) == 1
+                cell_set(mc.loc, i, 20 + k)
+                k <- k + 1
+            end
+        end
+        i <- i + 1
+    end
+end
+
 proc a_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
     op := oproc_at(ob, q)
     mc.curloc <- op.nwords
@@ -1346,12 +1458,30 @@ proc a_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
         mc.entrypos <- ob.ncode
     end
     if op.nocalls == 1
-        a_refuse(pg, ob, mc)
+        -- `calls none` (a freestanding entry): no prologue, no frame; each
+        -- value in one of x19-x28, which a frame would never need here.
+        if a_none_regs(ob, op) == 0
+            a_refuse(pg, ob, mc)
+            ret
+        end
+        a_none_assign(ob, mc, op)
+        bn : u64 <- op.bfirst
+        while bn < mc.curlast
+            if live_blk(ob, bn) == 1
+                a_blk(pg, ob, mc, bn)
+            end
+            bn <- bn + 1
+        end
         ret
     end
     if op.isint == 1
         a_refuse(pg, ob, mc)
         ret
+    end
+    ci : u64 <- op.first
+    while ci < op.first + op.n
+        cell_set(mc.loc, ci, 0)
+        ci <- ci + 1
     end
     -- stp x29, x30, [sp, #-16]!; mov x29, sp; sub sp, sp, frame (16-aligned)
     aw(ob, 2847898621)
@@ -1394,7 +1524,25 @@ proc a_apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
     while i < mc.nfix
         f := fix_at(mc, i)
         here := codebase + f.pos
-        k := f.kind
+        k : u64 <- f.kind
+        skip : u64 <- 0
+        if mc.objmode == 1
+            -- An object file: what lies in another section, or outside the
+            -- file, is the linker's (compiler/elf.oli a64_build_rela).
+            if k == AF_ADR
+                skip <- 1
+            elif k == AF_ADRP
+                skip <- 1
+            elif k == AF_CALL
+                opx := oproc_at(ob, f.target)
+                if opx.isextern == 1
+                    skip <- 1
+                end
+            end
+        end
+        if skip == 1
+            k <- 0
+        end
         if k == AF_CALL
             opc := oproc_at(ob, f.target)
             a_or32(ob, f.pos, a_rel(codebase + opc.codepos, here, 26))
@@ -1440,9 +1588,18 @@ end
 
 proc a64_lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
     -- The code starts on an instruction boundary: the read-only data before
-    -- it is padded to sixteen bytes.
-    while (database + ob.ndata) % 16 != 0
-        data_byte(ob, 0)
+    -- it is padded to sixteen bytes — in the image, or in an object file,
+    -- where it follows the 64-byte header.
+    mc.a64 <- 1
+    mc.objmode <- pg.objmode
+    if pg.objmode == 1
+        while ob.ndata % 16 != 0
+            data_byte(ob, 0)
+        end
+    else
+        while (database + ob.ndata) % 16 != 0
+            data_byte(ob, 0)
+        end
     end
     i : u64 <- 0
     while i < LBL_MAX

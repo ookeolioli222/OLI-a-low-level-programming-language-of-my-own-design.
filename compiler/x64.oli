@@ -32,6 +32,15 @@ module olic.x64
 -- follow the blocks.
 LBL_MAX := 1048576
 FIX_MAX := 2097152
+-- The fixup kinds of compiler/a64.oli (applied by a64_apply_fixes; the
+-- object writer turns AF_CALL to an extern, AF_ADR and AF_ADRP into
+-- AArch64 relocations).
+AF_CALL := 30
+AF_JUMP := 31
+AF_COND := 32
+AF_ADR := 33
+AF_ADRP := 34
+AF_TRAP := 35
 -- The line table (DWARF, `compiler/elf.oli`): one record per change of
 -- source line along the code — position, line, module.
 LINE_REC_MAX := 262144
@@ -98,6 +107,8 @@ layout Mach
     nline : u64
     lastline : u64
     lastmi : u64
+    -- 1 when compiler/a64.oli lowers (the object writer's relocations).
+    a64 : u64
 end
 
 proc mach_new(z: zone) -> rw ref Mach
@@ -105,6 +116,7 @@ proc mach_new(z: zone) -> rw ref Mach
     mc.lbls <- z.bytes(LBL_MAX * Lbl.size)
     mc.fixes <- z.bytes(FIX_MAX * Fix.size)
     mc.nfix <- 0
+    mc.a64 <- 0
     mc.entrypos <- 0
     mc.curloc <- 0
     mc.curtmp <- 0
