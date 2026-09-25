@@ -32,14 +32,14 @@ construct answers each system-programming requirement.
 | volatile memory | `mmio view T` from `mem.mmio(T, a, n)` and `mmio ref T` from `Name.at` over it — every element or field access is a volatile instruction, kept by every pass (**runs**) | V0 |
 | atomic operations | `atomic.load/store/add/sub/and/or/xor/exchange/cas(rw ref T, ..., order)` — **runs**: lock-prefixed instructions, `xchg`, a `cmpxchg` loop for and/or/xor (`tests/run/atomic.oli`) | V0 |
 | memory barriers | `cpu.fence(order)` → `mfence`/`lfence`/`sfence` — **runs** | V0 |
-| interrupt handlers | `proc h(frame : ref core.x64.InterruptFrame)` with `calls interrupt` — **runs**: every general register pushed, `iretq` on return (`tests/run/interrupt.oli`, `examples/kernel.oli`); on AArch64 `proc h(frame : ref core.a64.ExceptionFrame)` with `section ".vector.N"` in the vector table `olic` builds, `eret` on return (`tests/a64/free/timer.oli`, design 0025) | V0 |
+| interrupt handlers | `proc h(frame : ref core.x64.InterruptFrame)` with `calls interrupt` — **runs**: every general register pushed, `iretq` on return (`tests/run/interrupt.oli`, `examples/kernel.oli`); on AArch64 `proc h(frame : ref core.a64.ExceptionFrame)` with `section ".vector.N"` in the vector table `olic` builds, `eret` on return, synchronous and nested exceptions included (`tests/a64/free/timer.oli`, `gic3.oli`, design 0025) | V0 |
 | naked functions | `calls none` (body = one `machine` block) | V0 |
 | custom calling conventions | `calls sysv` (default), `calls none`, `calls interrupt`; `calls c` = alias of `sysv` | V0/V1 |
 | packed structures | `layout X packed` | V0 |
 | explicit alignment | `align N` on layouts, fields, statics, procedures, zone allocations | V0 |
 | bit fields | `bit` and `bits N` field types inside `packed` layouts | V1 |
 | CPU intrinsics | `cpu.halt`, `cpu.pause`, `cpu.cpuid`, `cpu.rdmsr/wrmsr`, `cpu.cr3`, `cpu.interrupts(on/off)`, `cpu.tsc`, `cpu.lgdt/lidt` | V0 (halt, pause), V1 (rest) |
-| hardware places and commands | `arch.x64.cr0/2/3/4/8`, `arch.x64.msr[n]`, `arch.x64.gdt/idt <- ref t`, `arch.x64.tr`, `cpu.stack`, `cpu.frame`, `port.u8[n]`, `cpu.halt/pause/interrupts/fence`, `cpu.id(leaf)`, `cpu.tsc()`, `cpu.call(p)`, `cpu.jump(a)`, `arch.x64.segments(code, data)`; on AArch64 `arch.a64.vbar/cntv_ctl/cntv_tval/cntfrq/esr/elr/far/cpacr/vectors` — **run** (design 0015; `tests/run/hw.oli`, `tests/run/segments.oli`, `examples/kernel.oli`) | V0 (runs) |
+| hardware places and commands | `arch.x64.cr0/2/3/4/8`, `arch.x64.msr[n]`, `arch.x64.gdt/idt <- ref t`, `arch.x64.tr`, `cpu.stack`, `cpu.frame`, `port.u8[n]`, `cpu.halt/pause/interrupts/fence`, `cpu.id(leaf)`, `cpu.tsc()`, `cpu.call(p)`, `cpu.jump(a)`, `arch.x64.segments(code, data)`; on AArch64 `arch.a64.vbar/cntv_ctl/cntv_tval/cntfrq/esr/elr/far/cpacr/vectors` and the GICv3 `arch.a64.icc_*` registers — **run** (design 0015; `tests/run/hw.oli`, `tests/run/segments.oli`, `examples/kernel.oli`) | V0 (runs) |
 | inline machine code | `machine x64 ... end` with `in`/`out`/`clobber`, assembled by `olic` — the escape hatch | V0 |
 | code per target | `when target.freestanding` / `target.os == "none"` / `target.arch == "x86_64"` … `else` … `end` around declarations (LANGUAGE.md §13) — **runs** | V0 |
 | physical memory | `physaddr` type; `zone ... at`; `memory.raw` | V0 |

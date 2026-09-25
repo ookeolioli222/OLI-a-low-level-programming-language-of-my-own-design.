@@ -1,0 +1,162 @@
+-- target: freestanding
+-- profile: tests/a64/free/virt.oli-target
+module agic3
+import core.a64
+-- Synchronous, asynchronous and nested exceptions on bare-metal AArch64,
+-- with a GICv3 (design 0025; QEMU `virt,gic-version=3`). `on_sync` fills
+-- slot 4, synchronous exceptions at the current EL: a load from an address
+-- above the CPU's 40-bit physical range is a data abort, and the handler
+-- records ESR_EL1 and FAR_EL1 and moves the saved ELR past the load, so the
+-- interrupted code resumes after it. `tick` fills slot 5 (IRQ): the GICv3
+-- CPU interface is system registers (`icc_iar1`, `icc_eoir1`, ...), the
+-- redistributor is woken and INTID 27, the virtual timer, put in group 1.
+-- On its fiftieth interrupt `tick` itself takes a data abort: a nested
+-- exception, which overwrites ELR_EL1 and SPSR_EL1 — the IRQ's slot saved
+-- them, so the IRQ still returns to `main`.
+
+stack : [16K]u8
+    align 16
+
+ticks : u64
+faults : u64
+nested : u64
+period : u64
+last_esr : u64
+last_far : u64
+
+GICD := 0x08000000
+GICR := 0x080A0000
+TIMER_INTID := 27
+BEYOND := 0x10000000000
+
+proc start -> never
+    entry
+    calls none
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stack.addr) + 16K)
+    cpu.call(main)
+    loop
+        cpu.halt()
+    end
+end
+
+proc on_sync(frame : rw ref core.a64.ExceptionFrame)
+    calls interrupt
+    section ".vector.4"
+    permit cpu.interrupt, cpu.control
+    faults <- faults + 1
+    last_esr <- arch.a64.esr
+    last_far <- arch.a64.far
+    -- Resume after the instruction that faulted.
+    frame.elr <- frame.elr + 4
+end
+
+proc tick(_frame : ref core.a64.ExceptionFrame)
+    calls interrupt
+    section ".vector.5"
+    permit cpu.interrupt, cpu.control, memory.mmio
+    id := arch.a64.icc_iar1 & 0xFFFFFF
+    if id == TIMER_INTID
+        ticks <- ticks + 1
+        if ticks == 50
+            before := faults
+            nowhere := mem.mmio(u64, BEYOND, 1)
+            _v := nowhere[0]
+            if faults == before + 1
+                nested <- 1
+            end
+        end
+        if ticks < 100
+            arch.a64.cntv_tval <- period
+        else
+            arch.a64.cntv_ctl <- 0
+        end
+    end
+    arch.a64.icc_eoir1 <- id
+end
+
+proc putc(c : u8)
+    permit memory.mmio
+    uart := mem.mmio(u32, 0x09000000, 16)
+    while (uart[6] >> 5) & 1 == 1
+    end
+    uart[0] <- u32(c)
+end
+
+proc puts(s : view u8)
+    each c in s
+        putc(c)
+    end
+end
+
+proc puthex(v : u64)
+    puts("0x")
+    i : u64 <- 16
+    while i > 0
+        i <- i - 1
+        d := (v >> (i * 4)) & 15
+        if d < 10
+            putc(u8.wrap(48 + d))
+        else
+            putc(u8.wrap(87 + d))
+        end
+    end
+end
+
+proc putu(v : u64)
+    if v >= 10
+        putu(v / 10)
+    end
+    putc(u8.wrap(48 + v % 10))
+end
+
+proc main -> never
+    permit cpu.control, cpu.interrupt, cpu.halt, memory.mmio
+    arch.a64.vbar <- arch.a64.vectors
+    -- A synchronous exception from ordinary code: a volatile read, which no
+    -- pass may drop.
+    nowhere := mem.mmio(u64, BEYOND, 1)
+    _v := nowhere[0]
+    puts("data abort: esr class ")
+    puthex(last_esr >> 26)
+    puts(", far ")
+    puthex(last_far)
+    puts(", faults ")
+    putu(faults)
+    puts("\n")
+    gicd := mem.mmio(u32, GICD, 16)
+    rd := mem.mmio(u32, GICR, 16)
+    sgi := mem.mmio(u32, GICR + 0x10000, 128)
+    -- GICD_CTLR: affinity routing, groups 0 and 1.
+    gicd[0] <- 0x13
+    -- GICR_WAKER: clear ProcessorSleep, wait for ChildrenAsleep to clear.
+    rd[5] <- rd[5] & 0xFFFFFFFD
+    while rd[5] & 4 != 0
+    end
+    -- GICR_IGROUPR0 and GICR_ISENABLER0: INTID 27 in group 1, enabled.
+    sgi[32] <- 1 << TIMER_INTID
+    sgi[64] <- 1 << TIMER_INTID
+    arch.a64.icc_sre <- arch.a64.icc_sre | 1
+    arch.a64.icc_pmr <- 255
+    arch.a64.icc_igrpen1 <- 1
+    puts("gicv3 on\n")
+    period <- arch.a64.cntfrq / 1000
+    arch.a64.cntv_tval <- period
+    arch.a64.cntv_ctl <- 1
+    cpu.interrupts(on)
+    while ticks < 100
+        cpu.halt()
+    end
+    cpu.interrupts(off)
+    puts("ticks ")
+    putu(ticks)
+    puts(", faults ")
+    putu(faults)
+    puts("\n")
+    if nested == 1
+        puts("nested abort inside an irq returned\n")
+    end
+    loop
+        cpu.halt()
+    end
+end

@@ -1317,6 +1317,29 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 49 (2026-09-25): GICv3, synchronous and nested exceptions on AArch64
+
+- **GICv3 CPU interface as places** (design 0025): `arch.a64.icc_iar1`
+  (read only), `icc_eoir1` (written only, a read is E0900), `icc_pmr`,
+  `icc_igrpen1` and `icc_sre` (then `isb`), each one `mrs`/`msr`.
+- `tests/a64/free/gic3.oli` boots on qemu-system-aarch64
+  `virt,gic-version=3`: it wakes the redistributor, puts INTID 27 in group
+  1 and takes 100 virtual-timer IRQs through the system-register interface.
+  A volatile read above the 40-bit physical range in `main` is a data
+  abort: the slot-4 handler (`rw ref core.a64.ExceptionFrame`) records
+  ESR_EL1 and FAR_EL1 and advances the saved ELR, and `main` prints `esr
+  class 0x25, far 0x0000010000000000`. On the fiftieth tick the IRQ handler
+  takes the same abort: a nested exception that overwrites ELR_EL1 and
+  SPSR_EL1, which the IRQ's slot had saved, so the IRQ still returns. The
+  harness pins the four lines, exactly 2 data aborts, 100 IRQs and nothing
+  else in `qemu -d int`, and two more E0900 probes (reading `icc_eoir1`,
+  writing `icc_iar1`).
+- An ordinary unused raw load `[addr u64 (a)]` is removed by dead-code
+  elimination, as a load from ordinary memory may be; the fault is made
+  with `mem.mmio`, whose reads are volatile.
+- Not yet: a separate exception stack, entry from a lower EL (user mode),
+  SGIs and more than one CPU.
+
 ## Implemented in stage 48 (2026-09-25): exceptions on AArch64
 
 - **System registers as places** (design 0025, `permit cpu.control`, every
@@ -1350,7 +1373,8 @@ constant in `.rodata`).
   building the analyser with `olic`, whose traps name the line). `TOK_MAX`
   and `NODE_MAX` are now 400,000, and the analyser's zone 1 GiB of address
   space.
-- Not yet: nested exceptions, a synchronous-exception fixture, GICv3.
+- Not yet then: nested exceptions, a synchronous-exception fixture, GICv3
+  (stage 49).
 
 ## Implemented in stage 47 (2026-09-25): freestanding traps on AArch64
 
@@ -1727,9 +1751,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 34,414 lines) into
+compiles its own source (`compiler/`, seventeen modules, 34,478 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,563,576 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,565,944 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

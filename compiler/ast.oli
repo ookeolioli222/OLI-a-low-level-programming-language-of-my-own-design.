@@ -325,6 +325,21 @@ proc a64_place_name(sub: u64) -> view u8
     if sub == 18
         ret "arch.a64.cpacr"
     end
+    if sub == 19
+        ret "arch.a64.icc_iar1"
+    end
+    if sub == 20
+        ret "arch.a64.icc_eoir1"
+    end
+    if sub == 21
+        ret "arch.a64.icc_pmr"
+    end
+    if sub == 22
+        ret "arch.a64.icc_igrpen1"
+    end
+    if sub == 23
+        ret "arch.a64.icc_sre"
+    end
     ret "arch.a64.vectors"
 end
 

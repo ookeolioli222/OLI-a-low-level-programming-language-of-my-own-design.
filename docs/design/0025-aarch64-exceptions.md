@@ -27,6 +27,11 @@ kernel needs both, and neither may be a machine-code escape.
 | `arch.a64.elr` | ELR_EL1 | read |
 | `arch.a64.far` | FAR_EL1 | read |
 | `arch.a64.cpacr` | CPACR_EL1 | read, written (then `isb`) |
+| `arch.a64.icc_iar1` | ICC_IAR1_EL1 (GICv3) | read |
+| `arch.a64.icc_eoir1` | ICC_EOIR1_EL1 | written only |
+| `arch.a64.icc_pmr` | ICC_PMR_EL1 | read, written |
+| `arch.a64.icc_igrpen1` | ICC_IGRPEN1_EL1 | read, written |
+| `arch.a64.icc_sre` | ICC_SRE_EL1 | read, written (then `isb`) |
 | `arch.a64.vectors` | the vector table `olic` emits | read: its address |
 
 **Handlers.** A `calls interrupt` procedure with `section ".vector.N"`
@@ -69,5 +74,12 @@ exactly as on x86-64. The saved area is the handler's to read through a
 Implemented 2026-09-25 (stage 48): `tests/a64/free/timer.oli` takes a
 hundred virtual-timer interrupts through the GICv2 of QEMU's `virt` board
 (exactly 100 IRQs and no other exception in `qemu -d int`), with the FP
-unit on so that every slot saves v0-v7 too. Not yet: a nested handler
-(the table has no per-EL stacks), a synchronous-exception test, GICv3.
+unit on so that every slot saves v0-v7 too. Stage 49: `tests/a64/free/gic3.oli`
+on `virt,gic-version=3` drives the GICv3 CPU interface through the `icc_*`
+places and takes 100 IRQs, a data abort in `main` and a data abort nested
+inside an IRQ handler; the slot-4 handler reads ESR (class 0x25) and FAR
+and moves the saved ELR past the load (`rw ref core.a64.ExceptionFrame`).
+Nesting works because each slot saves ELR_EL1 and SPSR_EL1 before it
+calls the handler. Not yet: a separate exception stack (all nesting uses
+SP_EL1), lower-EL (user-mode) entry, GICv3 SGIs and affinity routing
+beyond CPU 0.

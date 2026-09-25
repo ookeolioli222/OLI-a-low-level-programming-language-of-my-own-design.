@@ -833,6 +833,13 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
             -- `arch.a64.cpacr <-`: msr cpacr_el1, x9; isb
             a_sys(ob, 0, a_sysenc(18), 9)
             aw(ob, 3573759967)
+        elif ins.val == 23
+            -- `arch.a64.icc_sre <-`: msr icc_sre_el1, x9; isb
+            a_sys(ob, 0, a_sysenc(23), 9)
+            aw(ob, 3573759967)
+        elif ins.val >= 20
+            -- icc_eoir1, icc_pmr, icc_igrpen1: msr
+            a_sys(ob, 0, a_sysenc(ins.val), 9)
         else
             a_refuse(pg, ob, mc)
         end
@@ -1701,7 +1708,9 @@ end
 proc a_sysenc(r: u64) -> u64
     -- op1, CRn, CRm and op2 of a system register, in place in `mrs`/`msr`:
     -- 10 VBAR_EL1, 11 CNTV_CTL_EL0, 12 CNTV_TVAL_EL0, 13 CNTFRQ_EL0,
-    -- 14 ESR_EL1, 15 ELR_EL1, 16 FAR_EL1, 18 CPACR_EL1, 19 SPSR_EL1.
+    -- 14 ESR_EL1, 15 ELR_EL1, 16 FAR_EL1, 18 CPACR_EL1, 19 ICC_IAR1_EL1,
+    -- 20 ICC_EOIR1_EL1, 21 ICC_PMR_EL1, 22 ICC_IGRPEN1_EL1, 23 ICC_SRE_EL1,
+    -- 99 SPSR_EL1.
     if r == 10
         ret 49152
     end
@@ -1725,6 +1734,21 @@ proc a_sysenc(r: u64) -> u64
     end
     if r == 18
         ret 4160
+    end
+    if r == 19
+        ret 52224
+    end
+    if r == 20
+        ret 52256
+    end
+    if r == 21
+        ret 17920
+    end
+    if r == 22
+        ret 52448
+    end
+    if r == 23
+        ret 52384
     end
     ret 16384
 end
@@ -1809,7 +1833,7 @@ proc a_vec_stub(ob: rw ref Oir, mc: rw ref Mach, q: u64)
     end
     a_pair(ob, 2835349504, 18, 30, 18)
     a_sys(ob, 1, a_sysenc(15), 9)
-    a_sys(ob, 1, a_sysenc(19), 10)
+    a_sys(ob, 1, a_sysenc(99), 10)
     a_pair(ob, 2835349504, 9, 10, 20)
     a_fp_skip(ob)
     k <- 0
@@ -1829,7 +1853,7 @@ proc a_vec_stub(ob: rw ref Oir, mc: rw ref Mach, q: u64)
     end
     a_pair(ob, 2839543808, 9, 10, 20)
     a_sys(ob, 0, a_sysenc(15), 9)
-    a_sys(ob, 0, a_sysenc(19), 10)
+    a_sys(ob, 0, a_sysenc(99), 10)
     k <- 0
     while k < 9
         a_pair(ob, 2839543808, 2 * k, 2 * k + 1, 2 * k)

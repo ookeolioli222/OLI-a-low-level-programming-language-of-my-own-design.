@@ -1910,6 +1910,19 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     [ "$(grep -c 'Taking exception 5 \[IRQ\]' build/atimer.qlog)" = 100 ] || fail "aarch64: the timer kernel must take exactly a hundred IRQs"
     [ "$(grep -c 'Taking exception' build/atimer.qlog)" = 100 ] || fail "aarch64: the timer kernel took an exception other than its IRQs"
     echo "ok: AArch64 EXCEPTIONS - a calls-interrupt handler fills the IRQ slot of the vector table olic builds; the kernel installs it (arch.a64.vbar), turns on the FP unit (arch.a64.cpacr), programs the GICv2 and the virtual timer (cntv_tval, cntv_ctl) and takes exactly 100 IRQs (qemu -d int), each resuming where it stopped through eret"
+    # GICv3, synchronous and nested exceptions: two data aborts (one in
+    # main, one inside the fiftieth IRQ) and a hundred IRQs, nothing else.
+    ( cd .. && genesis/build/olic < tests/a64/free/gic3.oli > genesis/build/agic3.elf 2> genesis/build/agic3.err ) || fail "aarch64: olic could not compile the GICv3 kernel: $(head -1 build/agic3.err)"
+    rm -f build/agic3.serial
+    set +e
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt,gic-version=3 -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/agic3.serial -kernel build/agic3.elf -d int -D build/agic3.qlog > /dev/null 2>&1
+    set -e
+    printf 'data abort: esr class 0x0000000000000025, far 0x0000010000000000, faults 1\ngicv3 on\nticks 100, faults 2\nnested abort inside an irq returned\n' > build/agic3.want
+    cmp build/agic3.serial build/agic3.want || fail "aarch64: the GICv3 kernel printed [$(cat build/agic3.serial)]"
+    [ "$(grep -c 'Taking exception 5 \[IRQ\]' build/agic3.qlog)" = 100 ] || fail "aarch64: the GICv3 kernel must take exactly a hundred IRQs"
+    [ "$(grep -c 'Taking exception 4 \[Data Abort\]' build/agic3.qlog)" = 2 ] || fail "aarch64: the GICv3 kernel must take exactly two data aborts"
+    [ "$(grep -c 'Taking exception' build/agic3.qlog)" = 102 ] || fail "aarch64: the GICv3 kernel took an unexpected exception"
+    echo "ok: AArch64 GICv3 + SYNC + NESTED - through the GICv3 CPU interface registers (icc_iar1, icc_eoir1, icc_pmr, icc_igrpen1, icc_sre) the kernel takes 100 timer IRQs; a data abort in main and one nested inside an IRQ reach the slot-4 handler, which reads ESR (class 0x25) and FAR and moves the saved ELR past the load"
 else
     echo "ok: AArch64 exceptions - the timer kernel builds with its vector table on a 2 KiB boundary (no qemu-system-aarch64 here: not booted)"
 fi
@@ -1918,14 +1931,16 @@ fi
 printf 'module p\nproc start -> s32\n    entry\n    permit cpu.control\n    arch.a64.vbar <- 0\n    ret 0\nend\n' > build/va1.oli
 printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.esr <- 0\n    loop\n        cpu.halt()\n    end\nend\n' > build/va2.oli
 printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc h\n    calls interrupt\n    permit cpu.interrupt\nend\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.vbar <- arch.a64.vectors\n    loop\n        cpu.halt()\n    end\nend\n' > build/va3.oli
-for v in va1:5 va2:7 va3:4; do
+printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    _x := arch.a64.icc_eoir1\n    loop\n        cpu.halt()\n    end\nend\n' > build/va4.oli
+printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.icc_iar1 <- 1\n    loop\n        cpu.halt()\n    end\nend\n' > build/va5.oli
+for v in va1:5 va2:7 va3:4 va4:7 va5:7; do
     n=${v%%:*}
     set +e; ( cd .. && genesis/build/olic < genesis/build/$n.oli > genesis/build/$n.elf 2> genesis/build/$n.err ); st=$?; set -e
     [ "$st" = 1 ] || fail "aarch64: $n exited $st, want E0900"
     grep -q "^ --> stdin:${v#*:}:" build/$n.err && grep -q 'E0900' build/$n.err || fail "aarch64: $n must be E0900 at line ${v#*:}: $(head -2 build/$n.err)"
     [ ! -s build/$n.elf ] || fail "aarch64: the refused $n still wrote a file"
 done
-echo "ok: arch.a64 places are E0900 on x86-64, a read-only system register is not written, and a handler with no .vector.N slot is refused"
+echo "ok: arch.a64 places are E0900 on x86-64, a read-only system register is not written, the write-only icc_eoir1 is not read, and a handler with no .vector.N slot is refused"
 echo "ok: an unknown target architecture is refused, and a calls-none context switch is exactly its block (switch.elf runs five round trips between two stacks)"
 echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"
 
