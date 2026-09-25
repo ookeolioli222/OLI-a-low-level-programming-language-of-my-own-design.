@@ -1805,17 +1805,46 @@ for f in ../tests/a64/*.oli; do
         na=$((na + 1))
     fi
 done
-printf -- '-- profile: tests/a64/linux-aarch64.oli-target\nmodule za\nproc start -> s32\n    entry\n    zone s 4096\n        b := s.bytes(16)\n        b[0] <- 1\n    end\n    ret 0\nend\n' > build/za.oli
-set +e
-( cd .. && genesis/build/olic < genesis/build/za.oli > genesis/build/za.elf 2> genesis/build/za.err )
-st=$?
-set -e
-[ "$st" = 1 ] || fail "aarch64: a zone exited $st, want E0900"
-grep -q 'E0900' build/za.err || fail "aarch64: a zone must be E0900 until the AArch64 lowering has zones"
+# The same programs on both architectures: every tests/run fixture and
+# trap that is not x86 by nature (machine blocks, ports, control registers,
+# interrupts, a freestanding x86 image, a program that asserts x86_64) is
+# compiled again with the AArch64 profile in front of it and must behave
+# exactly as it does on x86-64 - the trap one line later, for the line added.
+xonly='machine x64\|port\.\|arch\.x64\|cpu\.\(halt\|interrupts\|id\|tsc\|stack\|frame\|call\|jump\)\|calls interrupt\|calls none\|-- target: freestanding\|-- output: object'
+np=0
+for f in ../tests/run/*.oli ../tests/run/trap/*.oli; do
+    grep -q "$xonly" "$f" && continue
+    n=$(basename "$f" .oli)
+    { echo '-- profile: tests/a64/linux-aarch64.oli-target'; cat "$f"; } > build/a64p_$n.oli
+    ( cd .. && genesis/build/olic < genesis/build/a64p_$n.oli > genesis/build/a64p_$n.elf 2> genesis/build/a64p_$n.err ) || fail "aarch64: olic could not compile $f for aarch64: $(head -1 build/a64p_$n.err)"
+    chmod +x build/a64p_$n.elf
+    readelf -h build/a64p_$n.elf | grep -q 'Machine: *AArch64' || fail "aarch64: $n was not compiled for AArch64"
+    np=$((np + 1))
+    [ -n "$QA" ] || continue
+    stdin=/dev/null
+    [ -f "../tests/run/$n.in" ] && stdin="../tests/run/$n.in"
+    want=$(grep -o 'trap: [a-z_]* at stdin:[0-9]*' "$f" || true)
+    set +e
+    "$QA" build/a64p_$n.elf < "$stdin" > build/a64p_$n.out 2> build/a64p_$n.stderr
+    st=$?
+    set -e
+    if [ -n "$want" ]; then
+        wl=${want##*:}
+        want="${want% at stdin:*} at stdin:$((wl + 1))"
+        [ "$st" = 134 ] || fail "aarch64: trap $n exited $st"
+        [ "$(head -1 build/a64p_$n.stderr)" = "$want" ] || fail "aarch64: trap $n said [$(head -1 build/a64p_$n.stderr)], want [$want]"
+    elif [ -f "../tests/run/$n.out" ]; then
+        [ "$st" = 0 ] || fail "aarch64: $n exited $st"
+        cmp build/a64p_$n.out "../tests/run/$n.out" || fail "aarch64: $n wrote other than tests/run/$n.out"
+    else
+        [ "$st" = 42 ] || fail "aarch64: $n exited $st, want 42 (the check that failed)"
+    fi
+done
+[ "$np" -ge 50 ] || fail "aarch64: only $np fixtures are portable, want at least 50"
 if [ -n "$QA" ]; then
-    echo "ok: AArch64 - every tests/a64 program is an EM_AARCH64 executable and $na of them ran under $("$QA" --version | head -1 | sed 's/ (.*//'): arithmetic with every trap, calls, views, statics, syscalls; zones are E0900 still"
+    echo "ok: AArch64 - tests/a64 and $np fixtures of tests/run (zones, floats, 128-bit vectors, atomics, fallible results, layouts by value, every trap) compile to EM_AARCH64 and run under $("$QA" --version | head -1 | sed 's/ (.*//') exactly as on x86-64"
 else
-    echo "ok: AArch64 - every tests/a64 program is an EM_AARCH64 executable (no qemu-aarch64 here: not run; set OLI_QEMU_AARCH64)"
+    echo "ok: AArch64 - tests/a64 and $np fixtures of tests/run compile to EM_AARCH64 executables (no qemu-aarch64 here: not run; set OLI_QEMU_AARCH64)"
 fi
 echo "ok: an unknown target architecture is refused, and a calls-none context switch is exactly its block (switch.elf runs five round trips between two stacks)"
 echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"

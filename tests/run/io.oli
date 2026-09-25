@@ -6,7 +6,7 @@ proc start -> s32
     permit os.syscall
     zone z 65536
         input := z.bytes(4)
-        count := os.syscall(0, 0, input.addr, input.len)
+        count := os.syscall(os.READ, 0, input.addr, input.len)
         if count != 4
             ret 1
         end

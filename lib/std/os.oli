@@ -1,13 +1,29 @@
---- Linux x86-64 system call numbers and the OS error type (`docs/ABI.md` §5).
---- `os.syscall(nr, args...)` itself is an intrinsic.
+--- Linux system call numbers of the target (`docs/ABI.md` §5, §4a) and the
+--- OS error type. `os.syscall(nr, args...)` itself is an intrinsic; these
+--- names make a program that calls it run on either architecture.
 module std.os
 
-pub READ : word := 0
-pub WRITE : word := 1
-pub MMAP : word := 9
-pub MUNMAP : word := 11
-pub EXIT : word := 60
-pub EXIT_GROUP : word := 231
+when target.arch == "aarch64"
+    pub READ : word := 63
+    pub WRITE : word := 64
+    pub CLOSE : word := 57
+    pub DUP : word := 23
+    pub GETPID : word := 172
+    pub MMAP : word := 222
+    pub MUNMAP : word := 215
+    pub EXIT : word := 93
+    pub EXIT_GROUP : word := 94
+else
+    pub READ : word := 0
+    pub WRITE : word := 1
+    pub CLOSE : word := 3
+    pub DUP : word := 32
+    pub GETPID : word := 39
+    pub MMAP : word := 9
+    pub MUNMAP : word := 11
+    pub EXIT : word := 60
+    pub EXIT_GROUP : word := 231
+end
 
 --- A negative `errno` value returned by the kernel.
 pub layout Error

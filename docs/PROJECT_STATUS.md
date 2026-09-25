@@ -1317,6 +1317,39 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 44 (2026-09-25): AArch64 runs the corpus
+
+- **The rest of a hosted program on AArch64**: zones (mmap 222 with the
+  page rounding and the refusal check, munmap 215, `at`/`from` zones and the
+  allocation with its `zone_exhausted` checks), `mem.copy` (forwards, or
+  backwards over an overlap) and `mem.set`/`zero`/`secure_zero` as byte
+  loops, the `sat`/`checked` modes (the overflow of a 64-bit operation
+  recomputed from its operands, since no flag survives the store), stack
+  arguments past the sixth word, `f32`/`f64` (`fmov` into d0/d1, `fadd`…
+  `fdiv`, `fcmp` with conditions false on a NaN but `!=`, `scvtf`/`ucvtf`,
+  `fcvtzs`/`fcvtzu`, `fcvt`; d0-d7 for float arguments and d0 for the
+  result), 128-bit vectors in NEON (`ldr/str q`, `fadd/add/sub/mul/…
+  v.4s/2d/16b/8h`, `cmeq`/`fcmeq` and `uminv` for whole-vector equality),
+  atomics as `ldaxr`/`stlxr` loops (loads `ldar`, stores `stlr`, `cas` with
+  `clrex` on a mismatch) and fences as `dmb ishld`/`dmb ish`; volatile
+  accesses as the plain ones this back end never reorders.
+- **The same programs on both architectures**: `std.os` names the system
+  calls of the target (`when target.arch`), and `io`, `memory` and `own` use
+  the names instead of x86 numbers; the harness compiles every fixture of
+  `tests/run` and `tests/run/trap` that is not x86 by nature with the AArch64
+  profile in front and runs it under qemu-aarch64 — 52 of 59, the same exit
+  status, output and trap message (one line later). The seven left are
+  machine blocks, ports and control registers, interrupt procedures, the x86
+  freestanding image and `when.oli`, which asserts that it was compiled for
+  x86-64 (and on AArch64 says it was not, as it should).
+- **Two encodings of stage 43 were wrong** and are fixed: `eor` carried a
+  stray shifted register and `negs` read x0; the stage 43 programs used
+  neither. Every constant of `compiler/a64.oli` has since been disassembled
+  with its operands, not only its mnemonic.
+- Still E0900 on AArch64: objects (no AArch64 relocations written yet) and
+  freestanding images; no register allocator — every value in its frame
+  word.
+
 ## Implemented in stage 43 (2026-09-25): a second architecture, AArch64
 
 - **`compiler/a64.oli`**, the AArch64 back end, lowers the same OIR as the
@@ -1604,9 +1637,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 33,214 lines) into
+compiles its own source (`compiler/`, seventeen modules, 33,776 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,507,184 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,534,096 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

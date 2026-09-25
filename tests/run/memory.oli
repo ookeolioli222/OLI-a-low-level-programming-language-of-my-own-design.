@@ -1,4 +1,5 @@
 module memory
+import std.os
 -- M2: zones and views — a zone from the operating system, byte buffers taken
 -- from it, element reads and writes, subviews, `each`, and views as
 -- parameters and results. The exit status is the number of the check that
@@ -92,7 +93,7 @@ proc start -> s32
             ret 16
         end
         -- A fixture with a `.out` file writes it and exits 0.
-        os.syscall(1, 1, b.addr, 2)
+        os.syscall(os.WRITE, 1, b.addr, 2)
         ret 0
     end
 end

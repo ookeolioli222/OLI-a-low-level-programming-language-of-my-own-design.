@@ -6,10 +6,14 @@ module olic.a64
 -- OIR: constants, frame places, arithmetic with every trap of MACHINE_MODEL
 -- §4 (the flags of `adds`/`subs`, `smulh`/`umulh`, the re-extension of a
 -- narrow type), comparisons, conversions of width, raw loads and stores,
--- statics, views and their checks, calls with up to six argument words,
--- system calls (`svc #0`, the number in x8) and the entry's exit. Anything
--- else — zones, floats, vectors, atomics, machine blocks, the x86 hardware
--- places — is E0900 at the procedure, never an approximation.
+-- statics, views and their checks, calls (six argument words in x0-x5,
+-- the rest on the stack), system calls (`svc #0`, the number in x8), the
+-- entry's exit, zones (mmap/munmap), `mem.copy`/`set`/`zero`, the
+-- `sat`/`checked` modes, `f32`/`f64` (FP registers, d0-d7 across calls),
+-- 128-bit vectors (NEON), atomics (`ldaxr`/`stlxr`) and fences (`dmb`).
+-- What is x86 by nature — machine blocks, ports, control registers,
+-- interrupt procedures, `calls none` — and objects and freestanding images
+-- are E0900 at the procedure, never an approximation.
 --
 -- Registers: x0-x5 arguments and results, x8 the system-call number, x9-x12
 -- scratch, x16/x17 address scratch, x29 the frame pointer, x30 the link.
@@ -115,6 +119,24 @@ proc a_lea_slot(ob: rw ref Oir, d: u64, s: u64)
     -- The address of slot `s`: x29 - disp.
     a_imm(ob, 16, a_slot_disp(s))
     a_rrr(ob, 3405774848, d, 29, 16)
+end
+
+proc a_ldr_off(ob: rw ref Oir, t: u64, n: u64, off: u64)
+    -- `ldr xt, [xn, #off]` (off a multiple of eight below 32768).
+    aw(ob, 4181721088 | ((off / 8) << 10) | (n << 5) | t)
+end
+
+proc a_str_off(ob: rw ref Oir, t: u64, n: u64, off: u64)
+    aw(ob, 4177526784 | ((off / 8) << 10) | (n << 5) | t)
+end
+
+proc a_add_imm(ob: rw ref Oir, d: u64, n: u64, imm: u64)
+    -- `add xd, xn, #imm` (imm below 4096; sp may be d or n).
+    aw(ob, 2432696320 | (imm << 10) | (n << 5) | d)
+end
+
+proc a_sub_imm(ob: rw ref Oir, d: u64, n: u64, imm: u64)
+    aw(ob, 3506438144 | (imm << 10) | (n << 5) | d)
 end
 
 proc a_ld(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
@@ -246,7 +268,7 @@ proc a_bin(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     elif bop == B_OR
         a_rrr(ob, 2852126720, 9, 9, 10)
     elif bop == B_XOR
-        a_rrr(ob, 3389997056, 9, 9, 10)
+        a_rrr(ob, 3388997632, 9, 9, 10)
     elif bop == B_SHL
         a_mask_count(ob, ins.w)
         a_rrr(ob, 2596282368, 9, 9, 10)
@@ -353,7 +375,7 @@ proc a_un(ob: rw ref Oir, mc: rw ref Mach, i: u64)
     if ins.bop == U1_NEG
         if ins.c == 1
             -- negs x9, x9: V set for the most negative value.
-            aw(ob, 3942646761)
+            aw(ob, 3943236585)
             a_trap_unless(ob, mc, AC_VC, ins.site)
         else
             -- An unsigned negation overflows unless the value is 0.
@@ -440,10 +462,17 @@ proc a_load_args(ob: rw ref Oir, mc: ref Mach, i: u64, nargs: u64, issys: u64) -
                     else
                         a_ld(ob, mc, k - 1, ins.a)
                     end
+                elif ins.b >= 1000
+                    -- A float argument into d(b - 1000).
+                    a_ld(ob, mc, 9, ins.a)
+                    a_fmov_dx(ob, ins.b - 1000, 9)
                 elif ins.b < 6
                     a_ld(ob, mc, ins.b, ins.a)
                 else
-                    ret -1
+                    -- A stack word: [sp + 8 * (location - 6)], the area the
+                    -- call reserved (a_call).
+                    a_ld(ob, mc, 9, ins.a)
+                    a_str_off(ob, 9, 31, (ins.b - 6) * 8)
                 end
             end
         end
@@ -526,21 +555,22 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         ret
     end
     if op == O_CALL
-        if ins.c > 0
-            a_refuse(pg, ob, mc)
-            ret
-        end
-        if a_load_args(ob, mc, i, ins.b, 0) < 0
-            a_refuse(pg, ob, mc)
-            ret
-        end
         opc := oproc_at(ob, ins.a)
         if opc.isextern == 1
             a_refuse(pg, ob, mc)
             ret
         end
+        -- Stack words (ins.c) below the caller's sp, sixteen-byte aligned.
+        stk := (ins.c * 8 + 15) / 16 * 16
+        if stk > 0
+            a_sub_imm(ob, 31, 31, stk)
+        end
+        a_load_args(ob, mc, i, ins.b, 0)
         add_fix(mc, ob.ncode, AF_CALL, ins.a)
         aw(ob, 2483027968)
+        if stk > 0
+            a_add_imm(ob, 31, 31, stk)
+        end
         a_st(ob, mc, 0, i)
         ret
     end
@@ -555,31 +585,151 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         ret
     end
     if op == O_PARAM
-        if ins.c != 0
+        if ins.c == 2
             a_refuse(pg, ob, mc)
             ret
         end
-        if ins.a >= 6
-            a_refuse(pg, ob, mc)
+        if ins.a >= 1000
+            -- A float: from d(a - 1000) (AAPCS64 v0-v7).
+            a_fmov_xd(ob, 9, ins.a - 1000)
+            a_st(ob, mc, 9, i)
             ret
         end
-        a_st(ob, mc, ins.a, i)
+        if ins.a < 6
+            a_st(ob, mc, ins.a, i)
+            ret
+        end
+        -- Past the sixth word: above the saved x29/x30, at x29 + 16.
+        if ins.c == 1
+            -- A layout's bytes there: the parameter is their address.
+            a_add_imm(ob, 9, 29, 16 + (ins.a - 6) * 8)
+        else
+            a_ldr_off(ob, 9, 29, 16 + (ins.a - 6) * 8)
+        end
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_ZNEW
+        a_znew(ob, mc, i)
+        ret
+    end
+    if op == O_ZEND
+        -- munmap(base, limit - base)
+        a_ld(ob, mc, 11, ins.a)
+        a_ldr_off(ob, 0, 11, 0)
+        a_ldr_off(ob, 1, 11, 16)
+        a_rrr(ob, 3405774848, 1, 1, 0)
+        a_movz(ob, 8, 215, 0)
+        aw(ob, 3556769793)
+        ret
+    end
+    if op == O_ZALLOC
+        al : u64 <- 16
+        if ins.c > 16
+            al <- ins.c
+        end
+        a_alloc_core(ob, mc, ins.a, ins.b, al, ins.site)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_ZRAW
+        -- (addr, addr, addr + size) over memory already there.
+        a_ld(ob, mc, 9, ins.val)
+        a_ld(ob, mc, 10, ins.b)
+        a_ld(ob, mc, 11, ins.a)
+        a_str_off(ob, 9, 11, 0)
+        a_str_off(ob, 9, 11, 8)
+        a_rrr(ob, 2332033024, 10, 10, 9)
+        a_str_off(ob, 10, 11, 16)
+        ret
+    end
+    if op == O_ZFROM
+        -- Carved from the parent like an allocation, the child laid over it.
+        a_alloc_core(ob, mc, ins.val, ins.b, 16, ins.site)
+        a_ld(ob, mc, 11, ins.a)
+        a_str_off(ob, 9, 11, 0)
+        a_str_off(ob, 9, 11, 8)
+        a_rrr(ob, 2332033024, 9, 9, 10)
+        a_str_off(ob, 9, 11, 16)
+        ret
+    end
+    if op == O_ZENDF
+        -- The parent's cursor back to the child's base.
+        a_ld(ob, mc, 11, ins.a)
+        a_ldr_off(ob, 9, 11, 0)
+        a_ld(ob, mc, 11, ins.b)
+        a_str_off(ob, 9, 11, 8)
+        ret
+    end
+    if op == O_MEMOP
+        a_memop(ob, mc, i)
+        ret
+    end
+    if op == O_OVF
+        a_ovf(ob, mc, i)
+        ret
+    end
+    if op == O_FBIN
+        a_fbin(ob, mc, i)
+        ret
+    end
+    if op == O_FCMP
+        a_fcmp(ob, mc, i)
+        ret
+    end
+    if op == O_FCVT
+        a_fcvt(ob, mc, i)
+        ret
+    end
+    if op == O_FRET
+        -- A float result in d0 (AAPCS64).
+        a_ld(ob, mc, 9, ins.a)
+        a_fmov_dx(ob, 0, 9)
+        ret
+    end
+    if op == O_FRES
+        a_fmov_xd(ob, 9, 0)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_VBIN
+        a_vbin(ob, mc, i)
+        ret
+    end
+    if op == O_VCMP
+        a_vcmp(ob, mc, i)
+        ret
+    end
+    if op == O_ATOMIC
+        a_atomic(ob, mc, i)
+        ret
+    end
+    if op == O_FENCE
+        -- `cpu.fence`: relaxed is nothing, acquire `dmb ishld`, any other
+        -- order `dmb ish`.
+        if ins.val == 1
+            aw(ob, 3573758399)
+        elif ins.val > 1
+            aw(ob, 3573758911)
+        end
+        ret
+    end
+    if op == O_CPU
+        if ins.val == 1
+            -- `cpu.pause()`: yield
+            aw(ob, 3573751871)
+            ret
+        end
+        a_refuse(pg, ob, mc)
         ret
     end
     if op == O_RLOAD
-        if ins.val == 1
-            -- Device memory has no meaning in a hosted aarch64 program yet.
-            a_refuse(pg, ob, mc)
-            ret
-        end
+        -- A volatile (`mmio`) access is the same instruction: this back end
+        -- keeps every access where the program wrote it and merges none.
         a_rload(ob, mc, i)
         ret
     end
     if op == O_RSTORE
-        if ins.val == 1
-            a_refuse(pg, ob, mc)
-            ret
-        end
         a_rstore(ob, mc, i)
         ret
     end
@@ -618,6 +768,418 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     -- Zones, floats, vectors, atomics, machine blocks and the hardware
     -- places of x86-64 are not lowered for AArch64 yet.
     a_refuse(pg, ob, mc)
+end
+
+proc a_znew(ob: rw ref Oir, mc: rw ref Mach, i: u64)
+    -- mmap(0, size rounded up to a page, 3, 34, -1, 0) (222); a refusal
+    -- (an answer of -4096 or above) is the zone that could not be had; then
+    -- the triple (base, base, base + rounded size).
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 9, ins.b)
+    a_add_imm(ob, 9, 9, 4095)
+    aw(ob, 3545038121)
+    aw(ob, 3547647273)
+    a_movz(ob, 0, 0, 0)
+    a_mov(ob, 1, 9)
+    a_movz(ob, 2, 3, 0)
+    a_movz(ob, 3, 34, 0)
+    a_imm(ob, 4, 18446744073709551615)
+    a_movz(ob, 5, 0, 0)
+    a_movz(ob, 8, 222, 0)
+    aw(ob, 3556769793)
+    a_imm(ob, 10, 18446744073709547520)
+    a_cmp(ob, 0, 10)
+    a_trap_unless(ob, mc, AC_LO, ins.site)
+    a_ld(ob, mc, 11, ins.a)
+    a_str_off(ob, 0, 11, 0)
+    a_str_off(ob, 0, 11, 8)
+    a_rrr(ob, 2332033024, 12, 0, 9)
+    a_str_off(ob, 12, 11, 16)
+end
+
+proc a_alloc_core(ob: rw ref Oir, mc: rw ref Mach, zv: u64, szv: u64, al: u64, site: u64)
+    -- x9 the cursor rounded up to `al` (the answer), x12 past the bytes: a
+    -- carry or a pass of the limit is `zone_exhausted`; the cursor moves.
+    a_ld(ob, mc, 11, zv)
+    a_ldr_off(ob, 9, 11, 8)
+    a_imm(ob, 12, al - 1)
+    a_rrr(ob, 2332033024, 9, 9, 12)
+    a_imm(ob, 12, 18446744073709551615 - (al - 1))
+    a_rrr(ob, 2315255808, 9, 9, 12)
+    a_ld(ob, mc, 10, szv)
+    a_rrr(ob, 2868903936, 12, 9, 10)
+    a_trap_unless(ob, mc, AC_LO, site)
+    a_ldr_off(ob, 10, 11, 16)
+    a_cmp(ob, 12, 10)
+    a_trap_unless(ob, mc, AC_LS, site)
+    a_str_off(ob, 12, 11, 8)
+end
+
+proc a_memop(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- Byte loops: `mem.copy` forwards when the destination is not above the
+    -- source and backwards from the end otherwise, so an overlap copies
+    -- right; `mem.set`/`zero`/`secure_zero` a store per byte. x0 the
+    -- destination, x1 the source, x2 the count, w3 the byte.
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 0, ins.a)
+    a_ld(ob, mc, 2, ins.val)
+    if ins.bop == 0
+        a_ld(ob, mc, 1, ins.b)
+        -- cmp x0, x1; b.hi backward
+        a_cmp(ob, 0, 1)
+        aw(ob, 1409286144 | (6 << 5) | AC_HI)
+        -- forward: cbz x2, done; ldrb w3, [x1], #1; strb w3, [x0], #1;
+        -- sub x2, x2, #1; b forward
+        aw(ob, 3019898882 | (12 << 5))
+        aw(ob, 943723555)
+        aw(ob, 939529219)
+        a_sub_imm(ob, 2, 2, 1)
+        aw(ob, 335544320 | 67108860)
+        -- backward: add x1, x1, x2; add x0, x0, x2; then the loop down.
+        a_rrr(ob, 2332033024, 1, 1, 2)
+        a_rrr(ob, 2332033024, 0, 0, 2)
+        aw(ob, 3019898882 | (5 << 5))
+        aw(ob, 945814563)
+        aw(ob, 941620227)
+        a_sub_imm(ob, 2, 2, 1)
+        aw(ob, 335544320 | 67108860)
+        ret
+    end
+    if ins.bop == 1
+        a_ld(ob, mc, 3, ins.b)
+    else
+        a_movz(ob, 3, 0, 0)
+    end
+    -- cbz x2, done; strb w3, [x0], #1; sub x2, x2, #1; b loop
+    aw(ob, 3019898882 | (4 << 5))
+    aw(ob, 939529219)
+    a_sub_imm(ob, 2, 2, 1)
+    aw(ob, 335544320 | 67108861)
+end
+
+proc a_ovf(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `ovf.of %v`: 1 when the 64-bit operation `v` overflowed, computed
+    -- again from its operands (AArch64 reads no flag across the store):
+    -- adds/subs and V or C, the high half of the product, a negation.
+    ins := ins_at(ob, i)
+    v := ins_at(ob, ins.a)
+    sg := ins.c
+    a_ld(ob, mc, 9, v.a)
+    if v.op == O_UN
+        if sg == 1
+            aw(ob, 3943236585)
+            a_cset(ob, 9, 6)
+        else
+            a_cmp(ob, 9, 31)
+            a_cset(ob, 9, AC_NE)
+        end
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    a_ld(ob, mc, 10, v.b)
+    if v.bop == B_ADD
+        a_rrr(ob, 2868903936, 11, 9, 10)
+        if sg == 1
+            a_cset(ob, 9, 6)
+        else
+            a_cset(ob, 9, AC_HS)
+        end
+    elif v.bop == B_SUB
+        a_rrr(ob, 3942645760, 11, 9, 10)
+        if sg == 1
+            a_cset(ob, 9, 6)
+        else
+            a_cset(ob, 9, AC_LO)
+        end
+    else
+        a_rrr(ob, 2600500224, 11, 9, 10)
+        if sg == 1
+            a_rrr(ob, 2604694528, 12, 9, 10)
+            aw(ob, 3951098911 | (11 << 16) | (12 << 5))
+        else
+            a_rrr(ob, 2613083136, 12, 9, 10)
+            a_cmp(ob, 12, 31)
+        end
+        a_cset(ob, 9, AC_NE)
+    end
+    a_st(ob, mc, 9, i)
+end
+
+-- Floats, vectors, atomics --------------------------------------------------
+
+proc a_fmov_dx(ob: rw ref Oir, d: u64, n: u64)
+    -- `fmov dd, xn`: the word's bits into an FP register.
+    aw(ob, 2657550336 | (n << 5) | d)
+end
+
+proc a_fmov_xd(ob: rw ref Oir, d: u64, n: u64)
+    -- `fmov xd, dn`
+    aw(ob, 2657484800 | (n << 5) | d)
+end
+
+proc a_fres32(ob: rw ref Oir, w: u64)
+    -- The result from d0/s0 into x9: all eight bytes of an f64, `fmov w9,
+    -- s0` (upper half zero) for an f32.
+    if w == 64
+        a_fmov_xd(ob, 9, 0)
+    else
+        aw(ob, 505806857)
+    end
+end
+
+proc a_fbin(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- fadd/fsub/fmul/fdiv d0, d0, d1 (s for f32).
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 9, ins.a)
+    a_ld(ob, mc, 10, ins.b)
+    a_fmov_dx(ob, 0, 9)
+    a_fmov_dx(ob, 1, 10)
+    base : u64 <- 509618176
+    if ins.c == B_SUB
+        base <- 509622272
+    elif ins.c == B_MUL
+        base <- 509609984
+    elif ins.c == B_DIV
+        base <- 509614080
+    end
+    if ins.val == 32
+        base <- base - 4194304
+    end
+    aw(ob, base | (1 << 16))
+    a_fres32(ob, ins.val)
+    a_st(ob, mc, 9, i)
+end
+
+proc a_fcmp(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `fcmp d0, d1` and the flags into a bool. An unordered pair sets C and
+    -- V: eq, mi, ls, gt and ge are all false on it, ne true.
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 9, ins.a)
+    a_ld(ob, mc, 10, ins.b)
+    a_fmov_dx(ob, 0, 9)
+    a_fmov_dx(ob, 1, 10)
+    if ins.val == 32
+        aw(ob, 505421824 | (1 << 16))
+    else
+        aw(ob, 509616128 | (1 << 16))
+    end
+    c := ins.c
+    cond : u64 <- AC_GE
+    if c == B_EQ
+        cond <- AC_EQ
+    elif c == B_NE
+        cond <- AC_NE
+    elif c == B_LT
+        cond <- 4
+    elif c == B_LE
+        cond <- AC_LS
+    elif c == B_GT
+        cond <- AC_GT
+    end
+    a_cset(ob, 9, cond)
+    a_st(ob, mc, 9, i)
+end
+
+proc a_fcvt(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- scvtf/ucvtf, fcvtzs/fcvtzu (toward zero; AArch64 saturates an
+    -- out-of-range value and gives 0 for a NaN), fcvt between the formats.
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 9, ins.a)
+    k := ins.c
+    w := ins.val
+    sgl : u64 <- 0
+    if w == 32
+        sgl <- 4194304
+    end
+    if k == 0
+        aw(ob, (2657222656 - sgl) | (9 << 5))
+        a_fres32(ob, w)
+    elif k == 1
+        aw(ob, (2657288192 - sgl) | (9 << 5))
+        a_fres32(ob, w)
+    elif k == 2
+        a_fmov_dx(ob, 0, 9)
+        aw(ob, (2658664448 - sgl) | 9)
+    elif k == 5
+        a_fmov_dx(ob, 0, 9)
+        aw(ob, (2658729984 - sgl) | 9)
+    elif k == 3
+        a_fmov_dx(ob, 0, 9)
+        aw(ob, 505593856)
+        a_fmov_xd(ob, 9, 0)
+    else
+        a_fmov_dx(ob, 0, 9)
+        aw(ob, 509755392)
+        a_fres32(ob, 32)
+    end
+    a_st(ob, mc, 9, i)
+end
+
+proc a_vop(c: u64, lane: u64) -> u64
+    -- The NEON instruction for B_* `c` on lane code `lane` (design 0024),
+    -- with v0 = v0 op v1.
+    if lane <= 1
+        dbl : u64 <- 0
+        if lane == 1
+            dbl <- 4194304
+        end
+        if c == B_ADD
+            ret 1310774272 | dbl
+        end
+        if c == B_SUB
+            ret 1319162880 | dbl
+        end
+        if c == B_MUL
+            ret 1847647232 | dbl
+        end
+        if c == B_DIV
+            ret 1847655424 | dbl
+        end
+    end
+    sz : u64 <- 0
+    if lane == 3
+        sz <- 1
+    elif lane == 4
+        sz <- 2
+    elif lane == 5
+        sz <- 3
+    end
+    if c == B_ADD
+        ret 1310753792 | (sz << 22)
+    end
+    if c == B_SUB
+        ret 1847624704 | (sz << 22)
+    end
+    if c == B_MUL
+        ret 1310759936 | (sz << 22)
+    end
+    if c == B_AND
+        ret 1310727168
+    end
+    if c == B_OR
+        ret 1319115776
+    end
+    ret 1847598080
+end
+
+proc a_vload2(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `ldr q0, [x9]`, `ldr q1, [x10]`
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 9, ins.a)
+    a_ld(ob, mc, 10, ins.b)
+    aw(ob, 1035993088 | (9 << 5))
+    aw(ob, 1035993088 | (10 << 5) | 1)
+end
+
+proc a_vbin(ob: rw ref Oir, mc: ref Mach, i: u64)
+    ins := ins_at(ob, i)
+    a_vload2(ob, mc, i)
+    aw(ob, a_vop(ins.c, ins.val) | (1 << 16))
+    a_lea_slot(ob, 9, ins.w)
+    aw(ob, 1031798784 | (9 << 5))
+    a_st(ob, mc, 9, i)
+end
+
+proc a_vcmp(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- cmeq/fcmeq into lane masks, `uminv b0` (all ones only when every lane
+    -- was equal; a NaN lane is not), `umov w9, v0.b[0]` against 255.
+    ins := ins_at(ob, i)
+    a_vload2(ob, mc, i)
+    lane := ins.val
+    if lane == 0
+        aw(ob, 1310778368 | (1 << 16))
+    elif lane == 1
+        aw(ob, 1314972672 | (1 << 16))
+    else
+        sz : u64 <- 0
+        if lane == 3
+            sz <- 1
+        elif lane == 4
+            sz <- 2
+        elif lane == 5
+            sz <- 3
+        end
+        aw(ob, 1847626752 | (sz << 22) | (1 << 16))
+    end
+    aw(ob, 1848748032)
+    aw(ob, 234961929)
+    a_imm(ob, 10, 255)
+    a_cmp(ob, 9, 10)
+    if ins.c == B_EQ
+        a_cset(ob, 9, AC_EQ)
+    else
+        a_cset(ob, 9, AC_NE)
+    end
+    a_st(ob, mc, 9, i)
+end
+
+proc a_atomic(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- ldar/stlr for a load and a store; every read-modify-write an
+    -- exclusive pair `ldaxr`/`stlxr` retried until it holds (the strongest
+    -- order, which every weaker one may take); `cas` compares at the type's
+    -- own extension and answers whether it swapped.
+    ins := ins_at(ob, i)
+    kind := ins.bop
+    sz := ins.c % 16
+    sg := ins.c / 16
+    size : u64 <- 3
+    if sz == 1
+        size <- 0
+    elif sz == 2
+        size <- 1
+    elif sz == 4
+        size <- 2
+    end
+    a_ld(ob, mc, 9, ins.a)
+    if kind == 0
+        aw(ob, 148896768 | (size << 30) | (9 << 5) | 12)
+        a_extend(ob, 12, 12, sz * 8, sg)
+        a_st(ob, mc, 12, i)
+        ret
+    end
+    a_ld(ob, mc, 10, ins.b)
+    if kind == 1
+        aw(ob, 144702464 | (size << 30) | (9 << 5) | 10)
+        ret
+    end
+    if kind == 8
+        a_ld(ob, mc, 11, ins.val)
+        -- loop: ldaxr x12; extend; cmp; b.ne fail; stlxr w14, x11; cbnz
+        -- w14, loop; x9 = 1; b done; fail: clrex; x9 = 0; done:
+        top := ob.ncode
+        aw(ob, 140508160 | (size << 30) | (9 << 5) | 12)
+        a_extend(ob, 12, 12, sz * 8, sg)
+        a_cmp(ob, 12, 10)
+        aw(ob, 1409286144 | (5 << 5) | AC_NE)
+        aw(ob, 134282240 | (size << 30) | (14 << 16) | (9 << 5) | 11)
+        back := (ob.ncode - top) / 4
+        aw(ob, 889192448 | ((524288 - back) << 5) | 14)
+        a_movz(ob, 9, 1, 0)
+        aw(ob, 335544320 | 3)
+        aw(ob, 3573755999)
+        a_movz(ob, 9, 0, 0)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    -- loop: ldaxr x12; x13 = x12 op x10; stlxr w14, x13; cbnz w14, loop
+    aw(ob, 140508160 | (size << 30) | (9 << 5) | 12)
+    if kind == 2
+        a_rrr(ob, 2332033024, 13, 12, 10)
+    elif kind == 3
+        a_rrr(ob, 3405774848, 13, 12, 10)
+    elif kind == 4
+        a_rrr(ob, 2315255808, 13, 12, 10)
+    elif kind == 5
+        a_rrr(ob, 2852126720, 13, 12, 10)
+    elif kind == 6
+        a_rrr(ob, 3388997632, 13, 12, 10)
+    else
+        a_mov(ob, 13, 10)
+    end
+    aw(ob, 134282240 | (size << 30) | (14 << 16) | (9 << 5) | 13)
+    aw(ob, 889192448 | ((524288 - 3) << 5) | 14)
+    a_extend(ob, 12, 12, sz * 8, sg)
+    a_st(ob, mc, 12, i)
 end
 
 -- Blocks, procedures, the program ------------------------------------------

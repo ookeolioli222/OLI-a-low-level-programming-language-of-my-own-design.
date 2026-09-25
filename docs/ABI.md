@@ -89,9 +89,14 @@ The second back end (`compiler/a64.oli`) keeps the frame of §1 in AAPCS64
 dress: `stp x29, x30, [sp, #-16]!; mov x29, sp`, the frame sixteen-byte
 aligned, a value's word at `[x29 - 8 * (slot + 1)]` exactly as at
 `[rbp - …]`; argument words in x0-x5 (a seventh is E0900 for now), results
-in x0 and x1; system calls with the number in x8 and `svc #0` — the numbers
-are the target's (write 64, exit_group 94), so a program that runs on both
-says which it means with `when target.arch`. The entry procedure ends with
+in x0 and x1; float arguments in d0-d7 and a float result in d0; a stack
+argument (past the sixth word) at `[sp + 8k]` at the call, read by the callee
+at `[x29 + 16 + 8k]`; system calls with the number in x8 and `svc #0` — the
+numbers are the target's (write 64, exit_group 94): `std.os` names them for
+either architecture (`os.WRITE`, `os.MMAP`, …), or a program says which it
+means with `when target.arch`. A float converted to an integer out of range
+(or a NaN) is target-defined: x86-64 gives the integer indefinite 2^63,
+AArch64 saturates and gives 0 for a NaN; every value in range agrees. The entry procedure ends with
 `exit_group(x0)`; `core.trap` writes its message with write(2, …) and exits
 134, as on x86-64. The ELF is EM_AARCH64 (183), the DWARF frame base x29.
 
