@@ -293,6 +293,7 @@ left at the end of a line is `E0032`.
 | `word` / `uword` | 8 bytes, signed / unsigned machine word | **[parses]** |
 | `byte` / `bool` | 1 byte | **[parses]** |
 | `physaddr` | 8 bytes, a physical address | **[parses]** |
+| `f32` / `f64` | 4 / 8 bytes, IEEE-754 binary32 / binary64: `+ - * /` and the comparisons (every one false on a NaN but `!=`); literals `1.5`, `2e-3`, `1_000.25` rounded from the decimal text to the context's format (a literal needs one, E0201; beyond binary32 is E0212); no implicit conversion (E0200): `f64(n)` and `f32(n)` from any integer, `f64(f)` from an `f32`, `f32.wrap(d)` rounds an `f64`, `T.wrap(f)` truncates toward zero to an integer (a NaN or an out-of-range value gives the hardware's 2^63), `F.bits(u)` / `U.bits(f)` reinterpret; SSE, arguments and results in xmm registers (`tests/run/floats.oli`, `tests/c/float_side.oli`) | **[runs]** |
 | `addr T` | 8 bytes, a raw address of `T` (`addr` alone = `addr u8`) | **[runs]** |
 | `view T` / `rw view T` | 16 bytes: address + length, bounds-checked | **[runs]** |
 | `ref T` / `rw ref T` | 8 bytes, a reference to a place of type `T` | **[runs]** |
@@ -713,9 +714,10 @@ block needs `permit cpu.asm`, a port place `port.u8[n]` / `port.u16[n]` /
 `cli`) need `permit cpu.interrupt`, a control register `arch.x64.cr0/2/3/4/8`,
 `cpu.stack`, `cpu.frame`, `arch.x64.gdt`/`idt`/`tr`, `cpu.call` and `cpu.jump`
 need `permit cpu.control`, and `arch.x64.msr[n]` needs `permit cpu.msr` —
-without them the compiler reports `E0401` at the construct. Constructs the V0 front end accepts but does not implement —
-`f32`/`f64` — report `E0900` rather than compiling to something approximate;
-`own`, `<~`, `port T (…)`, `mem.mmio` and `calls interrupt` run.
+without them the compiler reports `E0401` at the construct. Constructs the
+front end accepts but the back end does not lower report `E0900` rather than
+compiling to something approximate; `own`, `<~`, `port T (…)`, `mem.mmio`,
+`calls interrupt` and `f32`/`f64` run.
 
 With `-- target: freestanding` at the top of the program there is no
 operating system: the program supplies its own entry point (`entry` with

@@ -7,6 +7,8 @@ module olic.ast
 -- Node kinds. Expressions 1..49, statements 50..79, declarations 80..99,
 -- machine lines 100..119, fragments 120..139.
 N_INT := 1
+-- A floating literal; its bits are on the token (TK_FLOAT).
+N_FLOAT := 25
 N_STR := 2
 N_CHAR := 3
 N_NAME := 4
@@ -584,6 +586,12 @@ proc pe(cx: ref Ctx, n: u64)
     end
     nd := node_at(cx, n)
     k := nd.kind
+    if k == N_FLOAT
+        emit(cx, "(float ")
+        emit(cx, tok_text(cx, nd.t0))
+        emit(cx, ")")
+        ret
+    end
     if k == N_INT
         emit(cx, "(int ")
         if nd.sub == 1
@@ -925,6 +933,10 @@ proc p_moperand(cx: ref Ctx, n: u64)
             t <- sibling(cx, t)
         end
         emit(cx, ")")
+        ret
+    end
+    if k == N_FLOAT
+        emit(cx, tok_text(cx, nd.t0))
         ret
     end
     if k == N_INT

@@ -1,0 +1,27 @@
+-- output: object
+module float_side
+-- Floats across the C boundary (ABI.md 1, SysV): arguments in xmm0-7 beside
+-- the integer registers, results in xmm0 — libm's `sqrt` and a C function
+-- with mixed arguments called from Oli--, Oli-- procedures called from C.
+-- And the narrow integers C leaves with undefined upper bits: an exported
+-- procedure re-extends its `s32`/`s16` parameters, and the `s8` a C
+-- function returns is re-extended after the call.
+extern proc sqrt(x : f64) -> f64
+extern proc c_lerp(a : f64, b : f64, t : f32, n : u64) -> f64
+extern proc c_minus_five() -> s8
+pub proc oli_norm(x : f64, y : f64) -> f64
+    export "oli_norm"
+    ret sqrt(x * x + y * y)
+end
+pub proc oli_mid(a : f64, b : f64) -> f64
+    export "oli_mid"
+    ret c_lerp(a, b, 0.5, 3)
+end
+pub proc oli_scale32(x : f32, k : s32) -> f32
+    export "oli_scale32"
+    ret x * f32(k)
+end
+pub proc oli_narrow(h : s16) -> s64
+    export "oli_narrow"
+    ret s64(h) * 1000 + s64(c_minus_five())
+end

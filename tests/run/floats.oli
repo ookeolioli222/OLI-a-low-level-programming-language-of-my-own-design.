@@ -1,0 +1,98 @@
+module floats
+-- f32 and f64 (MACHINE_MODEL.md 2): IEEE-754 values held as their bits in a
+-- word and operated on by SSE — `addsd/subsd/mulsd/divsd` (ss for f32),
+-- `ucomisd` with the flags read so that every comparison with a NaN is
+-- false except `!=`, `cvtsi2sd` and `cvttsd2si`, `cvtss2sd`/`cvtsd2ss`, a
+-- u64 above 2^63 converted both ways; literals rounded from the decimal
+-- text exactly (0.1 as binary32 is 0x3DCCCCCD, not the binary64 rounded
+-- again); `.bits` in both directions; statics, arrays and layout fields of
+-- float type; float arguments and results in xmm registers (SysV), eight of
+-- them in one call. The exit status is the number of the check that
+-- failed; 42 when every one held.
+layout Vec
+    x : f32
+    y : f64
+    tag : u8
+end
+PI : f64 := 3.141592653589793
+table : [4]f64 <- { 0.5, -1.25, 1e10, 2 }
+small : [3]f32 <- { 0.1, 1.5, -3 }
+v0 : Vec <- Vec { x: 2.5, y: -0.125, tag: 7 }
+proc hyp(a : f64, b : f64) -> f64
+    ret a * a + b * b
+end
+proc mix(i : u64, f : f64, j : s32, g : f32, h : f64) -> f64
+    ret f64(i) + f + f64(j) + f64(g) + h
+end
+proc many(a : f64, b : f64, c : f64, d : f64, e : f64, f : f64, g : f64, h : f64) -> f64
+    ret a + b * 2.0 + c * 3.0 + d * 4.0 + e * 5.0 + f * 6.0 + g * 7.0 + h * 8.0
+end
+proc half32(x : f32) -> f32
+    ret x / 2.0
+end
+proc start -> s32
+    entry
+    a : f64 <- 1.5
+    b : f64 <- 2.25
+    if a + b != 3.75 then ret 1
+    if a * b != 3.375 then ret 2
+    if b - a != 0.75 then ret 3
+    if b / a != 1.5 then ret 4
+    if (a < b) == false then ret 5
+    if a >= b then ret 6
+    if -a != -1.5 then ret 7
+    z : f64 <- 0.0
+    nan := z / z
+    if nan == nan then ret 8
+    if (nan != nan) == false then ret 9
+    if nan < 1.0 then ret 10
+    if nan >= 1.0 then ret 11
+    if hyp(3.0, 4.0) != 25.0 then ret 12
+    if mix(10, 0.5, -3, 0.25, 100.0) != 107.75 then ret 13
+    if many(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0) != 36.0 then ret 14
+    if half32(3.0) != 1.5 then ret 15
+    k : s64 <- -7
+    if f64(k) != -7.0 then ret 16
+    big : u64 <- 18446744073709551615
+    if f64(big) != 18446744073709551616.0 then ret 17
+    q : f64 <- -2.75
+    if s64.wrap(q) != -2 then ret 18
+    if u8.wrap(q * -1.0) != 2 then ret 19
+    h : f64 <- 1e19
+    if u64.wrap(h) != 10000000000000000000 then ret 20
+    if u64.bits(PI) != 0x400921FB54442D18 then ret 21
+    if f64.bits(0x3FF0000000000000) != 1.0 then ret 22
+    s : f32 <- 0.1
+    if u32.bits(s) != 0x3DCCCCCD then ret 23
+    d := f64(s)
+    if u64.bits(d) != 0x3FB99999A0000000 then ret 24
+    back := f32.wrap(0.1)
+    if back != s then ret 25
+    if table[1] != -1.25 then ret 26
+    if table[3] != 2.0 then ret 27
+    if small[0] != s then ret 28
+    if small[2] != -3.0 then ret 29
+    if v0.x != 2.5 then ret 30
+    if v0.y != -0.125 then ret 31
+    if v0.tag != 7 then ret 32
+    v0.x <- v0.x * 4.0
+    if v0.x != 10.0 then ret 33
+    if v0.tag != 7 then ret 34
+    t : f64 <- 0.0
+    i : u64 <- 0
+    while i < 10
+        t <- t + 0.1
+        i <- i + 1
+    end
+    if t == 1.0 then ret 35
+    if u64.bits(t) != 0x3FEFFFFFFFFFFFFF then ret 36
+    m : s32 <- -9
+    fm := f32(m)
+    if fm != -9.0 then ret 37
+    dd : f64 <- 0.1
+    ff := f32.wrap(dd)
+    if u32.bits(ff) != 0x3DCCCCCD then ret 38
+    g2 : f32 <- -7.75
+    if s32.wrap(g2) != -7 then ret 39
+    ret 42
+end

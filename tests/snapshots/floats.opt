@@ -1,0 +1,442 @@
+(oir
+  (static 0 removed)
+  (static 1 removed)
+  (static 2 removed)
+  (static 3 removed)
+  (static 4 len=27)
+  (data 0 size=32 init)
+  (data 1 size=12 init)
+  (data 2 size=24 init)
+  (proc hyp locals=2
+    (bb0
+      %0 = param stack.994
+      %1 = param stack.995
+      fmul.64 %0, %0
+      fmul.64 %1, %1
+      fadd.64 %2, %3
+      fret %4
+      ret %4))
+  (proc mix locals=5
+    (bb0
+      %0 = param 0
+      %1 = param stack.994
+      %2 = param 1
+      %3 = param stack.995
+      %4 = param stack.996
+      fcvt.from_u64 %0
+      fadd.64 %5, %1
+      fcvt.from_signed %2
+      fadd.64 %6, %7
+      fcvt.f32_to_f64 %3
+      fadd.64 %8, %9
+      fadd.64 %10, %4
+      fret %11
+      ret %11))
+  (proc many locals=8
+    (bb0
+      %0 = param stack.994
+      %1 = param stack.995
+      %2 = param stack.996
+      %3 = param stack.997
+      %4 = param stack.998
+      %5 = param stack.999
+      %6 = param stack.1000
+      %7 = param stack.1001
+      %8 = const 4611686018427387904
+      fmul.64 %1, %8
+      fadd.64 %0, %9
+      %11 = const 4613937818241073152
+      fmul.64 %2, %11
+      fadd.64 %10, %12
+      %14 = const 4616189618054758400
+      fmul.64 %3, %14
+      fadd.64 %13, %15
+      %17 = const 4617315517961601024
+      fmul.64 %4, %17
+      fadd.64 %16, %18
+      %20 = const 4618441417868443648
+      fmul.64 %5, %20
+      fadd.64 %19, %21
+      %23 = const 4619567317775286272
+      fmul.64 %6, %23
+      fadd.64 %22, %24
+      %26 = const 4620693217682128896
+      fmul.64 %7, %26
+      fadd.64 %25, %27
+      fret %28
+      ret %28))
+  (proc half32 locals=1
+    (bb0
+      %0 = param stack.994
+      %1 = const 1073741824
+      fdiv.32 %0, %1
+      fret %2
+      ret %2))
+  (proc start locals=18 entry
+    (bb0
+      %0 = const 4609434218613702656
+      %1 = const 4612248968380809216
+      fadd.64 %0, %1
+      %3 = const 4615626668101337088
+      fcmp.cmp.ne.64 %2, %3
+      branch %4, bb1, bb2)
+    (bb1 preds bb0
+      %5 = const 1
+      ret %5)
+    (bb2 preds bb0
+      fmul.64 %0, %1
+      %7 = const 4614782243171205120
+      fcmp.cmp.ne.64 %6, %7
+      branch %8, bb3, bb4)
+    (bb3 preds bb2
+      %9 = const 2
+      ret %9)
+    (bb4 preds bb2
+      fsub.64 %1, %0
+      %11 = const 4604930618986332160
+      fcmp.cmp.ne.64 %10, %11
+      branch %12, bb5, bb6)
+    (bb5 preds bb4
+      %13 = const 3
+      ret %13)
+    (bb6 preds bb4
+      fdiv.64 %1, %0
+      fcmp.cmp.ne.64 %14, %0
+      branch %16, bb7, bb8)
+    (bb7 preds bb6
+      %17 = const 4
+      ret %17)
+    (bb8 preds bb6
+      fcmp.cmp.lt.64 %0, %1
+      %19 = const 0
+      %20 = cmp.eq %18, %19
+      branch %20, bb9, bb10)
+    (bb9 preds bb8
+      %21 = const 5
+      ret %21)
+    (bb10 preds bb8
+      fcmp.cmp.ge.64 %0, %1
+      branch %22, bb11, bb12)
+    (bb11 preds bb10
+      %23 = const 6
+      ret %23)
+    (bb12 preds bb10
+      %24 = const 9223372036854775808
+      %25 = xor %0, %24
+      fcmp.cmp.ne.64 %25, %25
+      branch %29, bb13, bb14)
+    (bb13 preds bb12
+      %30 = const 7
+      ret %30)
+    (bb14 preds bb12
+      fdiv.64 %19, %19
+      fcmp.cmp.eq.64 %32, %32
+      branch %33, bb15, bb16)
+    (bb15 preds bb14
+      %34 = const 8
+      ret %34)
+    (bb16 preds bb14
+      fcmp.cmp.ne.64 %32, %32
+      %37 = cmp.eq %35, %19
+      branch %37, bb17, bb18)
+    (bb17 preds bb16
+      %38 = const 9
+      ret %38)
+    (bb18 preds bb16
+      %39 = const 4607182418800017408
+      fcmp.cmp.lt.64 %32, %39
+      branch %40, bb19, bb20)
+    (bb19 preds bb18
+      %41 = const 10
+      ret %41)
+    (bb20 preds bb18
+      fcmp.cmp.ge.64 %32, %39
+      branch %43, bb21, bb22)
+    (bb21 preds bb20
+      %44 = const 11
+      ret %44)
+    (bb22 preds bb20
+      %45 = const 4613937818241073152
+      arg.stack.994 %45
+      %47 = const 4616189618054758400
+      arg.stack.995 %47
+      %49 = call hyp/2
+      fres
+      %51 = const 4627730092099895296
+      fcmp.cmp.ne.64 %50, %51
+      branch %52, bb23, bb24)
+    (bb23 preds bb22
+      %53 = const 12
+      ret %53)
+    (bb24 preds bb22
+      %54 = const 10
+      arg %54
+      %56 = const 4602678819172646912
+      arg.stack.994 %56
+      %58 = const 18446744073709551613
+      arg %58
+      %60 = const 1048576000
+      arg.stack.995 %60
+      %62 = const 4636737291354636288
+      arg.stack.996 %62
+      %64 = call mix/5
+      fres
+      %66 = const 4637282649122013184
+      fcmp.cmp.ne.64 %65, %66
+      branch %67, bb25, bb26)
+    (bb25 preds bb24
+      %68 = const 13
+      ret %68)
+    (bb26 preds bb24
+      arg.stack.994 %39
+      arg.stack.995 %39
+      arg.stack.996 %39
+      arg.stack.997 %39
+      arg.stack.998 %39
+      arg.stack.999 %39
+      arg.stack.1000 %39
+      arg.stack.1001 %39
+      %85 = call many/8
+      fres
+      %87 = const 4630263366890291200
+      fcmp.cmp.ne.64 %86, %87
+      branch %88, bb27, bb28)
+    (bb27 preds bb26
+      %89 = const 14
+      ret %89)
+    (bb28 preds bb26
+      %90 = const 1077936128
+      arg.stack.994 %90
+      %92 = call half32/1
+      fres
+      %94 = const 1069547520
+      fcmp.cmp.ne.32 %93, %94
+      branch %95, bb29, bb30)
+    (bb29 preds bb28
+      %96 = const 15
+      ret %96)
+    (bb30 preds bb28
+      %97 = const 18446744073709551609
+      fcvt.from_signed %97
+      %99 = const 4619567317775286272
+      %101 = xor %99, %24
+      fcmp.cmp.ne.64 %98, %101
+      branch %102, bb31, bb32)
+    (bb31 preds bb30
+      %103 = const 16
+      ret %103)
+    (bb32 preds bb30
+      %104 = const 18446744073709551615
+      fcvt.from_u64 %104
+      %106 = const 4895412794951729152
+      fcmp.cmp.ne.64 %105, %106
+      branch %107, bb33, bb34)
+    (bb33 preds bb32
+      %108 = const 17
+      ret %108)
+    (bb34 preds bb32
+      %109 = const 4613374868287651840
+      %111 = xor %109, %24
+      fcvt.to_s64 %111
+      %113 = const 18446744073709551614
+      %114 = cmp.ne.s %112, %113
+      branch %114, bb35, bb36)
+    (bb35 preds bb34
+      %115 = const 18
+      ret %115)
+    (bb36 preds bb34
+      %118 = xor %39, %24
+      fmul.64 %111, %118
+      fcvt.to_s64 %119
+      %121 = trunc.8 %120
+      %122 = const 2
+      %123 = cmp.ne %121, %122
+      branch %123, bb37, bb38)
+    (bb37 preds bb36
+      %124 = const 19
+      ret %124)
+    (bb38 preds bb36
+      %125 = const 4891288408196988160
+      fcvt.to_u64 %125
+      %127 = const 10000000000000000000
+      %128 = cmp.ne %126, %127
+      branch %128, bb39, bb40)
+    (bb39 preds bb38
+      %129 = const 20
+      ret %129)
+    (bb40 preds bb38
+      jump bb42)
+    (bb42 preds bb40
+      fcmp.cmp.ne.64 %39, %39
+      branch %136, bb43, bb44)
+    (bb43 preds bb42
+      %137 = const 22
+      ret %137)
+    (bb44 preds bb42
+      %138 = const 1036831949
+      jump bb46)
+    (bb46 preds bb44
+      fcvt.f32_to_f64 %138
+      %143 = const 4591870180174331904
+      %144 = cmp.ne %142, %143
+      branch %144, bb47, bb48)
+    (bb47 preds bb46
+      %145 = const 24
+      ret %145)
+    (bb48 preds bb46
+      fcmp.cmp.ne.32 %138, %138
+      branch %147, bb49, bb50)
+    (bb49 preds bb48
+      %148 = const 25
+      ret %148)
+    (bb50 preds bb48
+      %149 = addr.of data.0
+      %151 = const 1
+      ; check.bounds %151 -- removed: proof(constant)
+      %153 = const 8
+      %155 = add %149, %153
+      %156 = raw.load.64 %155
+      %157 = const 4608308318706860032
+      %159 = xor %157, %24
+      fcmp.cmp.ne.64 %156, %159
+      branch %160, bb51, bb52)
+    (bb51 preds bb50
+      %161 = const 26
+      ret %161)
+    (bb52 preds bb50
+      ; check.bounds %164 -- removed: proof(constant)
+      %167 = const 24
+      %168 = add %149, %167
+      %169 = raw.load.64 %168
+      %170 = const 4611686018427387904
+      fcmp.cmp.ne.64 %169, %170
+      branch %171, bb53, bb54)
+    (bb53 preds bb52
+      %172 = const 27
+      ret %172)
+    (bb54 preds bb52
+      %173 = addr.of data.1
+      ; check.bounds %175 -- removed: proof(constant)
+      %179 = add %173, %19
+      %180 = raw.load.32 %179
+      fcmp.cmp.ne.32 %180, %138
+      branch %181, bb55, bb56)
+    (bb55 preds bb54
+      %182 = const 28
+      ret %182)
+    (bb56 preds bb54
+      ; check.bounds %185 -- removed: proof(constant)
+      %189 = add %173, %153
+      %190 = raw.load.32 %189
+      %192 = const 2147483648
+      %193 = xor %90, %192
+      fcmp.cmp.ne.32 %190, %193
+      branch %194, bb57, bb58)
+    (bb57 preds bb56
+      %195 = const 29
+      ret %195)
+    (bb58 preds bb56
+      %196 = addr.of data.2
+      %197 = raw.load.32 %196
+      %198 = const 1075838976
+      fcmp.cmp.ne.32 %197, %198
+      branch %199, bb59, bb60)
+    (bb59 preds bb58
+      %200 = const 30
+      ret %200)
+    (bb60 preds bb58
+      %203 = add %196, %153
+      %204 = raw.load.64 %203
+      %205 = const 4593671619917905920
+      %207 = xor %205, %24
+      fcmp.cmp.ne.64 %204, %207
+      branch %208, bb61, bb62)
+    (bb61 preds bb60
+      %209 = const 31
+      ret %209)
+    (bb62 preds bb60
+      %211 = const 16
+      %212 = add %196, %211
+      %213 = raw.load.8 %212
+      %214 = const 7
+      %215 = cmp.ne %213, %214
+      branch %215, bb63, bb64)
+    (bb63 preds bb62
+      %216 = const 32
+      ret %216)
+    (bb64 preds bb62
+      %219 = raw.load.32 %196
+      %220 = const 1082130432
+      fmul.32 %219, %220
+      raw.store.32 %196, %221
+      %224 = raw.load.32 %196
+      %225 = const 1092616192
+      fcmp.cmp.ne.32 %224, %225
+      branch %226, bb65, bb66)
+    (bb65 preds bb64
+      %227 = const 33
+      ret %227)
+    (bb66 preds bb64
+      %231 = raw.load.8 %212
+      %233 = cmp.ne %231, %214
+      branch %233, bb67, bb68)
+    (bb67 preds bb66
+      %234 = const 34
+      ret %234)
+    (bb68 preds bb66
+      jump bb69)
+    (bb69 preds bb68 bb70
+      %237 = phi [bb68 %19] [bb70 %242]
+      %238 = phi [bb68 %19] [bb70 %244]
+      %240 = cmp.lt %238, %54
+      branch %240, bb70, bb71)
+    (bb70 preds bb69
+      %241 = const 4591870180066957722
+      fadd.64 %237, %241
+      %244 = add %238, %151
+      check.overflow %244
+      jump bb69)
+    (bb71 preds bb69
+      fcmp.cmp.eq.64 %237, %39
+      branch %246, bb72, bb73)
+    (bb72 preds bb71
+      %247 = const 35
+      ret %247)
+    (bb73 preds bb71
+      %248 = const 4607182418800017407
+      %249 = cmp.ne %237, %248
+      branch %249, bb74, bb75)
+    (bb74 preds bb73
+      %250 = const 36
+      ret %250)
+    (bb75 preds bb73
+      %251 = const 18446744073709551607
+      fcvt.from_signed %251
+      %253 = const 1091567616
+      %255 = xor %253, %192
+      fcmp.cmp.ne.32 %252, %255
+      branch %256, bb76, bb77)
+    (bb76 preds bb75
+      %257 = const 37
+      ret %257)
+    (bb77 preds bb75
+      %258 = const 4591870180066957722
+      fcvt.f64_to_f32 %258
+      %261 = cmp.ne %259, %138
+      branch %261, bb78, bb79)
+    (bb78 preds bb77
+      %262 = const 38
+      ret %262)
+    (bb79 preds bb77
+      %263 = const 1089994752
+      %265 = xor %263, %192
+      fcvt.to_s64 %265
+      %267 = trunc.32.s %266
+      %269 = cmp.ne.s %267, %97
+      branch %269, bb80, bb81)
+    (bb80 preds bb79
+      %270 = const 39
+      ret %270)
+    (bb81 preds bb79
+      %271 = const 42
+      ret %271)))

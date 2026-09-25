@@ -98,6 +98,8 @@ layout Prog
     loadaddr : u64
     objmode : u64
     dbgframe : u64
+    -- `F.bits(x)` being typed or built: its operand is the integer.
+    convbits : u64
     sectalign : u64
     hasprof : u64
     profsrc : view u8
@@ -152,6 +154,7 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.loadaddr <- 4194304
     pg.objmode <- 0
     pg.dbgframe <- 0
+    pg.convbits <- 0
     pg.sectalign <- 1
     pg.hasprof <- 0
     pg.curhasres <- 0
@@ -325,7 +328,7 @@ end
 
 proc prim_size(name: view u8) -> word
     -- The size of a primitive type, or 0 if the name is not one.
-    tab := "u8:1 s8:1 byte:1 bool:1 u16:2 s16:2 u32:4 s32:4 u64:8 s64:8 word:8 uword:8 addr:8 physaddr:8 zone:8 "
+    tab := "u8:1 s8:1 byte:1 bool:1 u16:2 s16:2 u32:4 s32:4 u64:8 s64:8 f32:4 f64:8 word:8 uword:8 addr:8 physaddr:8 zone:8 "
     i : u64 <- 0
     while i < tab.len
         c : u64 <- i

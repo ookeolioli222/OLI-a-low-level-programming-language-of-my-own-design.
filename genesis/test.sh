@@ -1141,7 +1141,7 @@ for d in explain show_asm; do
     ./build/oli1.bin < build/$d.oli > build/$d || fail "oli1 could not compile compiler/ ($d)"
     chmod +x build/$d
 done
-for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli" "atomic tests/run/atomic.oli" "memops tests/run/memops.oli" "segments tests/run/segments.oli" "own tests/run/own.oli" "rodata tests/run/rodata.oli"; do
+for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values tests/run/values.oli" "memory tests/run/memory.oli" "layouts tests/run/layouts.oli" "fallible tests/run/fallible.oli" "statics tests/run/statics.oli" "frames tests/run/frames.oli" "saturate tests/run/saturate.oli" "zones tests/run/zones.oli" "cse tests/run/cse.oli" "choice tests/run/choice.oli" "machine tests/run/machine.oli" "freestanding tests/run/freestanding.oli" "aggregates tests/run/aggregates.oli" "records tests/run/records.oli" "interrupt tests/run/interrupt.oli" "bytes tests/run/bytes.oli" "wide tests/run/wide.oli" "mmio tests/run/mmio.oli" "hw tests/run/hw.oli" "paging tests/run/paging.oli" "atomic tests/run/atomic.oli" "memops tests/run/memops.oli" "segments tests/run/segments.oli" "own tests/run/own.oli" "rodata tests/run/rodata.oli" "floats tests/run/floats.oli"; do
     set -- $pair
     ( cd .. && genesis/build/show_oir < "$2" > genesis/build/$1.oir 2> genesis/build/oir.err ) || fail "oir: diagnostics for $2: $(cat build/oir.err)"
     cmp build/$1.oir ../tests/snapshots/$1.oir || fail "oir: $1 differs from tests/snapshots/$1.oir"
@@ -1150,7 +1150,7 @@ for pair in "hello examples/hello.oli" "control tests/run/control.oli" "values t
     ( cd .. && genesis/build/show_opt < "$2" > genesis/build/$1.opt 2> genesis/build/opt.err ) || fail "opt: diagnostics for $2: $(cat build/opt.err)"
     cmp build/$1.opt ../tests/snapshots/$1.opt || fail "opt: $1 differs from tests/snapshots/$1.opt"
 done
-echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging,atomic,memops,segments,own,rodata}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
+echo "ok: olic cuts every block of examples/hello.oli and tests/run/{control,values,memory,layouts,fallible,statics,frames,saturate,zones,cse,choice,machine,freestanding,aggregates,records,interrupt,bytes,wide,mmio,hw,paging,atomic,memops,segments,own,rodata,floats}.oli exactly as tests/snapshots/*.oir (--show-oir), and the verifier accepts each"
 
 # What mem2reg must have done: no place is left, every join that needs one has
 # a phi, and every block of the printed form is one a path can reach.
@@ -1172,7 +1172,7 @@ echo "ok: mem2reg promotes every place to a value, puts a phi exactly where two 
 
 # The passes of OIR_SPEC 6. A check leaves only with a proof, which is the
 # rule the verifier enforces and the printed form shows where it stood.
-for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging atomic memops segments own rodata; do
+for n in hello control values memory layouts fallible statics frames saturate zones cse choice machine freestanding aggregates records interrupt bytes wide mmio hw paging atomic memops segments own rodata floats; do
     a=$(grep -c '; check\.' build/$n.opt || true)
     b=$(grep -c 'removed: proof(' build/$n.opt || true)
     [ "$a" = "$b" ] || fail "opt: $n prints $a removed checks and $b proofs"
@@ -1389,6 +1389,19 @@ for sym in 'TABLE 4' 'WORDS 8' 'SQUARES 2' 'ORIGIN 8'; do
 done
 readelf -lW build/rodata.elf | awk '$1=="LOAD"' | head -1 | grep -q 'R E' || fail "rodata: the constants must be in the read-only segment"
 echo "ok: aggregate constants - arrays and a layout - live in the read-only segment under their own aligned symbols and are read, indexed, iterated, passed as views and by ref (rodata.elf)"
+# tests/run/floats.oli: SSE in the image, one instruction family each.
+objdump -d --no-show-raw-insn build/floats.elf > build/floats.dis
+for ins in addsd subsd mulsd divsd mulss divss ucomisd ucomiss cvtsi2sd cvtsi2ss cvttsd2si cvtss2sd cvtsd2ss btc; do
+    grep -q "$ins" build/floats.dis || fail "floats: $ins must be in floats.elf"
+done
+# Literals rounded from the decimal text, once per format (lex.oli).
+printf 'module fl\na := 0.1\nb := 5e-324\nc := 2.4703282292062327e-324\nd := 1e23\ne := 9007199254740993.0\nf := 3.4028236e38\n' > build/fl.oli
+./build/show_tokens < build/fl.oli > build/fl.tok || fail "floats: show_tokens"
+for want in '0.1 float 4591870180066957722 1036831949' '5e-324 float 1 0' '2.4703282292062327e-324 float 0 0' '1e23 float 4950912855330343670 1705601046' '9007199254740993.0 float 4845873199050653696 1509949440' '3.4028236e38 float 5183643170920245180 4294967296'; do
+    lit=${want%% *}; rest=${want#* }
+    grep -q "$rest" build/fl.tok || fail "floats: the literal $lit must lex as [$rest]"
+done
+echo "ok: f32/f64 run - SSE arithmetic, NaN-correct comparisons, conversions both ways (u64 past 2^63 too), .bits, float statics, arrays and fields, xmm arguments and results; literals correctly rounded to binary64 and binary32 from the decimal text"
 echo "ok: own T and <~ run - a file descriptor acquired, moved, passed and released exactly once and never twice (own.elf exits 42 because closing it again fails), the wrap and the unwrap add no instruction, and the six linear diagnostics are exact"
 # Atomics (MACHINE_MODEL.md 5): every read-modify-write of tests/run/atomic.oli
 # is a lock-prefixed instruction at its width, and/or/xor a cmpxchg loop, a
@@ -1647,7 +1660,7 @@ echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2
 # `_start` for an entry procedure. Two Oli-- objects link with ld alone and
 # run; the C half of tests/c links with cc, calls into Oli-- and is called
 # back, and prints what tests/c/expected.out says.
-for n in oli_side lib_side main_side pic_side; do
+for n in oli_side lib_side main_side pic_side float_side; do
     ( cd .. && genesis/build/olic < tests/c/$n.oli > genesis/build/$n.o 2> genesis/build/$n.err ) || fail "object: olic could not compile tests/c/$n.oli: $(head -1 build/$n.err)"
 done
 readelf -h build/oli_side.o | grep -q 'Type: *REL' || fail "object: oli_side.o is not ET_REL"
@@ -1683,6 +1696,12 @@ if command -v cc > /dev/null 2>&1; then
     LD_LIBRARY_PATH=build ./build/pic_so > build/pic_so.out || fail "pic: the program linked against the shared library exited non-zero"
     cmp build/pic_so.out ../tests/c/pic_expected.out || fail "pic: the shared-library program's output differs"
     echo "ok: position-independent code - statics rip-relative (PC32), the object linked into a PIE and into libpic_side.so without text relocations, both run"
+    # Floats across the C boundary: xmm arguments and results both ways,
+    # libm's sqrt called from Oli--, and narrow integers re-extended.
+    cc -o build/float_c ../tests/c/float_main.c build/float_side.o -lm 2> build/cc.err || fail "float: cc could not link float_side.o: $(head -1 build/cc.err)"
+    ./build/float_c > build/float_c.out || fail "float: the C program exited non-zero"
+    cmp build/float_c.out ../tests/c/float_expected.out || fail "float: the C program printed $(cat build/float_c.out), want $(cat ../tests/c/float_expected.out)"
+    echo "ok: f64/f32 across the C boundary - sqrt from libm and a C function with mixed xmm and integer arguments called from Oli--, Oli-- float procedures called from C, narrow integers re-extended both ways"
 else
     echo "ok: object files: two Oli-- objects link with ld alone and run (no cc on this machine: the C half of tests/c was not linked)"
 fi

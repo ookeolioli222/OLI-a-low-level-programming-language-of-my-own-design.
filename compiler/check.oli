@@ -199,15 +199,6 @@ proc check_type(pg: ref Prog, mi: u64, ty: u64)
                 end
             end
         end
-        if t.kind == TK_IDENT
-            txt := tok_text(cx, i)
-            if view_eq(txt, "f32")
-                sdiag(pg, mi, 900, i)
-            end
-            if view_eq(txt, "f64")
-                sdiag(pg, mi, 900, i)
-            end
-        end
         i <- i + 1
     end
 end

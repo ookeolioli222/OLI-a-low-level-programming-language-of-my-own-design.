@@ -344,7 +344,7 @@ Every hardware access is volatile, cost class `KERNEL`, and will be listed by
 | `mmio ref T` / `mmio rw ref T` | a ref into device memory, from `Name.at` over an `mmio` view: every field access through it volatile (`raw.load/store.T.mmio`), never dropped | **runs** (`tests/run/mmio.oli`) |
 | `port T` | an I/O port as a value; `p.in()` / `p.out(v)` | **runs** |
 | `own T` | a linear handle (`T` an integer or an address): `own T (e)` wraps, `T(h)` unwraps and consumes, `<~` moves; consumed exactly once on every path or the checker says why (`E0340`–`E0345`, `tests/sema/err/linear.oli`); no instruction for the wrap or the unwrap | **runs** (`tests/run/own.oli`) |
-| `f32 f64` | floating point | reserved (V2) |
+| `f32 f64` | IEEE-754 binary32/binary64 in SSE: `addsd/subsd/mulsd/divsd` (ss), `ucomisd` with NaN-correct flags, `cvtsi2sd`/`cvttsd2si`/`cvtss2sd`/`cvtsd2ss`, u64 both ways; correctly rounded literals; explicit conversions only; SysV xmm arguments and results, so C and libm interoperate; no SIMD vectors, no `sqrt`/`floor` intrinsics (call libm through `extern proc`) | **runs** (`tests/run/floats.oli`, `tests/c/float_side.oli`) |
 
 Type identity is nominal for `layout`/`choice`, structural for everything
 else. Every type's size, alignment and field offsets are fixed and

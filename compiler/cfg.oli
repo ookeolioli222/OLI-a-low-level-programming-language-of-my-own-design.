@@ -435,6 +435,9 @@ proc defines_value(op: u64) -> word
     if op == O_SEGS
         ret 0
     end
+    if op == O_FRET
+        ret 0
+    end
     if op == O_CHKB
         ret 0
     end

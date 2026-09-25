@@ -16,6 +16,9 @@ proc kind_name(k: u64) -> view u8
     if k == TK_INT
         ret "int"
     end
+    if k == TK_FLOAT
+        ret "float"
+    end
     if k == TK_CHAR
         ret "char"
     end
@@ -65,6 +68,12 @@ proc print_tokens(lx: ref Lex)
         if k == TK_INT
             put(1, " ")
             put_uint(1, tmp, t.val)
+        end
+        if k == TK_FLOAT
+            put(1, " ")
+            put_uint(1, tmp, t.val)
+            put(1, " ")
+            put_uint(1, tmp, t.sub)
         end
         if k == TK_CHAR
             put(1, " ")

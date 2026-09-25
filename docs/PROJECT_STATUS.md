@@ -1317,6 +1317,48 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 41 (2026-09-25): `f32` and `f64`
+
+- **Literals.** The lexer reads `1.5`, `2e-3`, `1_000.25`, `12E-1` as
+  TK_FLOAT and rounds the decimal text to binary64 and, separately, to
+  binary32 (to nearest, ties to even, subnormals included) with big-integer
+  arithmetic of its own (`float_bits`/`float_round` in lex.oli), so an
+  `f32` is never rounded twice. A value beyond binary64 is E0008; beyond
+  binary32 is E0212 where an `f32` is wanted. Checked against an exact
+  Fraction-based reference on 33 chosen and 2999 random literals, all equal,
+  by the lexer `oli1` builds and by the one `olic` builds of itself. (The
+  self-hosting layer caught one difference first: `e - BIAS_W + emax` went
+  below zero on the way for every value under 1, which `oli1` wraps and
+  `olic` traps as the language says; the terms are reordered.)
+- **Types.** `f32`/`f64` are primitive (4 and 8 bytes); `+ - * /` and the
+  comparisons apply, `%`, bit operations and shifts are E0200; nothing
+  converts implicitly (E0200): `f64(n)`, `f32(n)`, `f64(f)`,
+  `f32.wrap(d)`, `T.wrap(f)` (toward zero), `F.bits(u)`/`U.bits(f)`; a
+  float literal or `f32(f64)` without `wrap` is E0201/E0202
+  (`tests/sema/err/floats.oli`, eight diagnostics).
+- **Code.** A float is its bits in a word (binary32 zero-extended), so
+  loads, stores, frames, statics, arrays and layout fields need only the
+  width; the OIR gains `fop`, `fcmp`, `fcvt`, `fret`, `fres`, lowered to
+  `addsd/subsd/mulsd/divsd` (ss), `ucomisd` with `sete`+`setnp`, `setne`+`setp`,
+  `seta`/`setae` on the swapped pair (false on NaN but `!=`),
+  `cvtsi2sd`, `cvttsd2si`, `cvtss2sd`, `cvtsd2ss`, and a u64 past 2^63 both
+  ways (halved and doubled; `2^63` subtracted and `btc`). Static and constant
+  initialisers are evaluated as floats (`const_float`).
+- **ABI.** Float arguments go in xmm0–xmm7 beside the integer registers,
+  a float result in xmm0 (SysV), so `tests/c/float_side.oli` calls libm's
+  `sqrt` and a C function with mixed arguments, and C calls its float
+  procedures. Found on the way and fixed: C leaves the upper bits of a
+  narrow integer undefined — an `export`ed procedure now re-extends its
+  narrow parameters and an `extern` call's narrow result is re-extended
+  (`oli_narrow(-7)` receives −7, `c_minus_five()` gives −5).
+- `tests/run/floats.oli` runs thirty-nine checks (NaN comparisons, 0.1
+  summed ten times is not 1.0 but `0x3FEFFFFFFFFFFFFF`, 1e19 to u64,
+  18446744073709551615 to f64); the harness pins every SSE family by
+  objdump, the lexer's bits for six hard literals, the C float link, and the
+  snapshots. Not done: SIMD vectors, math intrinsics (libm through
+  `extern proc` works), float types in DWARF, more than eight float
+  arguments.
+
 ## Implemented in back-end stage 40 (2026-09-25): DWARF variables
 
 - **Types and variables in `.debug_info`.** The compile unit carries the
@@ -1501,9 +1543,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 30,230 lines) into
+compiles its own source (`compiler/`, seventeen modules, 31,633 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,370,328 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,431,432 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

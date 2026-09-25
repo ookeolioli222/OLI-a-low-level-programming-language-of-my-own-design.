@@ -36,7 +36,7 @@ signed and `uword` the unsigned word type; `addr T` is word-sized.
 | `word` / `uword` | 64 | machine word |
 | `byte` | 8 | alias of `u8` |
 | `bool` | 8 | `0` or `1`; any other bit pattern is a program error, never observed by safe code |
-| `f32` / `f64` | 32/64 | IEEE-754 binary32/64 in SSE registers |
+| `f32` / `f64` | 32/64 | IEEE-754 binary32/64; held as their bits in a word and computed in SSE registers (round to nearest, the default MXCSR); a comparison with a NaN is false except `!=` |
 | `be T` / `le T` | as T | integer stored in that byte order; loads/stores insert `bswap` when it differs from the target order |
 | `addr T` | 64 | virtual address |
 | `physaddr` | 64 | physical address; no dereference |

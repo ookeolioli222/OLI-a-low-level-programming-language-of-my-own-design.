@@ -750,6 +750,9 @@ proc p_primary(cx: ref Ctx) -> u64
     if k == TK_INT
         ret p_int(cx)
     end
+    if k == TK_FLOAT
+        ret p_simple(cx, N_FLOAT)
+    end
     if k == TK_STR
         ret p_simple(cx, N_STR)
     end

@@ -12,6 +12,5 @@ proc main -> s32
     ret s32(x)
 end
 -- expect: E0401 @ 2:5
--- expect: E0900 @ 9:10
 -- expect: E0401 @ 10:11
 -- expect: E0900 @ 11:23

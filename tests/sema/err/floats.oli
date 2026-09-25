@@ -1,0 +1,23 @@
+proc main -> s32
+    entry
+    a : f64 <- 1.5
+    n : u32 <- 3
+    x := 2.5
+    y := a % 2.0
+    z := a + n
+    w : f32 <- a
+    k := s32(a)
+    j := f32(a)
+    big : f32 <- 1e39
+    ok : f64 <- 1e39
+    s := n & 1.5
+    ret 0
+end
+-- expect: E0201 @ 5:10
+-- expect: E0200 @ 6:10
+-- expect: E0200 @ 7:14
+-- expect: E0200 @ 8:16
+-- expect: E0202 @ 9:10
+-- expect: E0202 @ 10:10
+-- expect: E0212 @ 11:18
+-- expect: E0200 @ 13:14

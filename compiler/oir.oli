@@ -197,6 +197,20 @@ O_MSRWR := 49
 O_CPUID := 50
 O_HWCALL := 51
 O_SEGS := 52
+-- Floats (MACHINE_MODEL.md 2): a float value is its IEEE-754 bits in a
+-- word (binary32 zero-extended), moved to xmm0/xmm1 for the operation.
+-- `fop.W %a, %b` (O_FBIN, `c` the B_* code of + - * /, `val` 32 or 64);
+-- `fcmp.COND.W %a, %b` (O_FCMP, `c` B_EQ..B_GE, a bool); `fcvt.KIND %a`
+-- (O_FCVT, `c`: 0 signed integer to float, 1 u64 to float, 2 float to
+-- s64 truncated, 3 f32 to f64, 4 f64 to f32 rounded, 5 float to u64
+-- truncated; `val` the float's width); `fret %a` (O_FRET: the value into
+-- xmm0 before the `ret` of a float result) and `fres` (O_FRES: xmm0 right
+-- after the call of a procedure with a float result), SysV (ABI.md 1).
+O_FBIN := 53
+O_FCMP := 54
+O_FCVT := 55
+O_FRET := 56
+O_FRES := 57
 
 -- A local as the debug information describes it (compiler/elf.oli): the
 -- procedure, its module and name token, a type class (DV_BASE and on) with
@@ -404,6 +418,8 @@ layout Oir
     dvars : rw view u8
     ndvar : u64
     dbgframe : u64
+    -- `F.bits(x)` in progress: the integer's bits are the float's.
+    convbits : u64
     ins : rw view u8
     procs : rw view u8
     stats : rw view u8
@@ -876,6 +892,12 @@ proc cell_set(t: rw view u8, i: u64, v: u64)
 end
 
 proc op_uses_a(op: u64) -> word
+    if op == O_FCVT
+        ret 1
+    end
+    if op == O_FRET
+        ret 1
+    end
     -- Which field of an instruction names a value, in one place: the walks
     -- that verify, count, rewrite and rebuild operands all ask here.
     if op == O_BIN
@@ -921,6 +943,12 @@ proc op_uses_a(op: u64) -> word
         ret 1
     end
     if op == O_SEGS
+        ret 1
+    end
+    if op == O_FBIN
+        ret 1
+    end
+    if op == O_FCMP
         ret 1
     end
     if op == O_CPUID
@@ -985,6 +1013,12 @@ proc op_uses_b(op: u64) -> word
         ret 1
     end
     if op == O_SEGS
+        ret 1
+    end
+    if op == O_FBIN
+        ret 1
+    end
+    if op == O_FCMP
         ret 1
     end
     if op == O_CPUID
@@ -1319,7 +1353,7 @@ proc type_bytes(pg: ref Prog, t: view u8) -> u64
     if is_view_type(t) == 1
         ret 16
     end
-    b := int_bits(t)
+    b := mem_bits(t)
     if b > 0
         ret u64.bits(b) / 8
     end
@@ -1575,7 +1609,11 @@ proc init_bytes(pg: rw ref Prog, ob: rw ref Oir, vi: u64, dst: rw view u8, off: 
                 oir_err(ob, pg, v.mod, 900, e)
                 ret
             end
-            put_bytes(dst, off + pos, eb, const_value(pg, v.mod, e))
+            if is_float(arr_elem(t)) == 1
+                put_bytes(dst, off + pos, eb, const_float(pg, v.mod, e, float_fmt(arr_elem(t))))
+            else
+                put_bytes(dst, off + pos, eb, const_value(pg, v.mod, e))
+            end
             pos <- pos + eb
             e <- sibling(cx, e)
         end
@@ -1602,6 +1640,14 @@ proc init_bytes(pg: rw ref Prog, ob: rw ref Oir, vi: u64, dst: rw view u8, off: 
                 oir_err(ob, pg, v.mod, 900, f)
                 ret
             end
+            ftx := tok_text(cx, ftn.t0)
+            if ftn.t1 == ftn.t0 + 1
+                if is_float(ftx) == 1
+                    put_bytes(dst, off + fr.off, fw, const_float(pg, v.mod, kid1(cx, f), float_fmt(ftx)))
+                    f <- sibling(cx, f)
+                    continue
+                end
+            end
             put_bytes(dst, off + fr.off, fw, const_value(pg, v.mod, kid1(cx, f)))
             f <- sibling(cx, f)
         end
@@ -1609,6 +1655,10 @@ proc init_bytes(pg: rw ref Prog, ob: rw ref Oir, vi: u64, dst: rw view u8, off: 
     end
     if starts_with(t, "[")
         oir_err(ob, pg, v.mod, 900, init)
+        ret
+    end
+    if is_float(t) == 1
+        put_bytes(dst, off, sz, const_float(pg, v.mod, init, float_fmt(t)))
         ret
     end
     put_bytes(dst, off, sz, const_value(pg, v.mod, init))
@@ -1686,7 +1736,7 @@ proc static_load(ob: rw ref Oir, a: u64, t: view u8) -> u64
         ob.lastlen <- emit_ins(ob, O_RLOAD, addr_add(ob, a, eight), 8, 0, 0)
         ret v
     end
-    nb := int_bits(t)
+    nb := mem_bits(t)
     sg : u64 <- 0
     if int_signed(t) == 1
         sg <- 1
@@ -1718,7 +1768,7 @@ proc gen_store_static(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, vi: u64)
         emit_ins(ob, O_RSTORE, addr_add(ob, a, eight), ln, 8, 0)
         ret
     end
-    nb := int_bits(t)
+    nb := mem_bits(t)
     if nb > 0
         emit_ins(ob, O_RSTORE, a, v, u64.bits(nb) / 8, 0)
         ret
@@ -1736,7 +1786,7 @@ proc gen_rawload(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     et := addr_elem(ety(pg, mi, pe, b[0..0]))
     p := gen_expr(pg, ob, mi, pe, b[0..0])
     ob.lastlen <- 0
-    nb := int_bits(et)
+    nb := mem_bits(et)
     if nb == 0
         oir_err(ob, pg, mi, 900, n)
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
@@ -1818,7 +1868,7 @@ proc gen_store_raw(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     tgt := kid1(cx, n)
     pe := kid1(cx, tgt)
     et := addr_elem(ety(pg, mi, pe, b[0..0]))
-    nb := int_bits(et)
+    nb := mem_bits(et)
     if nb == 0
         oir_err(ob, pg, mi, 900, n)
         ret
@@ -1932,7 +1982,7 @@ proc elem_bytes(pg: ref Prog, ob: rw ref Oir, mi: u64, t: view u8, n: u64) -> u6
     -- a layout's size — an element that is a layout is reached by its
     -- address, like any layout held by value.
     et := view_elem(t)
-    b := int_bits(et)
+    b := mem_bits(et)
     if b > 0
         ret u64.bits(b) / 8
     end
@@ -2070,6 +2120,7 @@ proc gen_call_args(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, pi: word, h
     b := pg.sbuf
     regs : u64 <- 0
     stk : u64 <- 0
+    xm : u64 <- 0
     a : u64 <- sibling(cx, kid1(cx, n))
     k : u64 <- 0
     nargs : u64 <- 0
@@ -2123,6 +2174,18 @@ proc gen_call_args(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, pi: word, h
                 nargs <- nargs + 1
                 w <- w + 1
             end
+            k <- k + 1
+            a <- sibling(cx, a)
+            continue
+        end
+        if is_float(want) == 1
+            -- SysV SSE class: xmm0..xmm7 in order (location 1000 + k).
+            if xm >= 8
+                oir_err(ob, pg, mi, 900, a)
+            end
+            emit_ins(ob, O_ARG, v, 1000 + xm, 0, 0)
+            xm <- xm + 1
+            nargs <- nargs + 1
             k <- k + 1
             a <- sibling(cx, a)
             continue
@@ -2679,6 +2742,14 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     ob.lastlen <- 0
     ob.lastpay <- 0
     ob.paywide <- 0
+    if is_float(rt) == 1
+        -- A float result arrives in xmm0.
+        ret emit_ins(ob, O_FRES, 0, 0, 0, 0)
+    end
+    if proc_is_extern(pg, u64.bits(pi)) == 1
+        -- A C function's narrow integer result has undefined upper bits.
+        ret narrow_extend(ob, r, rt)
+    end
     if rl > 16
         ret ob.sretv
     end
@@ -2813,6 +2884,9 @@ proc gen_name(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         -- place.
         kb := pg.sbuf
         kt := ety(pg, mi, n, kb[0..0])
+        if is_float(kt) == 1
+            ret emit_ins(ob, O_CONST, 0, 0, 0, const_float(pg, mi, n, float_fmt(kt)))
+        end
         if is_view_type(kt) == 1
             oir_err(ob, pg, mi, 900, n)
             ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
@@ -2992,7 +3066,7 @@ proc gen_field_load(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         ob.lastlen <- emit_ins(ob, O_RLOAD, addr_add(ob, p, eight), 8, 0, vol)
         ret a
     end
-    nb := int_bits(ft)
+    nb := mem_bits(ft)
     if nb > 0
         sg : u64 <- 0
         if int_signed(ft) == 1
@@ -3053,7 +3127,7 @@ proc gen_store_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
         emit_ins(ob, O_RSTORE, addr_add(ob, p, eight), ln, 8, vol)
         ret
     end
-    nb := int_bits(ft)
+    nb := mem_bits(ft)
     if nb > 0
         emit_ins(ob, O_RSTORE, p, v, u64.bits(nb) / 8, vol)
         ret
@@ -3297,6 +3371,17 @@ proc gen_binop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) 
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end
     ot := binop_operand_type(pg, mi, n)
+    if is_float(ot) == 1
+        ret gen_fbinop(pg, ob, mi, n, ot)
+    end
+    if ot.len == 0
+        -- Two float literals: the context names the format.
+        if is_float(want) == 1
+            if binop_is_compare(op) == 0
+                ret gen_fbinop(pg, ob, mi, n, want)
+            end
+        end
+    end
     lw : view u8 <- ot
     if binop_is_compare(op) == 0
         lw <- want
@@ -3559,6 +3644,13 @@ proc gen_unop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -
         -- re-extended, so an operation without them is neither checked nor
         -- canonical.
         ut := ety(pg, mi, n, want)
+        if is_float(ut) == 1
+            -- A float's sign is its top bit.
+            fv := gen_expr(pg, ob, mi, arg, ut)
+            sgn := emit_ins(ob, O_CONST, 0, 0, 0, float_sign(float_fmt(ut)))
+            ob.lastlen <- 0
+            ret emit_bin(ob, B_XOR, fv, sgn, 0)
+        end
         v := gen_expr(pg, ob, mi, arg, want)
         u := emit_un(ob, U1_NEG, v)
         iu := ins_at(ob, u)
@@ -3741,6 +3833,62 @@ proc nd_sub(pg: ref Prog, mi: u64, n: u64) -> u64
     ret nd.sub
 end
 
+proc narrow_extend(ob: rw ref Oir, v: u64, t: view u8) -> u64
+    -- An integer narrower than a word, or a `bool`, re-extended from its
+    -- low bits to the canonical word (sign for a signed type); any other
+    -- value as it is.
+    nb : u64 <- 0
+    if int_bits(t) > 0
+        nb <- u64.bits(int_bits(t))
+    end
+    if view_eq(t, "bool")
+        nb <- 8
+    end
+    if nb == 0
+        ret v
+    end
+    if nb >= 64
+        ret v
+    end
+    sg : u64 <- 0
+    if int_signed(t) == 1
+        sg <- 1
+    end
+    ret emit_ins(ob, O_TRUNC, v, nb, sg, 0)
+end
+
+proc gen_to_float(ob: rw ref Oir, v: u64, src: view u8, dst: view u8) -> u64
+    -- A value converted to the float `dst`: a literal or a float of the
+    -- same format as it is; `f32` to `f64` and back; an integer through
+    -- `cvtsi2sd`/`cvtsi2ss` (a u64 above 2^63 halved and doubled);
+    -- `F.bits(u)` as the same bits.
+    if src.len == 0
+        ret v
+    end
+    if view_eq(src, dst)
+        ret v
+    end
+    if is_float(src) == 1
+        if view_eq(dst, "f64")
+            ret emit_ins(ob, O_FCVT, v, 0, 3, 64)
+        end
+        ret emit_ins(ob, O_FCVT, v, 0, 4, 32)
+    end
+    if int_bits(src) == 0
+        ret v
+    end
+    if ob.convbits == 1
+        ret v
+    end
+    k : u64 <- 0
+    if int_bits(src) == 64
+        if int_signed(src) == 0
+            k <- 1
+        end
+    end
+    ret emit_ins(ob, O_FCVT, v, 0, k, float_width(dst))
+end
+
 proc gen_convert(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     cx := mod_ctx(pg, mi)
     b := pg.sbuf
@@ -3752,7 +3900,37 @@ proc gen_convert(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     end
     dst := ety(pg, mi, n, b[0..0])
     src := ety(pg, mi, arg, b[0..0])
+    ob.convbits <- 0
+    if mn.kind == N_MODE
+        if view_eq(tok_text(cx, mn.t0), "bits")
+            ob.convbits <- 1
+        end
+    end
+    pg.convbits <- ob.convbits
     v := gen_expr(pg, ob, mi, arg, conv_operand_want(pg, mi, arg, dst))
+    pg.convbits <- 0
+    if is_float(dst) == 1
+        ret gen_to_float(ob, v, src, dst)
+    end
+    if is_float(src) == 1
+        if mn.kind == N_MODE
+            if view_eq(tok_text(cx, mn.t0), "bits")
+                -- The same bits read as the unsigned integer of the width.
+                if view_eq(src, "f32")
+                    ret gen_conv(ob, v, "u32", dst)
+                end
+                ret gen_conv(ob, v, "u64", dst)
+            end
+        end
+        -- `T.wrap(f)`: truncated toward zero to 64 bits, then wrapped.
+        if int_bits(dst) == 64
+            if int_signed(dst) == 0
+                ret emit_ins(ob, O_FCVT, v, 0, 5, float_width(src))
+            end
+        end
+        t64 := emit_ins(ob, O_FCVT, v, 0, 2, float_width(src))
+        ret gen_conv(ob, t64, "s64", dst)
+    end
     if starts_with(dst, "own ")
         -- `own T (e)` and `T(h)`: the same bits, ZERO (design 0002).
         ret v
@@ -3785,7 +3963,13 @@ proc gen_expr(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -
     nd := node_at(cx, n)
     k := nd.kind
     ob.lastlen <- 0
+    if k == N_FLOAT
+        ret emit_ins(ob, O_CONST, 0, 0, 0, const_float(pg, mi, n, float_fmt(want)))
+    end
     if k == N_INT
+        if is_float(want) == 1
+            ret emit_ins(ob, O_CONST, 0, 0, 0, float_int_bits(nd.val, u64(nd.sub), float_fmt(want)))
+        end
         v : u64 <- nd.val
         if nd.sub == 1
             -- The two's complement image of a negative literal, without the
@@ -4143,6 +4327,10 @@ proc gen_ret_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, rv: u64)
     if is_view_type(rt) == 1
         emit_ins(ob, O_RET, v2, ln, 2, 0)
         ret
+    end
+    if is_float(rt) == 1
+        -- A float result leaves in xmm0 (SysV), after every release.
+        emit_ins(ob, O_FRET, v2, 0, 0, 0)
     end
     emit_ins(ob, O_RET, v2, 0, 1, 0)
 end
@@ -4807,7 +4995,7 @@ proc gen_store_typed(pg: rw ref Prog, ob: rw ref Oir, p: u64, v: u64, ft: view u
         emit_ins(ob, O_RSTORE, addr_add(ob, p, eight), ln, 8, 0)
         ret
     end
-    nb := int_bits(ft)
+    nb := mem_bits(ft)
     if nb > 0
         emit_ins(ob, O_RSTORE, p, v, u64.bits(nb) / 8, 0)
         ret
@@ -4826,7 +5014,7 @@ end
 
 proc field_bits(t: view u8) -> u64
     -- The width of a field of a variant: an integer's own, a `bool`'s byte.
-    nb := int_bits(t)
+    nb := mem_bits(t)
     if nb > 0
         ret u64.bits(nb)
     end
@@ -5170,7 +5358,7 @@ proc gen_store_value(pg: rw ref Prog, ob: rw ref Oir, mi: u64, tgt: u64, v: u64)
             oir_err(ob, pg, mi, 900, tgt)
             ret
         end
-        nb := int_bits(val_type(pg, u64.bits(vi)))
+        nb := mem_bits(val_type(pg, u64.bits(vi)))
         if nb <= 0
             oir_err(ob, pg, mi, 900, tgt)
             ret
@@ -5565,6 +5753,140 @@ proc hw_stmts_ok(pg: ref Prog, mi: u64, first: u64) -> word
     ret 1
 end
 
+proc fcvt_name(k: u64) -> view u8
+    if k == 0
+        ret "fcvt.from_signed"
+    end
+    if k == 1
+        ret "fcvt.from_u64"
+    end
+    if k == 2
+        ret "fcvt.to_s64"
+    end
+    if k == 3
+        ret "fcvt.f32_to_f64"
+    end
+    if k == 4
+        ret "fcvt.f64_to_f32"
+    end
+    ret "fcvt.to_u64"
+end
+
+proc float_sign(fmt: u64) -> u64
+    if fmt == 1
+        ret 2147483648
+    end
+    ret 9223372036854775808
+end
+
+proc float_int_bits(v: u64, neg: u64, fmt: u64) -> u64
+    -- The binary64 (fmt 0) or binary32 (fmt 1) bits of the integer `v`
+    -- (negative when `neg`), rounded to nearest, ties to even.
+    if v == 0
+        ret 0
+    end
+    p := fmt_p(fmt)
+    l : u64 <- 0
+    x : u64 <- v
+    while x != 0
+        l <- l + 1
+        x <- x >> 1
+    end
+    e : u64 <- l - 1
+    q : u64 <- 0
+    if l <= p
+        q <- v << (p - l)
+    else
+        shift := l - p
+        q <- v >> shift
+        one : u64 <- 1
+        rest := v & ((one << shift) - 1)
+        half := one << (shift - 1)
+        up : u64 <- 0
+        if rest > half
+            up <- 1
+        elif rest == half
+            if q & 1 == 1
+                up <- 1
+            end
+        end
+        q <- q + up
+        if q == one << p
+            q <- q >> 1
+            e <- e + 1
+        end
+    end
+    lone : u64 <- 1
+    r := ((e + fmt_emax(fmt)) << (p - 1)) | (q - (lone << (p - 1)))
+    if neg == 1
+        ret r | float_sign(fmt)
+    end
+    ret r
+end
+
+proc float_fmt(t: view u8) -> u64
+    if view_eq(t, "f32")
+        ret 1
+    end
+    ret 0
+end
+
+proc const_float(pg: ref Prog, mi: u64, n: u64, fmt: u64) -> u64
+    -- A constant float expression: a literal, an integer literal, a
+    -- negation, or a float constant by name.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    k := nd.kind
+    if k == N_FLOAT
+        t := ctok(cx, nd.t0)
+        if fmt == 1
+            ret t.sub
+        end
+        ret t.val
+    end
+    if k == N_INT
+        ret float_int_bits(nd.val, u64(nd.sub), fmt)
+    end
+    if k == N_UNOP
+        if nd.sub == U_NEG
+            c := const_float(pg, mi, kid1(cx, n), fmt)
+            sg := float_sign(fmt)
+            if c >= sg
+                ret c - sg
+            end
+            ret c + sg
+        end
+    end
+    if k == N_NAME
+        vi := val_find(pg, tok_text(cx, nd.t0))
+        if vi >= 0
+            v := val_at(pg, u64.bits(vi))
+            vcx := mod_ctx(pg, v.mod)
+            vn := node_at(vcx, v.node)
+            e : u64 <- kid1(vcx, v.node)
+            if vn.val >= 2
+                e <- sibling(vcx, e)
+            end
+            ret const_float(pg, v.mod, e, fmt)
+        end
+    end
+    ret 0
+end
+
+proc gen_fbinop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, ot: view u8) -> u64
+    -- `a + b`, `a < b`, … on two floats of type `ot`.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    code := binop_code(tok_text(cx, nd.t0))
+    lv := gen_expr(pg, ob, mi, kid1(cx, n), ot)
+    rv := gen_expr(pg, ob, mi, kid2(cx, n), ot)
+    ob.lastlen <- 0
+    if code >= B_EQ
+        ret emit_ins(ob, O_FCMP, lv, rv, code, float_width(ot))
+    end
+    ret emit_ins(ob, O_FBIN, lv, rv, code, float_width(ot))
+end
+
 proc gen_segments(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `arch.x64.segments(code, data)`: the two selectors as values, one
     -- `hw.cmd` that reloads every segment register (design 0015).
@@ -5687,6 +6009,7 @@ proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
     b := pg.sbuf
     regs : u64 <- 0
     stk : u64 <- 0
+    xm : u64 <- 0
     ob.sretslot <- 0
     if ob.sretsize > 16
         -- The `sret` pointer arrives in rdi and waits in a compiler-made
@@ -5767,6 +6090,14 @@ proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
                     stk <- stk + lw
                     gen_copy(ob, emit_ins(ob, O_FADDR, off + lw - 1, 0, 0, 0), pv0, lay)
                 end
+            elif is_float(pt) == 1
+                -- SysV SSE class: xmm0..xmm7 in order.
+                if xm >= 8
+                    oir_err(ob, pg, pg.curmod, 900, node)
+                end
+                fp2 := emit_ins(ob, O_PARAM, 1000 + xm, 0, 0, 0)
+                emit_ins(ob, O_STORE, off, fp2, 0, 0)
+                xm <- xm + 1
             else
                 loc : u64 <- 0
                 if regs + words <= 6
@@ -5776,7 +6107,13 @@ proc gen_params(pg: rw ref Prog, ob: rw ref Oir, node: u64)
                     loc <- 6 + stk
                     stk <- stk + words
                 end
-                pv := emit_ins(ob, O_PARAM, loc, 0, 0, 0)
+                pv0 := emit_ins(ob, O_PARAM, loc, 0, 0, 0)
+                pv : u64 <- pv0
+                if proc_clause(pg, pg.curproc, C_EXPORT) != 0
+                    -- Callable from C, which leaves the bits above a narrow
+                    -- integer undefined (SysV): extended here, once.
+                    pv <- narrow_extend(ob, pv0, pt)
+                end
                 emit_ins(ob, O_STORE, off, pv, 0, 0)
                 if words == 2
                     pv2 := emit_ins(ob, O_PARAM, loc + 1, 0, 0, 0)
@@ -6205,6 +6542,21 @@ proc oir_op_name(op: u64) -> view u8
     if op == O_SEGS
         ret "hw.cmd"
     end
+    if op == O_FBIN
+        ret "fop"
+    end
+    if op == O_FCMP
+        ret "fcmp"
+    end
+    if op == O_FCVT
+        ret "fcvt"
+    end
+    if op == O_FRET
+        ret "fret"
+    end
+    if op == O_FRES
+        ret "fres"
+    end
     if op == O_ZALLOC
         ret "zone.alloc"
     end
@@ -6567,6 +6919,43 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
         pv(ob, pg, ins.a)
         put(1, ", ")
         pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_FBIN
+        put(1, "f")
+        put(1, oir_bin_name(ins.c))
+        put(1, ".")
+        put_uint(1, tmp, ins.val)
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_FCMP
+        put(1, "fcmp.")
+        put(1, oir_bin_name(ins.c))
+        put(1, ".")
+        put_uint(1, tmp, ins.val)
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        put(1, ", ")
+        pv(ob, pg, ins.b)
+        ret
+    end
+    if op == O_FCVT
+        put(1, fcvt_name(ins.c))
+        put(1, " ")
+        pv(ob, pg, ins.a)
+        ret
+    end
+    if op == O_FRET
+        put(1, "fret ")
+        pv(ob, pg, ins.a)
+        ret
+    end
+    if op == O_FRES
+        put(1, "fres")
         ret
     end
     if op == O_SEGS

@@ -13,6 +13,10 @@ TK_STR := 5
 TK_KW := 6
 TK_OP := 7
 TK_DOC := 8
+-- A floating literal: `val` the IEEE-754 binary64 bits, `sub` the binary32
+-- bits, each rounded from the decimal text directly (to nearest, ties to
+-- even), so that an `f32` is never rounded twice.
+TK_FLOAT := 9
 
 -- Diagnostic codes E000N.
 E_CHAR := 1
@@ -21,6 +25,16 @@ E_INTBIG := 3
 E_INTBAD := 4
 E_CHARLIT := 5
 E_ESCAPE := 6
+E_FLOATBIG := 8
+
+-- The limbs of each big integer of the float conversion, and the bytes of
+-- the four of them.
+BN_L := 160
+FBUF_BYTES := 5120
+-- Exponents in float_round are offset by this, so that none is negative.
+BIAS_W := 1048576
+-- The binary32 bits of a literal binary32 cannot hold.
+F32_NONE := 4294967296
 
 -- Bytes.
 B_TAB := 9
@@ -52,6 +66,8 @@ layout Lex
     src : view u8
     toks : rw view u8
     tmp : rw view u8
+    fbuf : rw view u8
+    fbig : u64
     pos : u64
     line : u64
     col : u64
@@ -67,6 +83,8 @@ proc lex_new(z: zone, src: view u8, max_tokens: u64) -> rw ref Lex
     lx.src <- src
     lx.toks <- z.bytes(max_tokens * Tok.size)
     lx.tmp <- z.bytes(32)
+    lx.fbuf <- z.bytes(FBUF_BYTES)
+    lx.fbig <- 0
     lx.pos <- 0
     lx.line <- 1
     lx.col <- 1
@@ -136,6 +154,9 @@ proc diag_msg(code: u64) -> view u8
     end
     if code == E_ESCAPE
         ret "invalid escape sequence"
+    end
+    if code == E_FLOATBIG
+        ret "floating literal out of range or too long"
     end
     ret "lexical error"
 end
@@ -422,6 +443,500 @@ proc lex_word(lx: ref Lex)
     push(lx, TK_IDENT, start, len)
 end
 
+proc float_follows(lx: ref Lex) -> word
+    -- From the first digit: decimal digits (and `_`), then `.` and a digit,
+    -- or `e`/`E` and a digit or a sign and a digit. `1..5` and `x.0` stay
+    -- what they were.
+    i : u64 <- 0
+    loop
+        c := peek(lx, i)
+        if is_digit(c)
+            i <- i + 1
+        elif c == B_UNDERSCORE
+            i <- i + 1
+        else
+            break
+        end
+    end
+    c1 := peek(lx, i)
+    if c1 == 46
+        if is_digit(peek(lx, i + 1))
+            ret 1
+        end
+        ret 0
+    end
+    if c1 == 101
+        ret exp_follows(lx, i + 1)
+    end
+    if c1 == 69
+        ret exp_follows(lx, i + 1)
+    end
+    ret 0
+end
+
+proc exp_follows(lx: ref Lex, i: u64) -> word
+    c := peek(lx, i)
+    if is_digit(c)
+        ret 1
+    end
+    if c == 43
+        ret is_digit(peek(lx, i + 1))
+    end
+    if c == 45
+        ret is_digit(peek(lx, i + 1))
+    end
+    ret 0
+end
+
+proc lex_float(lx: rw ref Lex, start: u64, line: u64, col: u64)
+    -- The whole literal is consumed first; the conversion reads its text.
+    loop
+        c := peek(lx, 0)
+        if is_digit(c)
+            advance(lx)
+        elif c == B_UNDERSCORE
+            advance(lx)
+        elif c == 46
+            if is_digit(peek(lx, 1))
+                advance(lx)
+            else
+                break
+            end
+        else
+            break
+        end
+    end
+    c2 := peek(lx, 0)
+    if c2 == 101
+        lex_exponent(lx)
+    elif c2 == 69
+        lex_exponent(lx)
+    end
+    bad : u64 <- 0
+    if is_ident_char(peek(lx, 0))
+        diag(lx, E_INTBAD, lx.line, lx.col)
+        bad <- 1
+        while is_ident_char(peek(lx, 0))
+            advance(lx)
+        end
+    end
+    src := lx.src
+    text := src[start..lx.pos]
+    lx.fbig <- 0
+    d64 := float_bits(lx, text, 0)
+    if lx.fbig == 1
+        if bad == 0
+            diag(lx, E_FLOATBIG, line, col)
+        end
+    end
+    -- A value beyond binary32 is still a good binary64: the binary32 bits
+    -- are then F32_NONE, and the checker refuses the literal as an `f32`.
+    lx.fbig <- 0
+    d32 : u64 <- float_bits(lx, text, 1)
+    if lx.fbig == 1
+        d32 <- F32_NONE
+    end
+    t := push(lx, TK_FLOAT, start, lx.pos - start)
+    t.val <- d64
+    t.sub <- d32
+end
+
+proc lex_exponent(lx: rw ref Lex)
+    advance(lx)
+    c := peek(lx, 0)
+    if c == 43
+        advance(lx)
+    elif c == 45
+        advance(lx)
+    end
+    while is_digit(peek(lx, 0))
+        advance(lx)
+    end
+end
+
+-- Big integers for the conversion: four numbers of BN_L 32-bit limbs, each
+-- limb in a word of `lx.fbuf`, least significant first. 0 is the result
+-- being built, 1 the power of five, 2 the remainder, 3 the digits.
+
+
+layout Limb
+    v : u64
+end
+
+proc bn_at(b: rw view u8, k: u64, i: u64) -> rw ref Limb
+    o := (k * BN_L + i) * 8
+    ret Limb.at(b[o..o + 8])
+end
+
+proc bn_zero(b: rw view u8, k: u64)
+    i : u64 <- 0
+    while i < BN_L
+        l := bn_at(b, k, i)
+        l.v <- 0
+        i <- i + 1
+    end
+end
+
+proc bn_mul_add(b: rw view u8, k: u64, m: u64, a: u64) -> word
+    -- x <- x * m + a (m and a below 2^32); 1 when it no longer fits.
+    carry : u64 <- a
+    i : u64 <- 0
+    while i < BN_L
+        l := bn_at(b, k, i)
+        x := l.v * m + carry
+        l.v <- x & 4294967295
+        carry <- x >> 32
+        i <- i + 1
+    end
+    if carry != 0
+        ret 1
+    end
+    ret 0
+end
+
+proc bn_bitlen(b: rw view u8, k: u64) -> u64
+    i : u64 <- BN_L
+    while i > 0
+        i <- i - 1
+        l := bn_at(b, k, i)
+        if l.v != 0
+            n : u64 <- 0
+            x : u64 <- l.v
+            while x != 0
+                n <- n + 1
+                x <- x >> 1
+            end
+            ret i * 32 + n
+        end
+    end
+    ret 0
+end
+
+proc bn_bit(b: rw view u8, k: u64, i: u64) -> u64
+    if i >= BN_L * 32
+        ret 0
+    end
+    l := bn_at(b, k, i / 32)
+    ret (l.v >> (i % 32)) & 1
+end
+
+proc bn_setbit(b: rw view u8, k: u64, i: u64)
+    if i < BN_L * 32
+        l := bn_at(b, k, i / 32)
+        l.v <- l.v | (1 << (i % 32))
+    end
+end
+
+proc bn_cmp(b: rw view u8, x: u64, y: u64) -> word
+    i : u64 <- BN_L
+    while i > 0
+        i <- i - 1
+        lx := bn_at(b, x, i)
+        ly := bn_at(b, y, i)
+        if lx.v > ly.v
+            ret 1
+        end
+        if lx.v < ly.v
+            ret -1
+        end
+    end
+    ret 0
+end
+
+proc bn_sub(b: rw view u8, x: u64, y: u64)
+    -- x <- x - y, x >= y.
+    borrow : u64 <- 0
+    i : u64 <- 0
+    while i < BN_L
+        lx := bn_at(b, x, i)
+        ly := bn_at(b, y, i)
+        s := ly.v + borrow
+        if lx.v >= s
+            lx.v <- lx.v - s
+            borrow <- 0
+        else
+            lx.v <- lx.v + 4294967296 - s
+            borrow <- 1
+        end
+        i <- i + 1
+    end
+end
+
+proc bn_shr_u64(b: rw view u8, k: u64, sh: u64) -> u64
+    -- The low 64 bits of x >> sh.
+    r : u64 <- 0
+    j : u64 <- 0
+    while j < 64
+        if bn_bit(b, k, sh + j) == 1
+            r <- r | (1 << j)
+        end
+        j <- j + 1
+    end
+    ret r
+end
+
+proc bn_half_cmp(b: rw view u8, k: u64, sh: u64) -> word
+    -- x mod 2^sh against 2^(sh-1): -1 below, 0 equal, 1 above (sh >= 1).
+    if bn_bit(b, k, sh - 1) == 0
+        ret -1
+    end
+    i : u64 <- 0
+    while i < sh - 1
+        if bn_bit(b, k, i) == 1
+            ret 1
+        end
+        i <- i + 1
+    end
+    ret 0
+end
+
+proc float_bits(lx: rw ref Lex, text: view u8, fmt: u64) -> u64
+    -- The IEEE-754 bits of the decimal `text` with a `p`-bit significand,
+    -- exponents -emin_neg..emax, rounded to nearest with ties to even;
+    -- `lx.fbig` set when it is out of range or too long to convert.
+    -- `fmt` 0 is binary64, 1 binary32.
+    p := fmt_p(fmt)
+    b := lx.fbuf
+    bn_zero(b, 3)
+    ndig : u64 <- 0
+    frac : u64 <- 0
+    infrac : u64 <- 0
+    i : u64 <- 0
+    while i < text.len
+        c := text[i]
+        if c == 46
+            infrac <- 1
+        elif c == 101
+            break
+        elif c == 69
+            break
+        elif c != 95
+            if ndig > 0
+                ndig <- ndig + 1
+            elif c != 48
+                ndig <- 1
+            end
+            if bn_mul_add(b, 3, 10, u64(c) - 48) == 1
+                lx.fbig <- 1
+                ret 0
+            end
+            if infrac == 1
+                frac <- frac + 1
+            end
+        end
+        i <- i + 1
+    end
+    -- The exponent, as a sign and a magnitude.
+    eneg : u64 <- 0
+    ev : u64 <- 0
+    if i < text.len
+        i <- i + 1
+        if text[i] == 45
+            eneg <- 1
+            i <- i + 1
+        elif text[i] == 43
+            i <- i + 1
+        end
+        while i < text.len
+            if ev < 100000
+                ev <- ev * 10 + u64(text[i]) - 48
+            end
+            i <- i + 1
+        end
+    end
+    if bn_bitlen(b, 3) == 0
+        ret 0
+    end
+    if ndig > 780
+        lx.fbig <- 1
+        ret 0
+    end
+    -- value = digits * 10^e10, e10 = ±ev - frac, as a sign and magnitude.
+    e10neg : u64 <- eneg
+    e10 : u64 <- ev
+    if eneg == 1
+        e10 <- ev + frac
+    elif ev >= frac
+        e10 <- ev - frac
+    else
+        e10 <- frac - ev
+        e10neg <- 1
+    end
+    if e10neg == 0
+        if e10 > 400
+            lx.fbig <- 1
+            ret 0
+        end
+        -- An integer: digits * 10^e10, exactly.
+        bn_zero(b, 0)
+        k : u64 <- 0
+        while k < BN_L
+            l0 := bn_at(b, 0, k)
+            l3 := bn_at(b, 3, k)
+            l0.v <- l3.v
+            k <- k + 1
+        end
+        j : u64 <- 0
+        while j < e10
+            if bn_mul_add(b, 0, 10, 0) == 1
+                lx.fbig <- 1
+                ret 0
+            end
+            j <- j + 1
+        end
+        ret float_round(lx, 0, 0, 0, fmt)
+    end
+    if e10 > 800
+        -- Below the smallest subnormal of either format: zero.
+        ret 0
+    end
+    -- A fraction: digits / (5^e10 * 2^e10). The quotient of digits * 2^s
+    -- by 5^e10, with s large enough for p + 2 bits, and whether a
+    -- remainder was left.
+    bn_zero(b, 1)
+    bn_mul_add(b, 1, 0, 1)
+    j2 : u64 <- 0
+    while j2 < e10
+        if bn_mul_add(b, 1, 5, 0) == 1
+            lx.fbig <- 1
+            ret 0
+        end
+        j2 <- j2 + 1
+    end
+    lf := bn_bitlen(b, 1)
+    ld := bn_bitlen(b, 3)
+    s : u64 <- 0
+    if p + 2 + lf > ld
+        s <- p + 2 + lf - ld
+    end
+    if ld + s > BN_L * 32 - 64
+        lx.fbig <- 1
+        ret 0
+    end
+    bn_zero(b, 0)
+    bn_zero(b, 2)
+    pos : u64 <- ld + s
+    while pos > 0
+        pos <- pos - 1
+        nb : u64 <- 0
+        if pos >= s
+            nb <- bn_bit(b, 3, pos - s)
+        end
+        bn_mul_add(b, 2, 2, nb)
+        if bn_cmp(b, 2, 1) >= 0
+            bn_sub(b, 2, 1)
+            bn_setbit(b, 0, pos)
+        end
+    end
+    sticky : u64 <- 0
+    if bn_bitlen(b, 2) > 0
+        sticky <- 1
+    end
+    -- The quotient's weight is 2^-(e10 + s).
+    ret float_round(lx, sticky, e10 + s, 1, fmt)
+end
+
+proc fmt_p(fmt: u64) -> u64
+    -- The significand bits of a format, the implicit one included.
+    if fmt == 1
+        ret 24
+    end
+    ret 53
+end
+
+proc fmt_emax(fmt: u64) -> u64
+    if fmt == 1
+        ret 127
+    end
+    ret 1023
+end
+
+proc float_round(lx: rw ref Lex, sticky: u64, zmag: u64, zneg: u64, fmt: u64) -> u64
+    -- Bignum 0 times 2^z (z = zmag, negative when zneg), plus a sticky
+    -- fraction below it, to the nearest `p`-bit float. Exponents are kept
+    -- biased by BIAS_W so that they never go below zero.
+    p := fmt_p(fmt)
+    emax := fmt_emax(fmt)
+    emin_neg := emax - 1
+    b := lx.fbuf
+    l := bn_bitlen(b, 0)
+    if l == 0
+        ret 0
+    end
+    -- The unbiased exponent of the leading bit, plus BIAS_W.
+    lead : u64 <- l - 1 + BIAS_W
+    if zneg == 1
+        lead <- lead - zmag
+    else
+        lead <- lead + zmag
+    end
+    emin : u64 <- BIAS_W - emin_neg
+    -- shift: how many low bits of bignum 0 fall below the significand
+    -- (as shift + BIAS_W, and possibly below BIAS_W for an exact shift up).
+    sh : u64 <- 0
+    if lead >= emin
+        sh <- l + BIAS_W - p
+    else
+        -- A subnormal: the significand's last bit weighs 2^(emin - p + 1),
+        -- so shift = emin - p + 1 - z.
+        sh <- BIAS_W + 1 - p - emin_neg
+        if zneg == 1
+            sh <- sh + zmag
+        else
+            sh <- sh - zmag
+        end
+    end
+    q : u64 <- 0
+    if sh <= BIAS_W
+        -- Exact: the whole number fits the significand.
+        up0 : u64 <- BIAS_W
+        up0 <- up0 - sh
+        q <- bn_shr_u64(b, 0, 0) << up0
+    else
+        shift := sh - BIAS_W
+        q <- bn_shr_u64(b, 0, shift)
+        c := bn_half_cmp(b, 0, shift)
+        up : u64 <- 0
+        if c > 0
+            up <- 1
+        elif c == 0
+            if sticky == 1
+                up <- 1
+            elif q & 1 == 1
+                up <- 1
+            end
+        end
+        q <- q + up
+    end
+    -- The exponent of the significand's leading bit when it has p bits:
+    -- sh + z + p - 1 (still biased by BIAS_W).
+    e : u64 <- sh + p - 1
+    if zneg == 1
+        e <- e - zmag
+    else
+        e <- e + zmag
+    end
+    top : u64 <- 1 << p
+    if q == top
+        q <- top >> 1
+        e <- e + 1
+    end
+    if q == 0
+        ret 0
+    end
+    if q >= top >> 1
+        if e > emax + BIAS_W
+            lx.fbig <- 1
+            ret 0
+        end
+        -- e + emax >= BIAS_W + 1 for a normal number: never below zero.
+        biased := e + emax - BIAS_W
+        ret (biased << (p - 1)) | (q - (top >> 1))
+    end
+    ret q
+end
+
+
 proc lex_number(lx: ref Lex)
     start := lx.pos
     line := lx.tline
@@ -442,6 +957,12 @@ proc lex_number(lx: ref Lex)
     if base != 10
         advance(lx)
         advance(lx)
+    end
+    if base == 10
+        if float_follows(lx) == 1
+            lex_float(lx, start, line, col)
+            ret
+        end
     end
     n : u64 <- 0
     ndig : u64 <- 0

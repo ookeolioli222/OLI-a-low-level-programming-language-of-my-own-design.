@@ -19,9 +19,9 @@ the equivalent C aggregates.
 | Item | Rule |
 |------|------|
 | integer/address arguments | `rdi, rsi, rdx, rcx, r8, r9`, then the stack (right to left) |
-| floating arguments | `xmm0–xmm7` |
+| floating arguments | `xmm0–xmm7` (`olic` since stage 41; a ninth float argument is E0900) |
 | integer result | `rax` (and `rdx` for the second word) |
-| floating result | `xmm0` (`xmm1`) |
+| floating result | `xmm0` (`xmm1`); a narrow integer (below 64 bits, `bool`) has undefined upper bits in SysV, so an `export`ed procedure re-extends its narrow parameters and the result of an `extern` call is re-extended |
 | caller-saved | `rax rcx rdx rsi rdi r8–r11 xmm0–xmm15` |
 | callee-saved | `rbx rbp r12–r15` |
 | stack alignment | `rsp % 16 == 0` immediately before `call` |

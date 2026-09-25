@@ -654,6 +654,10 @@ proc load_args(ob: rw ref Oir, mc: ref Mach, upto: u64, nargs: u64, issys: u64)
                 k <- k - 1
                 if issys == 1
                     ld_val(ob, mc, sys_reg(k), ins.a)
+                elif ins.b >= 1000
+                    -- A float argument: its word into xmm(b - 1000).
+                    ld_val(ob, mc, R_AX, ins.a)
+                    movq_xr(ob, ins.b - 1000, R_AX)
                 elif ins.b < 6
                     ld_val(ob, mc, call_reg(ins.b), ins.a)
                 else
@@ -1125,6 +1129,246 @@ proc lower_hwwr(ob: rw ref Oir, mc: ref Mach, i: u64)
         cb(ob, 255)
         cb(ob, 224)
     end
+end
+
+proc movq_xr(ob: rw ref Oir, x: u64, r: u64)
+    -- `movq xmmX, r64` (66 REX.W 0F 6E /r), X and r below 8.
+    cb(ob, 102)
+    cb(ob, 72)
+    cb(ob, 15)
+    cb(ob, 110)
+    cb(ob, 192 + x * 8 + r)
+end
+
+proc movq_rx(ob: rw ref Oir, r: u64, x: u64)
+    -- `movq r64, xmmX` (66 REX.W 0F 7E /r).
+    cb(ob, 102)
+    cb(ob, 72)
+    cb(ob, 15)
+    cb(ob, 126)
+    cb(ob, 192 + x * 8 + r)
+end
+
+proc fres_rax(ob: rw ref Oir, w: u64)
+    -- xmm0 back into rax: all eight bytes for an f64, `movd eax, xmm0`
+    -- (the upper half zero) for an f32.
+    if w == 64
+        movq_rx(ob, R_AX, 0)
+    else
+        cb(ob, 102)
+        cb(ob, 15)
+        cb(ob, 126)
+        cb(ob, 192)
+    end
+end
+
+proc fpre(ob: rw ref Oir, w: u64)
+    -- The scalar prefix: F2 for sd (binary64), F3 for ss (binary32).
+    if w == 64
+        cb(ob, 242)
+    else
+        cb(ob, 243)
+    end
+end
+
+proc lower_fbin(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `addsd/subsd/mulsd/divsd xmm0, xmm1` (ss for f32) on the two words.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_AX, ins.a)
+    ld_val(ob, mc, R_CX, ins.b)
+    movq_xr(ob, 0, R_AX)
+    movq_xr(ob, 1, R_CX)
+    fpre(ob, ins.val)
+    cb(ob, 15)
+    if ins.c == B_ADD
+        cb(ob, 88)
+    elif ins.c == B_SUB
+        cb(ob, 92)
+    elif ins.c == B_MUL
+        cb(ob, 89)
+    else
+        cb(ob, 94)
+    end
+    cb(ob, 193)
+    fres_rax(ob, ins.val)
+    st_val(ob, mc, R_AX, i)
+end
+
+proc lower_fcmp(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- `ucomisd` (ucomiss) and the flags into a bool. An unordered pair (a
+    -- NaN) sets ZF, PF and CF: `==` also needs PF clear, `!=` is true on
+    -- PF, and `<`/`<=` compare the swapped pair with `seta`/`setae`, which
+    -- CF makes false — so every comparison with a NaN is false but `!=`.
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_AX, ins.a)
+    ld_val(ob, mc, R_CX, ins.b)
+    movq_xr(ob, 0, R_AX)
+    movq_xr(ob, 1, R_CX)
+    c := ins.c
+    if ins.val == 64
+        cb(ob, 102)
+    end
+    cb(ob, 15)
+    cb(ob, 46)
+    if c == B_LT
+        cb(ob, 200)
+    elif c == B_LE
+        cb(ob, 200)
+    else
+        cb(ob, 193)
+    end
+    cb(ob, 15)
+    if c == B_EQ
+        cb(ob, 148)
+        cb(ob, 192)
+        cb(ob, 15)
+        cb(ob, 155)
+        cb(ob, 193)
+        cb(ob, 32)
+        cb(ob, 200)
+    elif c == B_NE
+        cb(ob, 149)
+        cb(ob, 192)
+        cb(ob, 15)
+        cb(ob, 154)
+        cb(ob, 193)
+        cb(ob, 8)
+        cb(ob, 200)
+    elif c == B_LT
+        cb(ob, 151)
+        cb(ob, 192)
+    elif c == B_GT
+        cb(ob, 151)
+        cb(ob, 192)
+    else
+        cb(ob, 147)
+        cb(ob, 192)
+    end
+    -- movzx eax, al
+    cb(ob, 15)
+    cb(ob, 182)
+    cb(ob, 192)
+    st_val(ob, mc, R_AX, i)
+end
+
+proc lower_fcvt(ob: rw ref Oir, mc: ref Mach, i: u64)
+    ins := ins_at(ob, i)
+    ld_val(ob, mc, R_AX, ins.a)
+    k := ins.c
+    w := ins.val
+    if k == 0
+        -- cvtsi2sd/ss xmm0, rax: the canonical word is the signed value.
+        fpre(ob, w)
+        cvtsi2(ob, 192)
+        fres_rax(ob, w)
+    elif k == 1
+        -- A u64: as a signed value when the top bit is clear; otherwise
+        -- halved (the lost bit kept as a sticky low bit), converted and
+        -- doubled — the rounding is the same.
+        cb(ob, 72)
+        cb(ob, 133)
+        cb(ob, 192)
+        cb(ob, 120)
+        cb(ob, 7)
+        fpre(ob, w)
+        cvtsi2(ob, 192)
+        cb(ob, 235)
+        cb(ob, 21)
+        cb(ob, 72)
+        cb(ob, 137)
+        cb(ob, 193)
+        cb(ob, 72)
+        cb(ob, 209)
+        cb(ob, 233)
+        cb(ob, 131)
+        cb(ob, 224)
+        cb(ob, 1)
+        cb(ob, 72)
+        cb(ob, 9)
+        cb(ob, 193)
+        fpre(ob, w)
+        cvtsi2(ob, 193)
+        fpre(ob, w)
+        cb(ob, 15)
+        cb(ob, 88)
+        cb(ob, 192)
+        fres_rax(ob, w)
+    elif k == 2
+        -- cvttsd2si/cvttss2si rax, xmm0: toward zero; out of range or a
+        -- NaN gives 2^63, the hardware's integer indefinite.
+        movq_xr(ob, 0, R_AX)
+        fpre(ob, w)
+        cb(ob, 72)
+        cb(ob, 15)
+        cb(ob, 44)
+        cb(ob, 192)
+    elif k == 3
+        -- cvtss2sd xmm0, xmm0
+        movq_xr(ob, 0, R_AX)
+        cb(ob, 243)
+        cb(ob, 15)
+        cb(ob, 90)
+        cb(ob, 192)
+        movq_rx(ob, R_AX, 0)
+    elif k == 4
+        -- cvtsd2ss xmm0, xmm0, rounded by MXCSR (to nearest)
+        movq_xr(ob, 0, R_AX)
+        cb(ob, 242)
+        cb(ob, 15)
+        cb(ob, 90)
+        cb(ob, 192)
+        fres_rax(ob, 32)
+    else
+        -- To a u64: below 2^63 as a signed conversion; from 2^63 on, 2^63
+        -- subtracted first and the top bit set again after.
+        movq_xr(ob, 0, R_AX)
+        if w == 64
+            mov_imm(ob, R_CX, 4890909195324358656)
+        else
+            mov_imm(ob, R_CX, 1593835520)
+        end
+        movq_xr(ob, 1, R_CX)
+        -- ucomisd xmm0, xmm1; jae +N
+        if w == 64
+            cb(ob, 102)
+        end
+        cb(ob, 15)
+        cb(ob, 46)
+        cb(ob, 193)
+        cb(ob, 115)
+        cb(ob, 7)
+        fpre(ob, w)
+        cb(ob, 72)
+        cb(ob, 15)
+        cb(ob, 44)
+        cb(ob, 192)
+        cb(ob, 235)
+        cb(ob, 14)
+        fpre(ob, w)
+        cb(ob, 15)
+        cb(ob, 92)
+        cb(ob, 193)
+        fpre(ob, w)
+        cb(ob, 72)
+        cb(ob, 15)
+        cb(ob, 44)
+        cb(ob, 192)
+        -- btc rax, 63
+        cb(ob, 72)
+        cb(ob, 15)
+        cb(ob, 186)
+        cb(ob, 248)
+        cb(ob, 63)
+    end
+    st_val(ob, mc, R_AX, i)
+end
+
+proc cvtsi2(ob: rw ref Oir, modrm: u64)
+    -- The rest of `cvtsi2sd/ss xmm0, r64` after its prefix: REX.W 0F 2A /r.
+    cb(ob, 72)
+    cb(ob, 15)
+    cb(ob, 42)
+    cb(ob, modrm)
 end
 
 proc lower_segments(ob: rw ref Oir, mc: ref Mach, i: u64)
@@ -2008,6 +2252,12 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     if op == O_PARAM
         -- A parameter is a value that arrives in a register, or, past the
         -- six, in a word above the return address (ABI.md §1).
+        if ins.a >= 1000
+            -- A float: from xmm(a - 1000).
+            movq_rx(ob, R_AX, ins.a - 1000)
+            st_val(ob, mc, R_AX, i)
+            ret
+        end
         if ins.c == 1
             -- A layout by value: its bytes above the return address, and
             -- the parameter is their address.
@@ -2095,6 +2345,28 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_SEGS
         lower_segments(ob, mc, i)
+        ret
+    end
+    if op == O_FBIN
+        lower_fbin(ob, mc, i)
+        ret
+    end
+    if op == O_FCMP
+        lower_fcmp(ob, mc, i)
+        ret
+    end
+    if op == O_FCVT
+        lower_fcvt(ob, mc, i)
+        ret
+    end
+    if op == O_FRET
+        ld_val(ob, mc, R_AX, ins.a)
+        movq_xr(ob, 0, R_AX)
+        ret
+    end
+    if op == O_FRES
+        movq_rx(ob, R_AX, 0)
+        st_val(ob, mc, R_AX, i)
         ret
     end
     if op == O_HWCALL

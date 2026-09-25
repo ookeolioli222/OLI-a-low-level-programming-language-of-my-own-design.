@@ -380,10 +380,48 @@ end
 
 -- Type of an expression -----------------------------------------------------------
 
+proc is_float(t: view u8) -> word
+    -- `f32` / `f64`: IEEE-754 binary32 and binary64 (MACHINE_MODEL.md 2).
+    if view_eq(t, "f32")
+        ret 1
+    end
+    if view_eq(t, "f64")
+        ret 1
+    end
+    ret 0
+end
+
+proc float_width(t: view u8) -> u64
+    if view_eq(t, "f32")
+        ret 32
+    end
+    ret 64
+end
+
+proc mem_bits(t: view u8) -> word
+    -- The width a scalar occupies in memory: an integer's, or a float's.
+    b := int_bits(t)
+    if b > 0
+        ret b
+    end
+    if view_eq(t, "f32")
+        ret 32
+    end
+    if view_eq(t, "f64")
+        ret 64
+    end
+    ret 0
+end
+
 proc lit_type(pg: ref Prog, want: view u8) -> view u8
     -- The type an integer literal takes from its context; empty is E0201.
     b := pg.sbuf
     if int_bits(want) > 0
+        ret want
+    end
+    if is_float(want) == 1
+        -- An integer literal where a float is wanted: its value, exactly
+        -- when it fits the significand and rounded when it does not.
         ret want
     end
     if addr_kind(want) > 0
@@ -1126,6 +1164,12 @@ proc ety(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
     if k == N_INT
         ret lit_type(pg, want)
     end
+    if k == N_FLOAT
+        if is_float(want) == 1
+            ret want
+        end
+        ret b[0..0]
+    end
     if k == N_CHAR
         ret lit_type(pg, want)
     end
@@ -1608,6 +1652,9 @@ proc untyped_int_expr(pg: ref Prog, mi: u64, n: u64) -> word
     if k == N_INT
         ret 1
     end
+    if k == N_FLOAT
+        ret 1
+    end
     if k == N_CHAR
         ret 1
     end
@@ -1626,8 +1673,17 @@ end
 proc conv_operand_want(pg: ref Prog, mi: u64, arg: u64, dst: view u8) -> view u8
     -- What `T(x)` gives `x`: an integer literal settles as `T` (or as `uword`
     -- on the way to an address); anything else keeps its own type and is
-    -- converted by the node itself.
+    -- converted by the node itself. `F.bits(x)` to a float takes the
+    -- unsigned integer of its width.
     b := pg.sbuf
+    if is_float(dst) == 1
+        if pg.convbits == 1
+            if view_eq(dst, "f32")
+                ret "u32"
+            end
+            ret "u64"
+        end
+    end
     if addr_kind(dst) > 0
         ret "uword"
     end
@@ -2163,6 +2219,12 @@ proc pform(pg: rw ref Prog, mi: u64, n: u64, ty: view u8)
     b := pg.sbuf
     nd := node_at(cx, n)
     k := nd.kind
+    if k == N_FLOAT
+        put(1, "(float ")
+        put(1, tok_text(cx, nd.t0))
+        put(1, ")")
+        ret
+    end
     if k == N_INT
         put(1, "(int ")
         if nd.sub == 1
@@ -3144,7 +3206,14 @@ proc tconvert(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
     end
     dst := ety(pg, mi, n, b[0..0])
     src := ety(pg, mi, arg, b[0..0])
+    pg.convbits <- 0
+    if mn.kind == N_MODE
+        if view_eq(tok_text(cx, mn.t0), "bits")
+            pg.convbits <- 1
+        end
+    end
     texpr(pg, mi, arg, conv_operand_want(pg, mi, arg, dst))
+    pg.convbits <- 0
     if starts_with(dst, "own ")
         -- `own T (e)` wraps a `T`; `T(h)` unwraps an `own T`, and is the
         -- read that consumes it (MEMORY_MODEL.md 8). Nothing else converts
@@ -3158,6 +3227,14 @@ proc tconvert(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
         if view_eq(src[4..], dst) == 0
             terr(pg, mi, 200, n)
         end
+        ret
+    end
+    if is_float(dst) == 1
+        tconv_float(pg, mi, n)
+        ret
+    end
+    if is_float(src) == 1
+        tconv_float(pg, mi, n)
         ret
     end
     an := node_at(cx, arg)
@@ -3182,6 +3259,67 @@ proc tconvert(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
     end
 end
 
+proc tconv_float(pg: rw ref Prog, mi: u64, n: u64)
+    -- A conversion with a float on either side (MACHINE_MODEL.md 2):
+    -- `f64(x)` from any integer or an `f32`, `f32(x)` from any integer;
+    -- `f32.wrap(x)` rounds an `f64`; `T.wrap(f)` truncates toward zero to
+    -- an integer; `T.bits(x)` reinterprets between a float and the unsigned
+    -- integer of its width. Anything else is E0202 (lossy) or E0200.
+    cx := mod_ctx(pg, mi)
+    b := pg.sbuf
+    mnode := kid1(cx, n)
+    mn := node_at(cx, mnode)
+    mode : view u8 <- ""
+    arg : u64 <- mnode
+    if mn.kind == N_MODE
+        mode <- tok_text(cx, mn.t0)
+        arg <- sibling(cx, mnode)
+    end
+    dst := ety(pg, mi, n, b[0..0])
+    src := ety(pg, mi, arg, b[0..0])
+    if src.len == 0
+        ret
+    end
+    if view_eq(mode, "bits")
+        if mem_bits(src) != mem_bits(dst)
+            terr(pg, mi, 200, n)
+        end
+        ret
+    end
+    if view_eq(mode, "sat")
+        terr(pg, mi, 900, n)
+        ret
+    end
+    if view_eq(mode, "checked")
+        terr(pg, mi, 900, n)
+        ret
+    end
+    if is_float(dst) == 1
+        if is_float(src) == 1
+            if view_eq(src, "f64")
+                if view_eq(dst, "f32")
+                    if view_eq(mode, "wrap") == 0
+                        terr(pg, mi, 202, n)
+                    end
+                end
+            end
+            ret
+        end
+        if int_bits(src) == 0
+            terr(pg, mi, 200, n)
+        end
+        ret
+    end
+    if int_bits(dst) == 0
+        terr(pg, mi, 200, n)
+        ret
+    end
+    if view_eq(mode, "wrap") == 0
+        -- A float to an integer loses the fraction: `T.wrap(f)` says so.
+        terr(pg, mi, 202, n)
+    end
+end
+
 proc tconv_lossless(src: view u8, dst: view u8) -> word
     -- `T(x)` also accepts unsigned to strictly wider signed.
     if same_repr(src, dst)
@@ -3196,6 +3334,25 @@ proc tconv_lossless(src: view u8, dst: view u8) -> word
                 ret 1
             end
         end
+    end
+    ret 0
+end
+
+proc float_op_ok(op: view u8) -> word
+    if view_eq(op, "+")
+        ret 1
+    end
+    if view_eq(op, "-")
+        ret 1
+    end
+    if view_eq(op, "*")
+        ret 1
+    end
+    if view_eq(op, "/")
+        ret 1
+    end
+    if binop_is_compare(op)
+        ret 1
     end
     ret 0
 end
@@ -3222,6 +3379,20 @@ proc tbinop(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
     ot : view u8 <- want
     if binop_is_compare(op)
         ot <- unify(pg, lt, rt)
+    end
+    fl : u64 <- 0
+    if is_float(lt) == 1
+        fl <- 1
+    end
+    if is_float(rt) == 1
+        fl <- 1
+    end
+    if fl == 1
+        if float_op_ok(op) == 0
+            -- `%`, the bit operations and the shifts have no float meaning.
+            terr(pg, mi, 200, n)
+            ret
+        end
     end
     if view_eq(op, "<<")
         texpr(pg, mi, lhs, ot)
@@ -3461,6 +3632,25 @@ proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
     end
     nd := node_at(cx, n)
     k := nd.kind
+    if k == N_FLOAT
+        if want.len == 0
+            -- `x := 1.5`: nothing says binary32 or binary64.
+            terr(pg, mi, 201, n)
+            ret
+        end
+        if is_float(want) == 0
+            terr(pg, mi, 200, n)
+            ret
+        end
+        if view_eq(want, "f32")
+            ft := ctok(cx, nd.t0)
+            if ft.sub == F32_NONE
+                -- Beyond the largest binary32.
+                terr(pg, mi, 212, n)
+            end
+        end
+        ret
+    end
     if k == N_INT
         if want.len == 0
             -- `x := 10`: nothing in the program says how wide this is.
@@ -3591,8 +3781,18 @@ proc texpr(pg: rw ref Prog, mi: u64, n: u64, want: view u8)
     -- The conversion has to be written (`T.wrap(x)`, `T.bits(x)`); oli-core
     -- has had them since genesis step 6f.
     have := ety(pg, mi, n, want)
-    if coerce_kind(pg, have, want) == 5
+    ck := coerce_kind(pg, have, want)
+    if ck == 5
         terr(pg, mi, 202, n)
+    end
+    if ck == 6
+        -- A float never meets another type silently: `f64(n)`, `f32.wrap(d)`
+        -- or `T.wrap(f)` says which conversion is meant.
+        if is_float(have) == 1
+            terr(pg, mi, 200, n)
+        elif is_float(want) == 1
+            terr(pg, mi, 200, n)
+        end
     end
 end
 
