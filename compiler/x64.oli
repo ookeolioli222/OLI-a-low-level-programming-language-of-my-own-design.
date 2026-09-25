@@ -2188,7 +2188,14 @@ proc lower_machine(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     -- its register into the value's word, and the saved registers come back.
     ins := ins_at(ob, i)
     base := mc.curloc + mc.curtmp + mc.curnval + mc.curnphi
-    mask := ins.w
+    mask : u64 <- ins.w
+    if mc.curnone == 1
+        -- `calls none`: there is no frame to keep them in, and the block is
+        -- the whole procedure — its registers are its own business (a
+        -- context switch pushes them itself). Saving them through rbp would
+        -- write into the caller's frame.
+        mask <- 0
+    end
     k : u64 <- 0
     r : u64 <- 0
     while r < 16

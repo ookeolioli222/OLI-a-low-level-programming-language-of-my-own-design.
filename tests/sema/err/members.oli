@@ -1,0 +1,22 @@
+g : u64 <- 5
+flag : bool <- true
+layout P
+    a : u64
+    len : u64
+end
+proc main -> s32
+    entry
+    permit memory.raw
+    x := g.addr
+    y := g.len
+    z := flag.foo
+    p : P <- P { a: 1, len: 2 }
+    w := p.len
+    q := addr u64 (ref g)
+    v := q.next
+    ret 0
+end
+-- expect: E0105 @ 10:12
+-- expect: E0105 @ 11:12
+-- expect: E0105 @ 12:15
+-- expect: E0105 @ 16:12

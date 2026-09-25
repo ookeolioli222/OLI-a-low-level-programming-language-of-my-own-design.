@@ -1446,6 +1446,35 @@ proc apply_profile(pg: rw ref Prog, z: zone, src: view u8)
     end
     pg.profsrc <- txt
     pg.hasprof <- 1
+    -- The backend writes x86-64 code for Linux or for no operating system;
+    -- a profile that names anything else is refused, never compiled for
+    -- x86-64 regardless.
+    ar := profile_value(txt, "arch")
+    if ar.len > 0
+        if view_eq(unquoted(ar), "x86_64") == 0
+            put(2, "olic: profile: arch ")
+            put(2, ar)
+            put(2, " is not a target of this compiler (x86_64 only)\n")
+            os.syscall(60, 1)
+        end
+    end
+    ov := profile_value(txt, "os")
+    if ov.len > 0
+        uo := unquoted(ov)
+        okos : u64 <- 0
+        if view_eq(uo, "none")
+            okos <- 1
+        end
+        if view_eq(uo, "linux")
+            okos <- 1
+        end
+        if okos == 0
+            put(2, "olic: profile: os ")
+            put(2, ov)
+            put(2, " is not a target of this compiler (none or linux)\n")
+            os.syscall(60, 1)
+        end
+    end
     la := profile_value(txt, "load_address")
     if la.len > 0
         pg.loadaddr <- parse_addr(la, 0)

@@ -1,0 +1,76 @@
+module switch_test
+-- A context switch between two stacks: `switch_to` is a `calls none`
+-- procedure whose one machine block pushes the callee-saved registers,
+-- saves rsp through rdi, loads the next stack from rsi, pops that stack's
+-- registers and returns into it. The second stack starts as six zero
+-- registers under the address of `task_a`. Five round trips; the exit
+-- status is the number of the check that failed, 42 when every one held.
+-- (Before 2026-09-25 the lowering also saved the block's callee-saved
+-- registers through rbp in a procedure that has no frame, which wrote into
+-- the caller's frame and crashed this program.)
+
+stack_a : [16K]u8
+    align 16
+sp_main : u64
+sp_a : u64
+count : u64
+
+proc switch_to(save : u64, next : u64)
+    -- The whole switch: the callee-saved registers pushed on this stack,
+    -- rsp saved through rdi, the next stack in rsi, its registers popped,
+    -- and `ret` into whatever that stack was doing.
+    calls none
+    permit cpu.asm
+    machine x64
+        push rbp
+        push rbx
+        push r12
+        push r13
+        push r14
+        push r15
+        mov [rdi], rsp
+        mov rsp, rsi
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbx
+        pop rbp
+        ret
+    end
+end
+
+proc task_a() -> never
+    permit memory.raw
+    loop
+        count <- count + 1
+        switch_to(u64(addr u8 (ref sp_a)), sp_main)
+    end
+end
+
+proc start -> s32
+    entry
+    permit memory.raw, cpu.asm
+    -- A fresh stack: six zero registers under the address of task_a.
+    top := u64(stack_a.addr) + 16K
+    ta : u64 <- 0
+    machine x64
+        mov rax, task_a
+        out rax -> ta
+    end
+    [addr u64 (top - 8)] <- 0
+    [addr u64 (top - 16)] <- ta
+    i : u64 <- 0
+    while i < 6
+        [addr u64 (top - 24 - i * 8)] <- 0
+        i <- i + 1
+    end
+    sp_a <- top - 64
+    k : u64 <- 0
+    while k < 5
+        switch_to(u64(addr u8 (ref sp_main)), sp_a)
+        k <- k + 1
+    end
+    if count != 5 then ret 1
+    ret 42
+end

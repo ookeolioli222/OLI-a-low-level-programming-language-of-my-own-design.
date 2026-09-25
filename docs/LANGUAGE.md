@@ -806,6 +806,7 @@ Implemented today **[runs]**:
 | E0300 | value does not outlive its region |
 | E0310 | unhandled failure |
 | E0311 | `case` is not exhaustive |
+| E0105 | no such member (`.addr`/`.len` or a field on an integer, `bool` or address) |
 | E0330 | a freestanding zone needs `at` or `from` |
 | E0340 | `own` value used after it was moved |
 | E0341 | `<~` needs a place of `own` type |

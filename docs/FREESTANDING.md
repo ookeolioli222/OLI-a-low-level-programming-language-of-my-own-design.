@@ -207,6 +207,9 @@ the COM1 port (`io.port`) and the VGA text buffer (`memory.mmio`), reads
 the VGA cells through `mem.mmio` — and beyond it the two 8259 PICs remapped,
 the 8253 PIT at 100 Hz, a `calls interrupt` handler on vector 32 counting
 ticks, `cpu.interrupts(on)` and a second of `hlt`.
+A profile's `arch` must be `x86_64` and its `os` `none` or `linux`: any other
+value is refused with a message and no file (the backend generates nothing
+else, and never x86-64 code under another name).
 It boots under QEMU as a flat kernel (2026-09-24, QEMU 10.0.13): `-kernel`
 takes the Multiboot 1 header of `mb1` (the a.out kludge, because QEMU loads
 no 64-bit ELF by its program headers) — GRUB takes that or the Multiboot2

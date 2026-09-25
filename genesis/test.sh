@@ -1123,7 +1123,7 @@ grep -q 'E0200' build/chk.err || fail "checks: kernel_sketch must report its typ
 for f in ../tests/sema/ok/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli; do
     ( cd .. && genesis/build/show_sema < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
 done
-echo "ok: olic reports exactly the diagnostics of all seventeen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces, implicit narrowing and linear own values - and none on any positive fixture"
+echo "ok: olic reports exactly the diagnostics of all eighteen tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces, implicit narrowing, linear own values and members of scalars - and none on any positive fixture"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic front end and semantic analysis) passed"
 
@@ -1693,6 +1693,23 @@ grep -q 'E0900' build/b9.err || fail "back end: a value above 255 in a bytes lin
 grep -q 'E0900' build/nolower.err || fail "back end: an unlowered construct must report E0900"
 [ ! -s build/nolower.elf ] || fail "back end: a refused program still wrote a binary"
 echo "ok: a construct the back end cannot lower is E0900 and writes no file"
+# A profile naming a target the backend does not generate for is refused:
+# never x86-64 code under another architecture's name.
+printf '[target]\narch = "aarch64"\nos = "none"\n' > build/arm.oli-target
+printf -- '-- target: freestanding\n-- profile: genesis/build/arm.oli-target\nmodule arm\nproc start -> never\n    entry\n    calls none\n    permit cpu.halt\n    loop\n        cpu.halt()\n    end\nend\n' > build/arm.oli
+set +e
+( cd .. && genesis/build/olic < genesis/build/arm.oli > genesis/build/arm.elf 2> genesis/build/arm.err )
+st=$?
+set -e
+[ "$st" = 1 ] || fail "profile: arch aarch64 exited $st, want a refusal"
+grep -q 'not a target of this compiler' build/arm.err || fail "profile: arch aarch64 must be refused by name"
+[ ! -s build/arm.elf ] || fail "profile: a refused target still wrote a file"
+# tests/run/switch.oli: a calls-none procedure's machine block is the whole
+# procedure - the lowering saves nothing through rbp, which it does not own.
+objdump -d --no-show-raw-insn build/switch.elf | awk '/<switch_test.switch_to>:/,/^$/' > build/switch.dis
+[ "$(sed -n 2p build/switch.dis | grep -c 'push   %rbp')" = 1 ] || fail "switch: switch_to must begin with the block's own push rbp"
+! grep -q '(%rbp)' build/switch.dis || fail "switch: a calls-none procedure must not store through rbp"
+echo "ok: an unknown target architecture is refused, and a calls-none context switch is exactly its block (switch.elf runs five round trips between two stacks)"
 echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"
 
 # --- layer 6: self-hosting (G4, design 0022) ---

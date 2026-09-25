@@ -1317,6 +1317,29 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Fixed in stage 38 (2026-09-25): the three silent defects of the audit
+
+The audit of commit 237f1d6 found three places where `olic` accepted a
+program and produced a wrong result without a word. Each is fixed and
+pinned:
+
+- **A member of a scalar.** `g.addr` on a `u64` static compiled to a load
+  of `g`'s value, and `.len` or any unknown member of an integer, `bool` or
+  address passed the checker (E0105 was specified but never emitted). The
+  checker now reports E0105 for a member of an integer, `bool` or address
+  type unless a layout field has that name
+  (`tests/sema/err/members.oli`, the eighteenth negative fixture).
+- **A machine block in a `calls none` procedure** had the callee-saved
+  registers it names saved and restored through rbp — in a procedure with
+  no frame, i.e. in its caller's frame. A frameless block now owns its
+  registers; `tests/run/switch.oli` is a context switch between two stacks
+  written that way (five round trips), and the harness pins that
+  `switch_to` is exactly its block, with no store through rbp.
+- **The profile's `arch`** was read only by `when target.arch`; a profile
+  naming `aarch64` got an x86-64 image. `arch` other than `x86_64`, or `os`
+  other than `none`/`linux`, is now refused with a message and no file (the
+  harness compiles such a profile).
+
 ## Implemented in stage 37 (2026-09-25): a kernel heap
 
 - **`frames.alloc_run(fmap, n)`** hands out the lowest run of `n` free
@@ -1437,9 +1460,9 @@ constant in `.rodata`).
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 29,584 lines) into
+compiles its own source (`compiler/`, seventeen modules, 29,665 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,288,160 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,291,296 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

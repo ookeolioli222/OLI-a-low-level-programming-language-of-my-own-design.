@@ -82,6 +82,9 @@ proc smsg(code: u64) -> view u8
     if code == 330
         ret "a freestanding zone needs `at` or `from`"
     end
+    if code == 105
+        ret "no such member"
+    end
     if code == 340
         ret "`own` value used after it was moved"
     end
@@ -700,6 +703,9 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
     if k == N_LIT
         check_lit(pg, mi, n)
     end
+    if k == N_FIELD
+        check_member(pg, mi, n)
+    end
     if k == N_CONVERT
         if type_head_is(pg, mi, nd.t0, KW_ADDR)
             need(pg, mi, "memory.raw", nd.t0)
@@ -982,6 +988,45 @@ proc check_one_arg(pg: rw ref Prog, mi: u64, n: u64)
     if sibling(cx, a) != 0
         sdiag(pg, mi, 900, first_tok(pg, mi, sibling(cx, a)))
     end
+end
+
+proc check_member(pg: ref Prog, mi: u64, n: u64)
+    -- E0105: a member of a value whose type has none — an integer, `bool`,
+    -- an address. (`.addr` and `.len` belong to views and arrays, a
+    -- layout's members are its fields; a name that is not a value — an
+    -- item, a module, `mem`, `cpu` — is resolved elsewhere.)
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    base := kid1(cx, n)
+    bn := node_at(cx, base)
+    if bn.kind == N_NAME
+        if name_kind(pg, mi, base) == 0
+            ret
+        end
+    end
+    b := pg.sbuf
+    bt := no_mmio(ety(pg, mi, base, b[0..0]))
+    if bt.len == 0
+        ret
+    end
+    bad : u64 <- 0
+    if int_bits(bt) > 0
+        bad <- 1
+    end
+    if view_eq(bt, "bool")
+        bad <- 1
+    end
+    if addr_kind(bt) > 0
+        bad <- 1
+    end
+    if bad == 0
+        ret
+    end
+    ft := field_type_text(pg, bt, tok_text(cx, nd.t0))
+    if ft.len > 0
+        ret
+    end
+    sdiag(pg, mi, 105, nd.t0)
 end
 
 proc check_segments(pg: rw ref Prog, mi: u64, n: u64)
