@@ -1317,6 +1317,35 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 36 (2026-09-25): a physical memory manager
+
+- **`core.frames`** (`lib/core/frames.oli`, Oli-- only): one bit per
+  four-kilobyte frame in a bitmap the caller owns, set = in use. `init`
+  marks everything in use, `load_multiboot(fmap, info)` reads a Multiboot 1
+  information structure through raw memory and frees every frame wholly
+  inside an available region of its memory map, `reserve_range` marks a
+  range in use again, `alloc` hands out the lowest free frame's physical
+  address (0 when none), `release`, `count_free`, `in_use`, `capacity`.
+- **The kernel uses it.** The trampoline's first instruction after `cli`
+  saves ebx (the information structure's address) into the static
+  `mb_info`; `memory_init` frees the loader's RAM into a 32 KiB bitmap for
+  the first gigabyte, reserves the first two megabytes (BIOS area, the
+  loader's tables, the image and its .bss), prints the count, allocates a
+  frame, writes and reads it through its physical address and releases it.
+- **Verified under QEMU 10.0.13**: seven COM1 lines, among them
+  `memory: 2 regions, 15840 frames free` at `-m 64` and `frame:
+  0000000000200000 written and read`; the same image at `-m 128` reports
+  32224 frames — 16384 more, exactly 64 MiB, so the count is read from the
+  machine. The harness pins both boots (when QEMU is present) and the
+  difference.
+- `tests/run/pmm.oli` runs the allocator in a process over a map built by
+  hand in a static (the address a Multiboot table holds is 32 bits):
+  seventeen checks, partial frames at the ends of a range included.
+- Found on the way: `bits` is a
+  reserved word, and a module-level name may not reappear as a parameter
+  anywhere in the program (E0101) — the library's bitmap parameter is
+  `fmap`.
+
 ## Implemented in back-end stage 35 (2026-09-24): aggregate constants
 
 - **`NAME : [N]T := { … }` and a layout constant** are lowered: the data

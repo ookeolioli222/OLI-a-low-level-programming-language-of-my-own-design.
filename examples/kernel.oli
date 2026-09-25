@@ -3,6 +3,7 @@
 module kernel
 import core.x64
 import core.x64.paging
+import core.frames
 -- M3 (docs/FREESTANDING.md §8) and the first steps of M4: a flat kernel
 -- image for QEMU or GRUB — a Multiboot2 header and a Multiboot 1 header
 -- (the a.out kludge QEMU's `-kernel` needs) in `.text.boot`, an entry that is the 32-bit code a Multiboot loader
@@ -14,7 +15,9 @@ import core.x64.paging
 -- `int 3`) and vector 32 (the timer: the 8259 PICs remapped, the 8253 PIT at
 -- 100 Hz, `sti`), its own page tables (the first gigabyte identity-mapped
 -- in two-megabyte pages, `core.x64.paging`, installed with
--- `arch.x64.cr3 <- …`), a wait of one second in `hlt`, then a byte to
+-- `arch.x64.cr3 <- …`), the physical frames the loader's memory map
+-- reports as RAM in a bitmap (`core.frames`), one of them allocated,
+-- written, read back and released, a wait of one second in `hlt`, then a byte to
 -- QEMU's isa-debug-exit port (it exits with status 33; on a machine
 -- without that device the write goes nowhere) and `hlt` forever. No
 -- system calls, no libc: nothing in the image but this program.
@@ -73,6 +76,13 @@ gdt : [3]u64
 
 gdtr : core.x64.TablePointer
 
+-- The physical address of the loader's information structure, saved by
+-- the trampoline from ebx before anything else runs.
+mb_info : u32
+
+-- One bit per four-kilobyte frame of the first gigabyte (core.frames).
+frame_map : [32K]u8
+
 proc mb1 -> never
     -- The Multiboot 1 header QEMU's `-kernel` looks for (it loads no 64-bit
     -- ELF by its program headers, so the a.out kludge, flags bit 16, tells
@@ -108,6 +118,7 @@ proc start -> never
     permit cpu.asm
     machine x64
         bytes 0xFA
+        mov [mb_info], ebx
         bytes 0xB8
         addr32 boot_pdpt
         bytes 0x83, 0xC8, 0x03
@@ -276,6 +287,45 @@ proc serial_hex(v : u64)
     end
 end
 
+proc serial_dec(v : u64)
+    -- Decimal, no leading zeros.
+    if v >= 10
+        serial_dec(v / 10)
+    end
+    outb(0x3F8, u8.wrap(48 + v % 10))
+end
+
+proc memory_init()
+    -- The RAM the loader reported, less the first two megabytes (the BIOS
+    -- area, the loader's tables and this image with its .bss); then one
+    -- frame taken, written and read through its physical address (the
+    -- first gigabyte is identity-mapped), and given back.
+    permit memory.raw
+    frames.init(frame_map[..])
+    n := frames.load_multiboot(frame_map[..], u64(mb_info))
+    frames.reserve_range(frame_map[..], 0, 0x200000)
+    serial_write("memory: ")
+    serial_dec(n)
+    serial_write(" regions, ")
+    serial_dec(frames.count_free(frame_map[..]))
+    serial_write(" frames free\n")
+    a := frames.alloc(frame_map[..])
+    if a < 0x200000
+        serial_write("frame: none\n")
+        ret
+    end
+    [addr u64 (a)] <- 0x0123456789ABCDEF
+    [addr u64 (a + 4088)] <- a
+    if [addr u64 (a)] == 0x0123456789ABCDEF
+        if [addr u64 (a + 4088)] == a
+            serial_write("frame: ")
+            serial_hex(a)
+            serial_write(" written and read\n")
+        end
+    end
+    frames.release(frame_map[..], a)
+end
+
 proc set_gate(vector : uword, handler : u64)
     -- An interrupt gate (type 0xE, present, ring 0) in the kernel's own
     -- code segment, 0x08 of the GDT the trampoline built.
@@ -330,6 +380,7 @@ proc main -> never
         serial_write("cpu: other\n")
     end
     paging_init()
+    memory_init()
     install_idt()
     machine x64
         int 3

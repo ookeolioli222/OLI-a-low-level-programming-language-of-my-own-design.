@@ -1,0 +1,75 @@
+module pmm
+import core.frames
+-- `core.frames` (lib/core/frames.oli), executed in a process: a bitmap for
+-- sixty-four megabytes in a static, a Multiboot 1 information structure and
+-- memory map built by hand in a static (the layout QEMU's loader
+-- writes: low memory, a hole, the rest), loaded through raw memory, the
+-- low megabyte and a kernel image reserved, frames allocated, released and
+-- counted. The exit status is the number of the check that failed; 42 when
+-- every one held.
+
+frame_map : [2K]u8
+
+-- A static, so that its address fits the 32 bits a Multiboot table holds.
+mb_area : [160]u8
+
+proc put32(b : rw view u8, off : uword, v : u32)
+    mem.put_le32(b[off..off + 4], v)
+end
+
+proc put64(b : rw view u8, off : uword, v : u64)
+    mem.put_le64(b[off..off + 8], v)
+end
+
+proc start -> s32
+    entry
+    permit memory.raw
+    frames.init(frame_map[..])
+    if frames.capacity(frame_map[..]) != 16384 then ret 1
+    if frames.count_free(frame_map[..]) != 0 then ret 2
+    if frames.alloc(frame_map[..]) != 0 then ret 3
+    -- The information structure (52 bytes) and, from offset 64, two map
+    -- entries of 24 bytes each: RAM below 0x9FC00, and from 1 MiB to 64 MiB
+    -- less 128 KiB; a reserved entry between them.
+    mem.zero(mb_area[..])
+    put32(mb_area[..], 0, 64)
+    put32(mb_area[..], 44, 72)
+    put32(mb_area[..], 48, u32.wrap(u64(mb_area.addr) + 64))
+    put32(mb_area[..], 64, 20)
+    put64(mb_area[..], 68, 0)
+    put64(mb_area[..], 76, 0x9FC00)
+    put32(mb_area[..], 84, 1)
+    put32(mb_area[..], 88, 20)
+    put64(mb_area[..], 92, 0xF0000)
+    put64(mb_area[..], 100, 0x10000)
+    put32(mb_area[..], 108, 2)
+    put32(mb_area[..], 112, 20)
+    put64(mb_area[..], 116, 0x100000)
+    put64(mb_area[..], 124, 0x3EE0000)
+    put32(mb_area[..], 132, 1)
+    if u64(mb_area.addr) >> 32 != 0 then ret 4
+    if frames.load_multiboot(frame_map[..], u64(mb_area.addr)) != 2 then ret 5
+    -- 159 frames below 0x9FC00, and 0x3EE0 frames from 1 MiB.
+    if frames.count_free(frame_map[..]) != 159 + 16096 then ret 6
+    frames.reserve_range(frame_map[..], 0, 0x100000)
+    frames.reserve_range(frame_map[..], 0x100000, 0x100000)
+    if frames.count_free(frame_map[..]) != 16096 - 256 then ret 7
+    a := frames.alloc(frame_map[..])
+    if a != 0x200000 then ret 8
+    b := frames.alloc(frame_map[..])
+    if b != 0x201000 then ret 9
+    if frames.in_use(frame_map[..], 0x200) == false then ret 10
+    frames.release(frame_map[..], a)
+    if frames.in_use(frame_map[..], 0x200) then ret 11
+    c := frames.alloc(frame_map[..])
+    if c != a then ret 12
+    if frames.count_free(frame_map[..]) != 16096 - 256 - 2 then ret 13
+    -- A partial frame at either end of a free range stays in use.
+    frames.init(frame_map[..])
+    frames.free_range(frame_map[..], 0x1800, 0x3000)
+    if frames.count_free(frame_map[..]) != 2 then ret 14
+    if frames.in_use(frame_map[..], 2) then ret 15
+    if frames.in_use(frame_map[..], 1) == false then ret 16
+    if frames.in_use(frame_map[..], 4) == false then ret 17
+    ret 42
+end

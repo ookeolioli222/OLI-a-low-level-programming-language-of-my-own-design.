@@ -227,7 +227,12 @@ end
 1. Boot: no zones; only statics (`.bss` stack, page tables) and `machine` blocks.
 2. Early init: `zone boot N at ADDR` over a known-free physical range (identity-mapped).
 3. Physical memory manager: a bitmap/stack of frames in `core`-style Oli--, handing out
-   `physaddr` values.
+   `physaddr` values. **Runs** (2026-09-25): `core.frames` (`lib/core/frames.oli`)
+   keeps one bit per four-kilobyte frame in a bitmap the caller owns — `init`,
+   `load_multiboot` (the Multiboot 1 memory map read through raw memory),
+   `reserve_range`, `free_range`, `alloc`, `release`, `count_free`, `in_use`.
+   `tests/run/pmm.oli` runs it over a hand-built map; `examples/kernel.oli`
+   runs it over the one QEMU's loader writes and prints the free frames.
 4. Kernel heap: a `zone` per subsystem or a slab allocator exposing `zone ... from` handles.
 5. Per-request scratch: nested zones, freed at `end`, no `free` calls, no leaks.
 
@@ -239,5 +244,6 @@ Every step is visible: `--explain-cost kernel.oli` lists each `ZONE`, `KERNEL`,
 boot via Multiboot (**done, booted under QEMU 2026-09-24**) → own stack →
 serial + VGA output → `cpuid` → `hlt` loop — all in `examples/kernel.oli`,
 with the GDT (the trampoline's), the IDT and its handlers, the PIC and PIT
-timer and the page tables already there. Next, one at a time: a physical
-memory manager, a kernel heap, a cooperative scheduler.
+timer, the page tables and a physical frame allocator over the loader's
+memory map already there. Next, one at a time: a kernel heap, a cooperative
+scheduler.

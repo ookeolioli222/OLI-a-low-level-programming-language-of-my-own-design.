@@ -1,0 +1,132 @@
+--- A physical frame allocator (KERNEL_PROGRAMMING.md §4, M4): one bit per
+--- four-kilobyte frame in a bitmap the caller owns — a set bit is a frame
+--- in use — so that nothing here needs memory it does not already have.
+--- The bitmap starts all in use; the boot loader's memory map frees what
+--- is RAM, and the kernel reserves its own image again. Nothing touches the
+--- hardware except `load_multiboot`, which reads the loader's tables through
+--- raw memory.
+module core.frames
+
+pub FRAME : u64 := 4096
+
+--- The Multiboot 1 memory-map type of usable RAM.
+pub MB_AVAILABLE : u32 := 1
+
+--- Every frame in use.
+pub proc init(fmap : rw view u8)
+    mem.set(fmap, 0xFF)
+end
+
+--- The frames that `fmap` describes: eight to a byte.
+pub proc capacity(fmap : view u8) -> u64
+    ret u64(fmap.len) * 8
+end
+
+pub proc in_use(fmap : view u8, frame : u64) -> bool
+    if frame >= capacity(fmap) then ret true
+    ret (fmap[uword(frame >> 3)] >> u8.wrap(frame & 7)) & 1 == 1
+end
+
+proc set_bit(fmap : rw view u8, frame : u64)
+    if frame < capacity(fmap)
+        i := uword(frame >> 3)
+        fmap[i] <- fmap[i] | (u8(1) << u8.wrap(frame & 7))
+    end
+end
+
+proc clear_bit(fmap : rw view u8, frame : u64)
+    if frame < capacity(fmap)
+        i := uword(frame >> 3)
+        fmap[i] <- fmap[i] & ~(u8(1) << u8.wrap(frame & 7))
+    end
+end
+
+--- Frees every frame that lies wholly inside [base, base + len): a range
+--- the memory map says is RAM. A partial frame at either end stays in use.
+pub proc free_range(fmap : rw view u8, base : u64, len : u64)
+    first := (base + FRAME - 1) / FRAME
+    stop := (base + len) / FRAME
+    f : u64 <- first
+    while f < stop
+        clear_bit(fmap, f)
+        f <- f + 1
+    end
+end
+
+--- Marks in use every frame that touches [base, base + len): the kernel's
+--- image, the loader's tables, the memory below one megabyte.
+pub proc reserve_range(fmap : rw view u8, base : u64, len : u64)
+    if len == 0 then ret
+    first := base / FRAME
+    stop := (base + len + FRAME - 1) / FRAME
+    f : u64 <- first
+    while f < stop
+        set_bit(fmap, f)
+        f <- f + 1
+    end
+end
+
+--- The physical address of a free frame, now in use; 0 when there is
+--- none (frame 0 is never handed out: the caller reserves it).
+pub proc alloc(fmap : rw view u8) -> u64
+    i : uword <- 0
+    while i < fmap.len
+        if fmap[i] != 0xFF
+            b : u64 <- 0
+            while b < 8
+                f := u64(i) * 8 + b
+                if in_use(fmap, f) == false
+                    set_bit(fmap, f)
+                    ret f * FRAME
+                end
+                b <- b + 1
+            end
+        end
+        i <- i + 1
+    end
+    ret 0
+end
+
+--- Gives a frame back by its physical address.
+pub proc release(fmap : rw view u8, frame_addr : u64)
+    clear_bit(fmap, frame_addr / FRAME)
+end
+
+pub proc count_free(fmap : view u8) -> u64
+    n : u64 <- 0
+    each b in fmap
+        v : u8 <- b
+        while v != 0
+            n <- n + u64(v & 1)
+            v <- v >> 1
+        end
+    end
+    ret capacity(fmap) - n
+end
+
+--- Frees the RAM a Multiboot 1 loader reported: the info structure at
+--- `info` (its physical address, identity-mapped), flag bit 6 for the
+--- memory map at offsets 44 (length) and 48 (address), each entry a size
+--- (not counting itself), a 64-bit base and length and a 32-bit type. The
+--- number of available regions, or 0 when the loader gave no map.
+pub proc load_multiboot(fmap : rw view u8, info : u64) -> u64
+    permit memory.raw
+    flags := [addr u32 (info)]
+    if flags & 64 == 0 then ret 0
+    mlen := u64([addr u32 (info + 44)])
+    maddr := u64([addr u32 (info + 48)])
+    n : u64 <- 0
+    p : u64 <- maddr
+    while p < maddr + mlen
+        size := u64([addr u32 (p)])
+        base := [addr u64 (p + 4)]
+        len := [addr u64 (p + 12)]
+        kind := [addr u32 (p + 20)]
+        if kind == MB_AVAILABLE
+            free_range(fmap, base, len)
+            n <- n + 1
+        end
+        p <- p + size + 4
+    end
+    ret n
+end

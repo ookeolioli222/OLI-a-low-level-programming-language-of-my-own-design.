@@ -218,4 +218,5 @@ with a 64-bit code descriptor, cr0.PG) that far-jumps to `start64`, which
 reloads the segments with `arch.x64.segments`, sets the stack and calls
 `main`. The harness decodes the trampoline with `objdump -M i386` and, when
 `qemu-system-x86_64` is on the path (or `OLI_QEMU` names it), boots the
-image: five lines on COM1 and an exit through the isa-debug-exit device.
+image: seven lines on COM1 (among them the free frames of the loader's
+memory map, `core.frames`) and an exit through the isa-debug-exit device.
