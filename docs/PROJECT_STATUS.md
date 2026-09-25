@@ -1317,6 +1317,40 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 43 (2026-09-25): a second architecture, AArch64
+
+- **`compiler/a64.oli`**, the AArch64 back end, lowers the same OIR as the
+  x86-64 one: constants (`movz`/`movk`), frame places (`ldur`/`stur`, or
+  through x17), arithmetic with every trap of MACHINE_MODEL §4 — `adds`/
+  `subs` and `b.vc`/`b.lo`/`b.hs`, `smulh` against the sign of the product
+  or `umulh` against zero, the re-extension that catches a narrow overflow —
+  `sdiv`/`udiv` with the zero and MIN/-1 checks and `msub` for `%`, shifts
+  masked like x86-64's, comparisons into `cset`, raw loads and stores at
+  every width, `adr` for the read-only segment and `adrp`+`add` for the
+  writable one, views and their bounds and range checks, calls (`bl`, up to
+  six argument words), system calls (`svc #0`, x8), phis as edge copies, and
+  the entry's `exit_group`. Every value lives in its frame word — no
+  register allocator yet — which is correct and slow. It is selected by a
+  profile with `arch = "aarch64"` (`tests/a64/linux-aarch64.oli-target`);
+  the ELF writer marks EM_AARCH64 and the DWARF frame base x29.
+- **Verified on the target's instruction set**: every encoding was checked
+  word by word against `aarch64-linux-gnu-objdump` (five constants were
+  wrong on the first try and were fixed), and the programs run under
+  `qemu-aarch64` 10.0.13: `tests/a64/core.oli` (23 checks), `limits.oli`
+  (the edges that must not trap), `hello.oli` (stdout through write 64,
+  numbers chosen with `when target.arch`) and ten trap programs (overflow
+  at u8/s64/u64/u32, both multiply checks, division by zero, MIN/-1,
+  unsigned negation, bounds, a subview past the end), each dying with its
+  message and 134. The self-compiled compiler produces the same AArch64
+  bytes as the genesis-built one.
+- **Not yet on AArch64** (E0900, never approximated): zones, floats,
+  vectors, atomics, `mem.copy`/`set`, machine blocks, x86 hardware places,
+  more than six argument words, objects, freestanding images. The harness
+  refuses a zone to prove it. QEMU user mode is not part of the toolchain:
+  the harness runs the programs when `qemu-aarch64` is on the path or
+  `OLI_QEMU_AARCH64` names it, and otherwise checks that each is an AArch64
+  executable.
+
 ## Implemented in stage 42 (2026-09-25): 128-bit vectors (design 0024)
 
 - **Ten types** — `f32x4 f64x2 s8x16 u8x16 s16x8 u16x8 s32x4 u32x4 s64x2
@@ -1570,9 +1604,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 32,264 lines) into
+compiles its own source (`compiler/`, seventeen modules, 33,214 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,458,896 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,507,184 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

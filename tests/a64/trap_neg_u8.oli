@@ -1,0 +1,10 @@
+-- profile: tests/a64/linux-aarch64.oli-target
+module trap_neg_u8
+-- expect: trap: overflow at stdin:5
+proc f(a : u8) -> u8
+    ret -a
+end
+proc start -> s32
+    entry
+    ret s32(f(1))
+end

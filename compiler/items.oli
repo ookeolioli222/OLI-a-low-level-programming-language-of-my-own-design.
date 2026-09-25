@@ -98,6 +98,8 @@ layout Prog
     loadaddr : u64
     objmode : u64
     dbgframe : u64
+    -- 1 when the profile names `arch = "aarch64"` (compiler/a64.oli).
+    arch64 : u64
     -- `F.bits(x)` being typed or built: its operand is the integer.
     convbits : u64
     sectalign : u64
@@ -154,6 +156,7 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.loadaddr <- 4194304
     pg.objmode <- 0
     pg.dbgframe <- 0
+    pg.arch64 <- 0
     pg.convbits <- 0
     pg.sectalign <- 1
     pg.hasprof <- 0
@@ -1456,10 +1459,13 @@ proc apply_profile(pg: rw ref Prog, z: zone, src: view u8)
     -- x86-64 regardless.
     ar := profile_value(txt, "arch")
     if ar.len > 0
-        if view_eq(unquoted(ar), "x86_64") == 0
+        if view_eq(unquoted(ar), "aarch64")
+            -- AArch64 Linux, hosted, an executable (compiler/a64.oli).
+            pg.arch64 <- 1
+        elif view_eq(unquoted(ar), "x86_64") == 0
             put(2, "olic: profile: arch ")
             put(2, ar)
-            put(2, " is not a target of this compiler (x86_64 only)\n")
+            put(2, " is not a target of this compiler (x86_64, aarch64)\n")
             os.syscall(60, 1)
         end
     end

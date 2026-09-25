@@ -1,0 +1,10 @@
+-- profile: tests/a64/linux-aarch64.oli-target
+module trap_add_s64
+-- expect: trap: overflow at stdin:5
+proc f(a : s64, b : s64) -> s64
+    ret a + b
+end
+proc start -> s32
+    entry
+    ret s32.wrap(f(9223372036854775807, 1))
+end

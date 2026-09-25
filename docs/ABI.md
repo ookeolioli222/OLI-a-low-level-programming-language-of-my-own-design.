@@ -83,6 +83,18 @@ trap routine as `olic.trap` — and eight section headers (`.rodata`, `.text`,
 `objdump -d` and `gdb` read it as it is. The tables follow the loaded image
 and are not mapped.
 
+## 4a. AArch64 (`arch = "aarch64"`, stage 43)
+
+The second back end (`compiler/a64.oli`) keeps the frame of §1 in AAPCS64
+dress: `stp x29, x30, [sp, #-16]!; mov x29, sp`, the frame sixteen-byte
+aligned, a value's word at `[x29 - 8 * (slot + 1)]` exactly as at
+`[rbp - …]`; argument words in x0-x5 (a seventh is E0900 for now), results
+in x0 and x1; system calls with the number in x8 and `svc #0` — the numbers
+are the target's (write 64, exit_group 94), so a program that runs on both
+says which it means with `when target.arch`. The entry procedure ends with
+`exit_group(x0)`; `core.trap` writes its message with write(2, …) and exits
+134, as on x86-64. The ELF is EM_AARCH64 (183), the DWARF frame base x29.
+
 ## 5. Linux syscall convention
 
 | Item | Register |

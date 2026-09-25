@@ -1,0 +1,11 @@
+-- profile: tests/a64/linux-aarch64.oli-target
+module trap_range
+-- expect: trap: bounds at stdin:6
+buf : [4]u8
+proc f(v : view u8, n : uword) -> uword
+    ret v[..n].len
+end
+proc start -> s32
+    entry
+    ret s32.wrap(f(buf[..], 5))
+end

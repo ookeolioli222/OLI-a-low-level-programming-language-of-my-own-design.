@@ -1,0 +1,923 @@
+module olic.a64
+-- The AArch64 back end (docs/COMPILER_ARCHITECTURE.md): the same OIR as
+-- compiler/x64.oli, lowered to A64 instructions for Linux, selected by a
+-- target profile with `arch = "aarch64"`. This first form keeps every value
+-- in its frame word — no register allocation — and lowers the core of the
+-- OIR: constants, frame places, arithmetic with every trap of MACHINE_MODEL
+-- §4 (the flags of `adds`/`subs`, `smulh`/`umulh`, the re-extension of a
+-- narrow type), comparisons, conversions of width, raw loads and stores,
+-- statics, views and their checks, calls with up to six argument words,
+-- system calls (`svc #0`, the number in x8) and the entry's exit. Anything
+-- else — zones, floats, vectors, atomics, machine blocks, the x86 hardware
+-- places — is E0900 at the procedure, never an approximation.
+--
+-- Registers: x0-x5 arguments and results, x8 the system-call number, x9-x12
+-- scratch, x16/x17 address scratch, x29 the frame pointer, x30 the link.
+-- A value's word is [x29 - 8 * (slot + 1)], the slot numbering of
+-- compiler/x64.oli (`val_slot`, `scratch_slot`).
+
+-- Fixup kinds of this back end (Mach.fixes, applied by a64_apply_fixes).
+AF_CALL := 30
+AF_JUMP := 31
+AF_COND := 32
+AF_ADR := 33
+AF_ADRP := 34
+AF_TRAP := 35
+
+-- Condition codes.
+AC_EQ := 0
+AC_NE := 1
+AC_HS := 2
+AC_LO := 3
+AC_VC := 7
+AC_HI := 8
+AC_LS := 9
+AC_GE := 10
+AC_LT := 11
+AC_GT := 12
+AC_LE := 13
+
+proc aw(ob: rw ref Oir, v: u64)
+    -- One instruction word, little-endian.
+    c32(ob, v)
+end
+
+proc a_movz(ob: rw ref Oir, d: u64, imm: u64, hw: u64)
+    aw(ob, 3531603968 | (hw << 21) | (imm << 5) | d)
+end
+
+proc a_movk(ob: rw ref Oir, d: u64, imm: u64, hw: u64)
+    aw(ob, 4068474880 | (hw << 21) | (imm << 5) | d)
+end
+
+proc a_imm(ob: rw ref Oir, d: u64, v: u64)
+    -- `movz` and a `movk` for each other non-zero half-word.
+    a_movz(ob, d, v & 65535, 0)
+    h : u64 <- 1
+    while h < 4
+        part := (v >> (h * 16)) & 65535
+        if part != 0
+            a_movk(ob, d, part, h)
+        end
+        h <- h + 1
+    end
+end
+
+proc a_rrr(ob: rw ref Oir, base: u64, d: u64, n: u64, m: u64)
+    -- A three-register data-processing instruction.
+    aw(ob, base | (m << 16) | (n << 5) | d)
+end
+
+proc a_mov(ob: rw ref Oir, d: u64, m: u64)
+    -- `orr xd, xzr, xm`
+    aw(ob, 2852127712 | (m << 16) | d)
+end
+
+proc a_cmp(ob: rw ref Oir, n: u64, m: u64)
+    -- `subs xzr, xn, xm`
+    aw(ob, 3942645791 | (m << 16) | (n << 5))
+end
+
+proc a_cset(ob: rw ref Oir, d: u64, cond: u64)
+    -- `csinc xd, xzr, xzr, !cond`
+    aw(ob, 2594113504 | ((cond ^ 1) << 12) | d)
+end
+
+proc a_slot_disp(s: u64) -> u64
+    ret (s + 1) * 8
+end
+
+proc a_ldr_slot(ob: rw ref Oir, t: u64, s: u64)
+    -- The word of slot `s` into xt: `ldur` when the displacement fits nine
+    -- signed bits, else through x17.
+    disp := a_slot_disp(s)
+    if disp <= 256
+        aw(ob, 4164943872 | (((512 - disp) & 511) << 12) | (29 << 5) | t)
+        ret
+    end
+    a_imm(ob, 16, disp)
+    a_rrr(ob, 3405774848, 17, 29, 16)
+    aw(ob, 4181721088 | (17 << 5) | t)
+end
+
+proc a_str_slot(ob: rw ref Oir, t: u64, s: u64)
+    disp := a_slot_disp(s)
+    if disp <= 256
+        aw(ob, 4160749568 | (((512 - disp) & 511) << 12) | (29 << 5) | t)
+        ret
+    end
+    a_imm(ob, 16, disp)
+    a_rrr(ob, 3405774848, 17, 29, 16)
+    aw(ob, 4177526784 | (17 << 5) | t)
+end
+
+proc a_lea_slot(ob: rw ref Oir, d: u64, s: u64)
+    -- The address of slot `s`: x29 - disp.
+    a_imm(ob, 16, a_slot_disp(s))
+    a_rrr(ob, 3405774848, d, 29, 16)
+end
+
+proc a_ld(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
+    a_ldr_slot(ob, r, val_slot(mc, v))
+end
+
+proc a_st(ob: rw ref Oir, mc: ref Mach, r: u64, v: u64)
+    a_str_slot(ob, r, val_slot(mc, v))
+end
+
+proc a_extend(ob: rw ref Oir, d: u64, n: u64, w: u64, signd: u64)
+    -- xd <- xn re-extended from `w` bits: sxtb/sxth/sxtw or uxtb/uxth/uxtw
+    -- (SBFM/UBFM); a plain move for a word.
+    imms : u64 <- 63
+    if w == 8
+        imms <- 7
+    elif w == 16
+        imms <- 15
+    elif w == 32
+        imms <- 31
+    end
+    if imms == 63
+        if d != n
+            a_mov(ob, d, n)
+        end
+        ret
+    end
+    if signd == 1
+        aw(ob, 2470445056 | (imms << 10) | (n << 5) | d)
+    else
+        aw(ob, 3544186880 | (imms << 10) | (n << 5) | d)
+    end
+end
+
+-- Traps -------------------------------------------------------------------
+
+proc a_trap_seq(ob: rw ref Oir, mc: rw ref Mach, si: u64)
+    -- x0 the message (`adr`, the read-only segment precedes the code), x1
+    -- its length, `bl` the trap routine: three words.
+    st := stat_at(ob, si - 1)
+    add_fix(mc, ob.ncode, AF_ADR, st.off)
+    aw(ob, 268435456)
+    a_movz(ob, 1, st.len & 65535, 0)
+    add_fix(mc, ob.ncode, AF_TRAP, 0)
+    aw(ob, 2483027968)
+    mc.ntrap <- mc.ntrap + 1
+end
+
+proc a_trap_unless(ob: rw ref Oir, mc: rw ref Mach, cond: u64, si: u64)
+    -- `b.cond` over the three words of the trap when nothing traps.
+    if si == 0
+        ret
+    end
+    aw(ob, 1409286144 | (4 << 5) | cond)
+    a_trap_seq(ob, mc, si)
+end
+
+proc a_width_check(ob: rw ref Oir, mc: rw ref Mach, w: u64, signd: u64, si: u64)
+    -- x9 re-extended to its type; a difference was an overflow no flag saw.
+    if w == 0
+        ret
+    end
+    if w >= 64
+        ret
+    end
+    a_extend(ob, 11, 9, w, signd)
+    if si > 0
+        a_cmp(ob, 9, 11)
+        a_trap_unless(ob, mc, AC_EQ, si)
+    end
+    a_mov(ob, 9, 11)
+end
+
+proc a_trap_routine(ob: rw ref Oir, mc: rw ref Mach)
+    -- `core.trap` for a hosted program: write(2, x0, x1), exit_group(134).
+    mc.trappos <- ob.ncode
+    a_mov(ob, 2, 1)
+    a_mov(ob, 1, 0)
+    a_movz(ob, 0, 2, 0)
+    a_movz(ob, 8, 64, 0)
+    aw(ob, 3556769793)
+    a_movz(ob, 0, 134, 0)
+    a_movz(ob, 8, 94, 0)
+    aw(ob, 3556769793)
+end
+
+-- Instructions ------------------------------------------------------------
+
+proc a_bin(ob: rw ref Oir, mc: rw ref Mach, i: u64)
+    ins := ins_at(ob, i)
+    bop := ins.bop
+    a_ld(ob, mc, 9, ins.a)
+    a_ld(ob, mc, 10, ins.b)
+    sg := ins.c
+    if bop == B_ADD
+        a_rrr(ob, 2868903936, 9, 9, 10)
+        if sg == 1
+            a_trap_unless(ob, mc, AC_VC, ins.site)
+        else
+            a_trap_unless(ob, mc, AC_LO, ins.site)
+        end
+        a_width_check(ob, mc, ins.w, sg, ins.site)
+    elif bop == B_SUB
+        a_rrr(ob, 3942645760, 9, 9, 10)
+        if sg == 1
+            a_trap_unless(ob, mc, AC_VC, ins.site)
+        else
+            a_trap_unless(ob, mc, AC_HS, ins.site)
+        end
+        a_width_check(ob, mc, ins.w, sg, ins.site)
+    elif bop == B_MUL
+        a_rrr(ob, 2600500224, 11, 9, 10)
+        if ins.site > 0
+            if sg == 1
+                -- smulh x12; the high half must be the sign of the low one.
+                a_rrr(ob, 2604694528, 12, 9, 10)
+                aw(ob, 3951098911 | (11 << 16) | (12 << 5))
+            else
+                -- umulh x12 must be zero.
+                a_rrr(ob, 2613083136, 12, 9, 10)
+                a_cmp(ob, 12, 31)
+            end
+            a_trap_unless(ob, mc, AC_EQ, ins.site)
+        end
+        a_mov(ob, 9, 11)
+        a_width_check(ob, mc, ins.w, sg, ins.site)
+    elif bop == B_AND
+        a_rrr(ob, 2315255808, 9, 9, 10)
+    elif bop == B_OR
+        a_rrr(ob, 2852126720, 9, 9, 10)
+    elif bop == B_XOR
+        a_rrr(ob, 3389997056, 9, 9, 10)
+    elif bop == B_SHL
+        a_mask_count(ob, ins.w)
+        a_rrr(ob, 2596282368, 9, 9, 10)
+        a_width_check(ob, mc, ins.w, sg, 0)
+    elif bop == B_SHR
+        a_mask_count(ob, ins.w)
+        if sg == 1
+            a_rrr(ob, 2596284416, 9, 9, 10)
+        else
+            a_rrr(ob, 2596283392, 9, 9, 10)
+        end
+    elif bop == B_DIV
+        a_divide(ob, mc, ins, 0)
+    elif bop == B_REM
+        a_divide(ob, mc, ins, 1)
+    else
+        a_cmp(ob, 9, 10)
+        a_cset(ob, 9, a_cond(bop, sg))
+    end
+    a_st(ob, mc, 9, i)
+end
+
+proc a_mask_count(ob: rw ref Oir, w: u64)
+    -- A narrow shift count is masked to its width, as on x86-64 (a 64-bit
+    -- one the instruction masks itself).
+    if w == 0
+        ret
+    end
+    if w >= 64
+        ret
+    end
+    a_imm(ob, 11, w - 1)
+    a_rrr(ob, 2315255808, 10, 10, 11)
+end
+
+proc a_cond(bop: u64, signd: u64) -> u64
+    if bop == B_EQ
+        ret AC_EQ
+    end
+    if bop == B_NE
+        ret AC_NE
+    end
+    if signd == 1
+        if bop == B_LT
+            ret AC_LT
+        end
+        if bop == B_LE
+            ret AC_LE
+        end
+        if bop == B_GT
+            ret AC_GT
+        end
+        ret AC_GE
+    end
+    if bop == B_LT
+        ret AC_LO
+    end
+    if bop == B_LE
+        ret AC_LS
+    end
+    if bop == B_GT
+        ret AC_HI
+    end
+    ret AC_HS
+end
+
+proc a_divide(ob: rw ref Oir, mc: rw ref Mach, ins: ref Ins, rem: u64)
+    -- A zero divisor traps (site); `/` of the most negative value by -1
+    -- traps (site2). `sdiv` itself never faults, and `msub` gives the
+    -- remainder 0 for that pair, which `%` answers.
+    if ins.site > 0
+        a_cmp(ob, 10, 31)
+        a_trap_unless(ob, mc, AC_NE, ins.site)
+    end
+    if ins.c == 1
+        if rem == 0
+            if ins.site2 > 0
+                -- x9 == 2^63 and x10 == -1: both compared, the second only
+                -- when the first held (`b.ne` over the rest).
+                a_movz(ob, 11, 32768, 3)
+                a_cmp(ob, 9, 11)
+                aw(ob, 1409286144 | (6 << 5) | AC_NE)
+                a_imm(ob, 11, 18446744073709551615)
+                a_cmp(ob, 10, 11)
+                a_trap_unless(ob, mc, AC_NE, ins.site2)
+            end
+        end
+        a_rrr(ob, 2596277248, 11, 9, 10)
+    else
+        a_rrr(ob, 2596276224, 11, 9, 10)
+    end
+    if rem == 1
+        -- msub x9, x11, x10, x9
+        aw(ob, 2600501248 | (10 << 16) | (9 << 10) | (11 << 5) | 9)
+    else
+        a_mov(ob, 9, 11)
+    end
+    a_width_check(ob, mc, ins.w, ins.c, ins.site2)
+end
+
+proc a_un(ob: rw ref Oir, mc: rw ref Mach, i: u64)
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 9, ins.a)
+    if ins.bop == U1_NEG
+        if ins.c == 1
+            -- negs x9, x9: V set for the most negative value.
+            aw(ob, 3942646761)
+            a_trap_unless(ob, mc, AC_VC, ins.site)
+        else
+            -- An unsigned negation overflows unless the value is 0.
+            if ins.site > 0
+                a_cmp(ob, 9, 31)
+                a_trap_unless(ob, mc, AC_EQ, ins.site)
+            end
+            aw(ob, 3406365673)
+        end
+        a_width_check(ob, mc, ins.w, ins.c, ins.site)
+    elif ins.bop == U1_BNOT
+        -- orn x9, xzr, x9
+        aw(ob, 2854814697)
+        a_width_check(ob, mc, ins.w, ins.c, 0)
+    else
+        a_cmp(ob, 9, 31)
+        a_cset(ob, 9, AC_EQ)
+    end
+    a_st(ob, mc, 9, i)
+end
+
+proc a_rload(ob: rw ref Oir, mc: ref Mach, i: u64)
+    -- ldrb/ldrh/ldr w/ldr x, or the sign-extending ldrsb/ldrsh/ldrsw.
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 9, ins.a)
+    sz := ins.b
+    base : u64 <- 4181721088
+    if sz == 1
+        base <- 960495616
+        if ins.c == 1
+            base <- 964689920
+        end
+    elif sz == 2
+        base <- 2034237440
+        if ins.c == 1
+            base <- 2038431744
+        end
+    elif sz == 4
+        base <- 3107979264
+        if ins.c == 1
+            base <- 3112173568
+        end
+    end
+    aw(ob, base | (9 << 5) | 9)
+    a_st(ob, mc, 9, i)
+end
+
+proc a_rstore(ob: rw ref Oir, mc: ref Mach, i: u64)
+    ins := ins_at(ob, i)
+    a_ld(ob, mc, 9, ins.a)
+    a_ld(ob, mc, 10, ins.b)
+    sz := ins.c
+    base : u64 <- 4177526784
+    if sz == 1
+        base <- 956301312
+    elif sz == 2
+        base <- 2030043136
+    elif sz == 4
+        base <- 3103784960
+    end
+    aw(ob, base | (9 << 5) | 10)
+end
+
+proc a_load_args(ob: rw ref Oir, mc: ref Mach, i: u64, nargs: u64, issys: u64) -> word
+    -- The argument markers of this call, as compiler/x64.oli walks them;
+    -- a word past the sixth is not lowered yet (-1).
+    j : u64 <- i
+    skip : u64 <- 0
+    k : u64 <- nargs
+    while k > 0
+        if j == 0
+            ret 0
+        end
+        j <- j - 1
+        ins := ins_at(ob, j)
+        if ins.op == O_ARG
+            if skip > 0
+                skip <- skip - 1
+            else
+                k <- k - 1
+                if issys == 1
+                    if k == 0
+                        a_ld(ob, mc, 8, ins.a)
+                    else
+                        a_ld(ob, mc, k - 1, ins.a)
+                    end
+                elif ins.b < 6
+                    a_ld(ob, mc, ins.b, ins.a)
+                else
+                    ret -1
+                end
+            end
+        end
+        if ins.op == O_CALL
+            skip <- skip + ins.b
+        end
+        if ins.op == O_SYSCALL
+            skip <- skip + ins.b
+        end
+    end
+    ret 0
+end
+
+proc a_refuse(pg: rw ref Prog, ob: rw ref Oir, mc: ref Mach)
+    -- E0900 at the procedure being lowered.
+    op := oproc_at(ob, mc.curq)
+    pv := proc_at(pg, op.pi)
+    oir_err(ob, pg, op.mi, 900, pv.node)
+end
+
+proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
+    ins := ins_at(ob, i)
+    op := ins.op
+    if op == O_CONST
+        a_imm(ob, 9, ins.val)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_SLEN
+        st := stat_at(ob, ins.a)
+        a_imm(ob, 9, st.len)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_SADDR
+        st2 := stat_at(ob, ins.a)
+        add_fix(mc, ob.ncode, AF_ADR, st2.off)
+        aw(ob, 268435456 | 9)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_DADDR
+        d := dat_at(ob, ins.a)
+        add_fix(mc, ob.ncode, AF_ADRP, d.off)
+        aw(ob, 2415919104 | 9)
+        aw(ob, 2432696320 | (9 << 5) | 9)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_LOAD
+        a_ldr_slot(ob, 9, ins.a)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_STORE
+        a_ld(ob, mc, 9, ins.b)
+        a_str_slot(ob, 9, ins.a)
+        ret
+    end
+    if op == O_FADDR
+        a_lea_slot(ob, 9, ins.a)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_BIN
+        a_bin(ob, mc, i)
+        ret
+    end
+    if op == O_UN
+        a_un(ob, mc, i)
+        ret
+    end
+    if op == O_TRUNC
+        a_ld(ob, mc, 9, ins.a)
+        a_extend(ob, 9, 9, ins.b, ins.c)
+        a_st(ob, mc, 9, i)
+        ret
+    end
+    if op == O_ARG
+        ret
+    end
+    if op == O_CALL
+        if ins.c > 0
+            a_refuse(pg, ob, mc)
+            ret
+        end
+        if a_load_args(ob, mc, i, ins.b, 0) < 0
+            a_refuse(pg, ob, mc)
+            ret
+        end
+        opc := oproc_at(ob, ins.a)
+        if opc.isextern == 1
+            a_refuse(pg, ob, mc)
+            ret
+        end
+        add_fix(mc, ob.ncode, AF_CALL, ins.a)
+        aw(ob, 2483027968)
+        a_st(ob, mc, 0, i)
+        ret
+    end
+    if op == O_RDX
+        a_st(ob, mc, 1, i)
+        ret
+    end
+    if op == O_SYSCALL
+        a_load_args(ob, mc, i, ins.b, 1)
+        aw(ob, 3556769793)
+        a_st(ob, mc, 0, i)
+        ret
+    end
+    if op == O_PARAM
+        if ins.c != 0
+            a_refuse(pg, ob, mc)
+            ret
+        end
+        if ins.a >= 6
+            a_refuse(pg, ob, mc)
+            ret
+        end
+        a_st(ob, mc, ins.a, i)
+        ret
+    end
+    if op == O_RLOAD
+        if ins.val == 1
+            -- Device memory has no meaning in a hosted aarch64 program yet.
+            a_refuse(pg, ob, mc)
+            ret
+        end
+        a_rload(ob, mc, i)
+        ret
+    end
+    if op == O_RSTORE
+        if ins.val == 1
+            a_refuse(pg, ob, mc)
+            ret
+        end
+        a_rstore(ob, mc, i)
+        ret
+    end
+    if op == O_CHKB
+        -- An index below the length, unsigned.
+        a_ld(ob, mc, 9, ins.a)
+        a_ld(ob, mc, 10, ins.b)
+        a_cmp(ob, 9, 10)
+        a_trap_unless(ob, mc, AC_LO, ins.site)
+        ret
+    end
+    if op == O_CHKR
+        -- `a <= b <= len`.
+        a_ld(ob, mc, 9, ins.a)
+        a_ld(ob, mc, 10, ins.b)
+        a_cmp(ob, 9, 10)
+        a_trap_unless(ob, mc, AC_LS, ins.site)
+        a_ld(ob, mc, 9, ins.b)
+        a_ld(ob, mc, 10, ins.val)
+        a_cmp(ob, 9, 10)
+        a_trap_unless(ob, mc, AC_LS, ins.site)
+        ret
+    end
+    if op == O_CHKA
+        -- The low bits of the address clear: `tst x9, x10`.
+        a_ld(ob, mc, 9, ins.a)
+        a_imm(ob, 10, ins.b - 1)
+        aw(ob, 3925868575 | (10 << 16) | (9 << 5))
+        a_trap_unless(ob, mc, AC_EQ, ins.site)
+        ret
+    end
+    if op == O_TRAP
+        a_trap_seq(ob, mc, ins.site)
+        ret
+    end
+    -- Zones, floats, vectors, atomics, machine blocks and the hardware
+    -- places of x86-64 are not lowered for AArch64 yet.
+    a_refuse(pg, ob, mc)
+end
+
+-- Blocks, procedures, the program ------------------------------------------
+
+proc a_jump(ob: rw ref Oir, mc: rw ref Mach, s: u64)
+    add_fix(mc, ob.ncode, AF_JUMP, s)
+    aw(ob, 335544320)
+end
+
+proc a_edge_copies(ob: rw ref Oir, mc: ref Mach, b: u64, s: u64)
+    -- The parallel copies of the phis of `s` on the edge from `b`, through
+    -- the scratch words, exactly as compiler/x64.oli `edge_copies`.
+    if nphi_of(ob, s) == 0
+        ret
+    end
+    sb := blk_at(ob, s)
+    j := pred_index(ob, s, b)
+    last := sb.first + sb.n
+    k : u64 <- 0
+    i : u64 <- sb.first
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op == O_DEAD
+            i <- i + 1
+            continue
+        end
+        if ins.op != O_PHI
+            i <- last
+        else
+            pa := phiarg_at(ob, ins.a + j)
+            a_ld(ob, mc, 9, pa.val)
+            a_str_slot(ob, 9, scratch_slot(mc, k))
+            k <- k + 1
+            i <- i + 1
+        end
+    end
+    k <- 0
+    i <- sb.first
+    while i < last
+        ins2 := ins_at(ob, i)
+        if ins2.op == O_DEAD
+            i <- i + 1
+            continue
+        end
+        if ins2.op != O_PHI
+            i <- last
+        else
+            a_ldr_slot(ob, 9, scratch_slot(mc, k))
+            a_st(ob, mc, 9, i)
+            k <- k + 1
+            i <- i + 1
+        end
+    end
+end
+
+proc a_ret(ob: rw ref Oir, mc: rw ref Mach, b: u64)
+    bk := blk_at(ob, b)
+    if mc.curentry == 1
+        -- The entry's result is the exit status: exit_group(x0).
+        if bk.tc > 0
+            a_ld(ob, mc, 0, bk.ta)
+        else
+            a_movz(ob, 0, 0, 0)
+        end
+        a_movz(ob, 8, 94, 0)
+        aw(ob, 3556769793)
+        ret
+    end
+    if bk.tc > 0
+        a_ld(ob, mc, 0, bk.ta)
+    else
+        a_movz(ob, 0, 0, 0)
+    end
+    if bk.tc == 2
+        a_ld(ob, mc, 1, bk.tb)
+    end
+    -- mov sp, x29; ldp x29, x30, [sp], #16; ret
+    aw(ob, 2432697279)
+    aw(ob, 2831252477)
+    aw(ob, 3596551104)
+end
+
+proc a_term(ob: rw ref Oir, mc: rw ref Mach, b: u64)
+    permit os.syscall
+    bk := blk_at(ob, b)
+    if bk.top == O_RET
+        a_ret(ob, mc, b)
+        ret
+    end
+    if bk.top == O_JMP
+        a_edge_copies(ob, mc, b, bk.ta)
+        if bk.ta != next_live(ob, mc, b)
+            a_jump(ob, mc, bk.ta)
+        end
+        ret
+    end
+    -- A branch: `cbz` to the false edge (through a pad when it carries
+    -- copies), the true edge's copies, and its jump.
+    a_ld(ob, mc, 9, bk.ta)
+    pad : u64 <- 0
+    if nphi_of(ob, bk.tc) > 0
+        pad <- BLK_MAX + mc.npad
+        if pad >= LBL_MAX
+            put(2, "olic: label table exhausted\n")
+            os.syscall(60, 4)
+        end
+        mc.npad <- mc.npad + 1
+        add_fix(mc, ob.ncode, AF_COND, pad)
+    else
+        add_fix(mc, ob.ncode, AF_COND, bk.tc)
+    end
+    aw(ob, 3019898889)
+    a_edge_copies(ob, mc, b, bk.tb)
+    if pad > 0
+        a_jump(ob, mc, bk.tb)
+        l := lbl_at(mc, pad)
+        l.pos <- ob.ncode
+        a_edge_copies(ob, mc, b, bk.tc)
+        a_jump(ob, mc, bk.tc)
+        ret
+    end
+    if bk.tb != next_live(ob, mc, b)
+        a_jump(ob, mc, bk.tb)
+    end
+end
+
+proc a_blk(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, b: u64)
+    bk := blk_at(ob, b)
+    l := lbl_at(mc, b)
+    l.pos <- ob.ncode
+    i : u64 <- bk.first
+    last := bk.first + bk.n
+    while i < last
+        ins := ins_at(ob, i)
+        if ins.op != O_PHI
+            if ins.op != O_DEAD
+                note_line(pg, ob, mc, i)
+                a_ins(pg, ob, mc, i)
+            end
+        end
+        i <- i + 1
+    end
+    a_term(ob, mc, b)
+end
+
+proc a_proc(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, q: u64)
+    op := oproc_at(ob, q)
+    mc.curloc <- op.nwords
+    mc.curtmp <- op.ntmp
+    mc.curnval <- op.n
+    mc.curfirst <- op.first
+    mc.curentry <- op.isentry
+    mc.curlast <- op.bfirst + op.nblk
+    mc.curnphi <- op.nphi
+    mc.curend <- op.first + op.n
+    mc.curq <- q
+    mc.curnone <- op.nocalls
+    mc.curnever <- op.isnever
+    mc.curint <- op.isint
+    mc.lastline <- 0
+    op.codepos <- ob.ncode
+    note_proc_line(pg, ob, mc, op)
+    if op.isentry == 1
+        mc.entrypos <- ob.ncode
+    end
+    if op.nocalls == 1
+        a_refuse(pg, ob, mc)
+        ret
+    end
+    if op.isint == 1
+        a_refuse(pg, ob, mc)
+        ret
+    end
+    -- stp x29, x30, [sp, #-16]!; mov x29, sp; sub sp, sp, frame (16-aligned)
+    aw(ob, 2847898621)
+    aw(ob, 2432697341)
+    w : u64 <- mc.curloc + op.ntmp + op.n + op.nphi
+    if w % 2 == 1
+        w <- w + 1
+    end
+    a_imm(ob, 16, w * 8)
+    aw(ob, 3408946175)
+    b : u64 <- op.bfirst
+    while b < mc.curlast
+        if live_blk(ob, b) == 1
+            a_blk(pg, ob, mc, b)
+        end
+        b <- b + 1
+    end
+end
+
+proc a_or32(ob: rw ref Oir, pos: u64, v: u64)
+    -- Fold `v` into the instruction word at `pos`.
+    c := ob.code
+    w : u64 <- u64(c[pos]) | (u64(c[pos + 1]) << 8) | (u64(c[pos + 2]) << 16) | (u64(c[pos + 3]) << 24)
+    patch32(ob, pos, w | v)
+end
+
+proc a_rel(target: u64, here: u64, nb: u64) -> u64
+    -- (target - here) / 4 as an `nb`-bit two's complement field.
+    one : u64 <- 1
+    mask := (one << nb) - 1
+    if target >= here
+        ret ((target - here) >> 2) & mask
+    end
+    ret ((one << nb) - ((here - target) >> 2)) & mask
+end
+
+proc a_apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
+    codebase := database + ob.ndata
+    i : u64 <- 0
+    while i < mc.nfix
+        f := fix_at(mc, i)
+        here := codebase + f.pos
+        k := f.kind
+        if k == AF_CALL
+            opc := oproc_at(ob, f.target)
+            a_or32(ob, f.pos, a_rel(codebase + opc.codepos, here, 26))
+        elif k == AF_JUMP
+            l := lbl_at(mc, f.target)
+            a_or32(ob, f.pos, a_rel(codebase + l.pos, here, 26))
+        elif k == AF_COND
+            l2 := lbl_at(mc, f.target)
+            a_or32(ob, f.pos, a_rel(codebase + l2.pos, here, 19) << 5)
+        elif k == AF_TRAP
+            a_or32(ob, f.pos, a_rel(codebase + mc.trappos, here, 26))
+        elif k == AF_ADR
+            -- adr: a byte offset, immlo in bits 29-30, immhi in 5-23.
+            t := database + f.target
+            one : u64 <- 1
+            off : u64 <- 0
+            if t >= here
+                off <- t - here
+            else
+                off <- (one << 21) - (here - t)
+            end
+            off <- off & ((one << 21) - 1)
+            a_or32(ob, f.pos, ((off & 3) << 29) | ((off >> 2) << 5))
+        elif k == AF_ADRP
+            -- adrp: the page difference; the `add` after it the low twelve bits.
+            t2 := mc.dbase + f.target
+            one2 : u64 <- 1
+            pg1 := t2 >> 12
+            pg0 := here >> 12
+            po : u64 <- 0
+            if pg1 >= pg0
+                po <- pg1 - pg0
+            else
+                po <- (one2 << 21) - (pg0 - pg1)
+            end
+            po <- po & ((one2 << 21) - 1)
+            a_or32(ob, f.pos, ((po & 3) << 29) | ((po >> 2) << 5))
+            a_or32(ob, f.pos + 4, (t2 & 4095) << 10)
+        end
+        i <- i + 1
+    end
+end
+
+proc a64_lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
+    -- The code starts on an instruction boundary: the read-only data before
+    -- it is padded to sixteen bytes.
+    while (database + ob.ndata) % 16 != 0
+        data_byte(ob, 0)
+    end
+    i : u64 <- 0
+    while i < LBL_MAX
+        l := lbl_at(mc, i)
+        l.pos <- 0
+        i <- i + 1
+    end
+    mc.fstand <- pg.fstanding
+    mc.trapproc <- 0
+    g : u64 <- 0
+    while g < ob.nsect
+        sg := sect_at(ob, g)
+        if sg.kind == 0
+            sg.start <- ob.ncode
+            q : u64 <- 0
+            while q < ob.nproc
+                opq := oproc_at(ob, q)
+                if opq.isextern == 0
+                    if view_eq(proc_sect(pg, opq.pi), sect_name(ob, g))
+                        opq.sect <- g
+                        a_proc(pg, ob, mc, q)
+                        opq.codeend <- ob.ncode
+                    end
+                end
+                q <- q + 1
+            end
+            sg.size <- ob.ncode - sg.start
+        end
+        g <- g + 1
+    end
+    if mc.ntrap > 0
+        gt := sect_add(ob, ".text.trap", 0)
+        st := sect_at(ob, gt)
+        st.start <- ob.ncode
+        a_trap_routine(ob, mc)
+        st.size <- ob.ncode - st.start
+    end
+    mc.dbase <- ob.base + page_up(database - ob.base + ob.ndata + ob.ncode)
+    a_apply_fixes(ob, mc, database)
+end

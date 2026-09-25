@@ -994,7 +994,7 @@ OLIC_MODULES="../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../com
 ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli
 ../compiler/body.oli ../compiler/check.oli ../compiler/oir.oli ../compiler/cfg.oli
 ../compiler/ssa.oli ../compiler/opt.oli ../compiler/x64.oli ../compiler/elf.oli
-../compiler/asm.oli"
+../compiler/asm.oli ../compiler/a64.oli"
 OLIC_FRONT="../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/ast.oli
 ../compiler/parse.oli ../compiler/load.oli ../compiler/items.oli ../compiler/sema.oli
 ../compiler/body.oli ../compiler/check.oli"
@@ -1002,7 +1002,7 @@ OLIC_FRONT="../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compi
 # `machine x64` block is assembled once while the OIR is built (a dry run
 # that reports what the encoder does not know).
 OLIC_OIR="../compiler/oir.oli ../compiler/cfg.oli ../compiler/ssa.oli ../compiler/opt.oli
-../compiler/x64.oli ../compiler/elf.oli ../compiler/asm.oli"
+../compiler/x64.oli ../compiler/elf.oli ../compiler/asm.oli ../compiler/a64.oli"
 cat ../compiler/io.oli ../compiler/lex.oli ../compiler/diag.oli ../compiler/show_tokens.oli > build/show_tokens.oli
 ./build/oli1.bin < build/show_tokens.oli > build/show_tokens || fail "oli1 could not compile compiler/ (show_tokens)"
 chmod +x build/show_tokens
@@ -1761,20 +1761,62 @@ grep -q 'E0900' build/nolower.err || fail "back end: an unlowered construct must
 echo "ok: a construct the back end cannot lower is E0900 and writes no file"
 # A profile naming a target the backend does not generate for is refused:
 # never x86-64 code under another architecture's name.
-printf '[target]\narch = "aarch64"\nos = "none"\n' > build/arm.oli-target
+printf '[target]\narch = "riscv64"\nos = "none"\n' > build/arm.oli-target
 printf -- '-- target: freestanding\n-- profile: genesis/build/arm.oli-target\nmodule arm\nproc start -> never\n    entry\n    calls none\n    permit cpu.halt\n    loop\n        cpu.halt()\n    end\nend\n' > build/arm.oli
 set +e
 ( cd .. && genesis/build/olic < genesis/build/arm.oli > genesis/build/arm.elf 2> genesis/build/arm.err )
 st=$?
 set -e
-[ "$st" = 1 ] || fail "profile: arch aarch64 exited $st, want a refusal"
-grep -q 'not a target of this compiler' build/arm.err || fail "profile: arch aarch64 must be refused by name"
+[ "$st" = 1 ] || fail "profile: arch riscv64 exited $st, want a refusal"
+grep -q 'not a target of this compiler' build/arm.err || fail "profile: arch riscv64 must be refused by name"
 [ ! -s build/arm.elf ] || fail "profile: a refused target still wrote a file"
 # tests/run/switch.oli: a calls-none procedure's machine block is the whole
 # procedure - the lowering saves nothing through rbp, which it does not own.
 objdump -d --no-show-raw-insn build/switch.elf | awk '/<switch_test.switch_to>:/,/^$/' > build/switch.dis
 [ "$(sed -n 2p build/switch.dis | grep -c 'push   %rbp')" = 1 ] || fail "switch: switch_to must begin with the block's own push rbp"
 ! grep -q '(%rbp)' build/switch.dis || fail "switch: a calls-none procedure must not store through rbp"
+# AArch64 (compiler/a64.oli): every tests/a64 program compiles to an
+# EM_AARCH64 executable; when qemu-aarch64 is on the path (or OLI_QEMU_AARCH64
+# names it) each one runs - a program exits 42 and prints its .out, a trap
+# program dies with its message and 134. What the AArch64 lowering does not
+# have yet (a zone here) is E0900 and no file.
+QA=${OLI_QEMU_AARCH64:-$(command -v qemu-aarch64 || true)}
+na=0
+for f in ../tests/a64/*.oli; do
+    n=$(basename "$f" .oli)
+    ( cd .. && genesis/build/olic < "tests/a64/$n.oli" > genesis/build/a64_$n.elf 2> genesis/build/a64_$n.err ) || fail "aarch64: olic could not compile $f: $(head -1 build/a64_$n.err)"
+    chmod +x build/a64_$n.elf
+    readelf -h build/a64_$n.elf | grep -q 'Machine: *AArch64' || fail "aarch64: $n.elf is not an AArch64 executable"
+    if [ -n "$QA" ]; then
+        want=$(grep -o 'trap: [a-z_]* at stdin:[0-9]*' "$f" || true)
+        set +e
+        "$QA" build/a64_$n.elf > build/a64_$n.out 2> build/a64_$n.stderr < /dev/null
+        st=$?
+        set -e
+        if [ -n "$want" ]; then
+            [ "$st" = 134 ] || fail "aarch64: $n exited $st, want the trap's 134"
+            [ "$(head -1 build/a64_$n.stderr)" = "$want" ] || fail "aarch64: $n said [$(head -1 build/a64_$n.stderr)], want [$want]"
+        else
+            [ "$st" = 42 ] || fail "aarch64: $n exited $st, want 42"
+            if [ -f "../tests/a64/$n.out" ]; then
+                cmp build/a64_$n.out "../tests/a64/$n.out" || fail "aarch64: $n printed other than tests/a64/$n.out"
+            fi
+        fi
+        na=$((na + 1))
+    fi
+done
+printf -- '-- profile: tests/a64/linux-aarch64.oli-target\nmodule za\nproc start -> s32\n    entry\n    zone s 4096\n        b := s.bytes(16)\n        b[0] <- 1\n    end\n    ret 0\nend\n' > build/za.oli
+set +e
+( cd .. && genesis/build/olic < genesis/build/za.oli > genesis/build/za.elf 2> genesis/build/za.err )
+st=$?
+set -e
+[ "$st" = 1 ] || fail "aarch64: a zone exited $st, want E0900"
+grep -q 'E0900' build/za.err || fail "aarch64: a zone must be E0900 until the AArch64 lowering has zones"
+if [ -n "$QA" ]; then
+    echo "ok: AArch64 - every tests/a64 program is an EM_AARCH64 executable and $na of them ran under $("$QA" --version | head -1 | sed 's/ (.*//'): arithmetic with every trap, calls, views, statics, syscalls; zones are E0900 still"
+else
+    echo "ok: AArch64 - every tests/a64 program is an EM_AARCH64 executable (no qemu-aarch64 here: not run; set OLI_QEMU_AARCH64)"
+fi
 echo "ok: an unknown target architecture is refused, and a calls-none context switch is exactly its block (switch.elf runs five round trips between two stacks)"
 echo "genesis: layer 5 (olic back end - OIR, x86-64, ELF) passed"
 
@@ -1794,7 +1836,7 @@ echo "ok: G4 - olic compiles its own source, and the compiler that produces comp
 
 # The self-compiled compiler agrees with the genesis-built one on every
 # program of the corpus, byte for byte, diagnostics included.
-for f in ../examples/hello.oli ../tests/run/*.oli ../tests/run/trap/*.oli; do
+for f in ../examples/hello.oli ../tests/run/*.oli ../tests/run/trap/*.oli ../tests/a64/*.oli; do
     n=$(basename "$f" .oli)
     ( cd .. && genesis/build/olic < "${f#../}" > genesis/build/s1_$n.elf 2> genesis/build/s1_$n.err )
     st1=$?
@@ -1815,5 +1857,5 @@ for f in ../tests/sema/err/*.oli; do
     [ "$st1" = "$st2" ] || fail "self-hosting: stage1 exited $st1 and stage2 $st2 on $f"
     cmp build/s1_$n.err build/s2_$n.err || fail "self-hosting: stage1 and stage2 report $f differently"
 done
-echo "ok: the self-compiled olic compiles every run and trap fixture to the same bytes as the genesis-built one, and reports every negative fixture the same way"
+echo "ok: the self-compiled olic compiles every run, trap and aarch64 fixture to the same bytes as the genesis-built one, and reports every negative fixture the same way"
 echo "genesis: layer 6 (self-hosting: stage2 == stage3) passed"

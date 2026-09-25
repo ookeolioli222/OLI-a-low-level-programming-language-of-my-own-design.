@@ -1,0 +1,17 @@
+-- profile: tests/a64/linux-aarch64.oli-target
+module hello_a64
+-- A string on stdout through AArch64 Linux's write (64): the system call
+-- numbers are the target's, so a program that runs on both says which it
+-- means with `when target.arch`.
+when target.arch == "aarch64"
+    SYS_WRITE : u64 := 64
+else
+    SYS_WRITE : u64 := 1
+end
+proc start -> s32
+    entry
+    permit os.syscall
+    msg := "Hello from Oli-- on aarch64\n"
+    os.syscall(SYS_WRITE, 1, msg.addr, msg.len)
+    ret 42
+end

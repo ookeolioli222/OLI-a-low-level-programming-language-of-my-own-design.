@@ -1,0 +1,84 @@
+-- profile: tests/a64/linux-aarch64.oli-target
+module core_a64
+-- The core of the OIR on AArch64 (compiler/a64.oli): arithmetic at every
+-- width with its traps unfired, division and remainder, shifts, bit
+-- operations, recursion, a call with six arguments, views, `each`,
+-- subviews, statics in .data read and written, raw loads and stores, a loop
+-- with `continue` and `break`, conversions. Run under qemu-aarch64 by the
+-- harness. The exit status is the number of the check that failed; 42 when
+-- every one held.
+counter : u64 <- 5
+table : [4]u32 <- { 10, 20, 30, 40 }
+buf : [16]u8
+proc fib(n : u64) -> u64
+    if n < 2 then ret n
+    ret fib(n - 1) + fib(n - 2)
+end
+proc six(a : u64, b : u64, c : u64, d : u64, e : u64, f : u64) -> u64
+    ret a * 100000 + b * 10000 + c * 1000 + d * 100 + e * 10 + f
+end
+proc sum(v : view u32) -> u64
+    s : u64 <- 0
+    each x in v
+        s <- s + u64(x)
+    end
+    ret s
+end
+proc half(v : view u8) -> view u8
+    ret v[0..v.len / 2]
+end
+proc start -> s32
+    entry
+    permit memory.raw
+    a : u8 <- 200
+    b : u8 <- 55
+    if a + b != 255 then ret 1
+    c : s16 <- -300
+    if c * 3 != -900 then ret 2
+    d : s64 <- -17
+    if d / 5 != -3 then ret 3
+    if d % 5 != -2 then ret 4
+    e : u32 <- 0xF0F0F0F0
+    if e >> 4 != 0x0F0F0F0F then ret 5
+    if e << 4 != 0x0F0F0F00 then ret 6
+    g : s32 <- -8
+    if g >> 1 != -4 then ret 7
+    if (e & 0xFF) | 0x100 != 0x1F0 then ret 8
+    if ~e != 0x0F0F0F0F then ret 9
+    if -d != 17 then ret 10
+    if fib(20) != 6765 then ret 11
+    if six(1, 2, 3, 4, 5, 6) != 123456 then ret 12
+    if sum(table[..]) != 100 then ret 13
+    counter <- counter + 37
+    if counter != 42 then ret 14
+    table[2] <- 99
+    if table[2] != 99 then ret 15
+    i : u64 <- 0
+    while i < 16
+        buf[i] <- u8.wrap(i * 3)
+        i <- i + 1
+    end
+    h := half(buf[..])
+    if h.len != 8 then ret 16
+    if h[7] != 21 then ret 17
+    p := addr u32 (table[..].addr)
+    if [p + 4] != 20 then ret 18
+    [p + 12] <- 7
+    if table[3] != 7 then ret 19
+    t : u64 <- 0
+    k : u64 <- 0
+    loop
+        k <- k + 1
+        if k == 3 then continue
+        if k > 10 then break
+        t <- t + k
+    end
+    if t != 52 then ret 20
+    w : u16 <- 65535
+    if u16.wrap(w + 0) != 65535 then ret 21
+    big : u16 <- 300
+    if s8.wrap(big) != 44 then ret 22
+    ok := k > 5
+    if ok == false then ret 23
+    ret 42
+end

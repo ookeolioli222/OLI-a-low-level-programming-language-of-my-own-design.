@@ -1,0 +1,39 @@
+-- profile: tests/a64/linux-aarch64.oli-target
+module limits
+-- The edges that must not trap on AArch64: every width at its maximum, a
+-- signed product with a negative result and one with a high half of all
+-- ones, an unsigned product that uses the top bit, the most negative value
+-- % -1 (0, which `msub` gives without a fault), shifts by the width minus
+-- one. The exit status is the number of the check that failed; 42 when
+-- every one held.
+proc addu8(a : u8, b : u8) -> u8
+    ret a + b
+end
+proc mul64(a : s64, b : s64) -> s64
+    ret a * b
+end
+proc mulu(a : u64, b : u64) -> u64
+    ret a * b
+end
+proc rem64(a : s64, b : s64) -> s64
+    ret a % b
+end
+proc sub64(a : s64, b : s64) -> s64
+    ret a - b
+end
+proc start -> s32
+    entry
+    if addu8(254, 1) != 255 then ret 1
+    if mul64(-3037000499, 3037000499) != -9223372030926249001 then ret 2
+    if mul64(-1, 9223372036854775807) != -9223372036854775807 then ret 3
+    if mulu(4294967296, 2147483648) != 9223372036854775808 then ret 4
+    if rem64(-9223372036854775808, -1) != 0 then ret 5
+    if sub64(-9223372036854775807, 1) != -9223372036854775808 then ret 6
+    x : u64 <- 1
+    if x << 63 != 9223372036854775808 then ret 7
+    y : s64 <- -9223372036854775808
+    if y >> 63 != -1 then ret 8
+    z : u8 <- 128
+    if z >> 7 != 1 then ret 9
+    ret 42
+end

@@ -756,7 +756,12 @@ proc dbg_info(pg: ref Prog, ob: ref Oir, d: rw ref Dbg, codeaddr: u64)
                 o <- o + 8
                 -- frame_base: DW_OP_reg6 (rbp).
                 o <- db_u8(b, o, 1)
-                o <- db_u8(b, o, 86)
+                if pg.arch64 == 1
+                    -- DW_OP_reg29 (x29): the same frame layout as rbp's.
+                    o <- db_u8(b, o, 109)
+                else
+                    o <- db_u8(b, o, 86)
+                end
                 if op.nocalls == 0
                     o <- dbg_vars(pg, ob, d, o, q)
                 end
@@ -1041,6 +1046,10 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     shoff := round8(linoff + dbg.nline)
     hdr := z.bytes(hs)
     elf_header(hdr, epoint, total, ob.base)
+    if pg.arch64 == 1
+        -- EM_AARCH64
+        put_u16(hdr, 18, 183)
+    end
     put_u64v(hdr, 40, shoff)
     put_u16(hdr, 58, SHDR_SIZE)
     put_u16(hdr, 60, nsect)
