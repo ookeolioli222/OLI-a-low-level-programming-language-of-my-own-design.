@@ -125,6 +125,7 @@ Oli-- kernel
 cpu: AuthenticAMD                          (or GenuineIntel)
 memory: 2 regions, 15840 frames free
 frame: 0000000000200000 written and read
+heap: 1000 records at 0000000000200000, sum of squares 332833500, 1M refused, frames returned
 int 3 at 0000000000102229
 back from int 3
 timer: 100 ticks

@@ -1317,6 +1317,26 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 37 (2026-09-25): a kernel heap
+
+- **`frames.alloc_run(fmap, n)`** hands out the lowest run of `n` free
+  frames (0 when there is none) and **`release_run`** gives a run back;
+  `tests/run/pmm.oli` gains seven checks (a hole too short skipped, a run
+  too long refused, a run of zero).
+- **The kernel's heap is a zone over frames.** `heap_demo` takes 256 frames,
+  opens `zone kheap 1M at addr u8 (base)` — the zone of the language, laid
+  over physical memory the frame allocator handed out (the first gigabyte
+  is identity-mapped) — makes a thousand `Record`s with `kheap.make`,
+  chains and walks them through raw loads, takes 4 KiB with `bytes`, is
+  refused a further megabyte by `try_bytes … else`, and after `end` gives
+  the run back; the free count is what it was.
+- **Verified under QEMU**: `heap: 1000 records at 0000000000200000, sum of
+  squares 332833500, 1M refused, frames returned` (332833500 = Σ i² for
+  i < 1000), eight COM1 lines in all; the harness pins the line.
+- Found on the way: `r.addr` on a `ref` is E0900 (`.addr` is a view's
+  member); `addr u8 (r)` is the conversion the language documents, and the
+  demo uses it.
+
 ## Implemented in stage 36 (2026-09-25): a physical memory manager
 
 - **`core.frames`** (`lib/core/frames.oli`, Oli-- only): one bit per

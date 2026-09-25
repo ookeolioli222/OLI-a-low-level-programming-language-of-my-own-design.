@@ -87,6 +87,45 @@ pub proc alloc(fmap : rw view u8) -> u64
     ret 0
 end
 
+--- The physical address of the lowest run of `n` free frames, now in use;
+--- 0 when there is none. What a kernel heap or a DMA buffer is laid over.
+pub proc alloc_run(fmap : rw view u8, n : u64) -> u64
+    if n == 0 then ret 0
+    start : u64 <- 0
+    got : u64 <- 0
+    f : u64 <- 0
+    cap := capacity(fmap)
+    while f < cap
+        if in_use(fmap, f)
+            got <- 0
+        else
+            if got == 0
+                start <- f
+            end
+            got <- got + 1
+            if got == n
+                k : u64 <- start
+                while k < start + n
+                    set_bit(fmap, k)
+                    k <- k + 1
+                end
+                ret start * FRAME
+            end
+        end
+        f <- f + 1
+    end
+    ret 0
+end
+
+--- Gives back `n` frames from `frame_addr` on.
+pub proc release_run(fmap : rw view u8, frame_addr : u64, n : u64)
+    k : u64 <- 0
+    while k < n
+        clear_bit(fmap, frame_addr / FRAME + k)
+        k <- k + 1
+    end
+end
+
 --- Gives a frame back by its physical address.
 pub proc release(fmap : rw view u8, frame_addr : u64)
     clear_bit(fmap, frame_addr / FRAME)

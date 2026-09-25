@@ -17,7 +17,10 @@ import core.frames
 -- in two-megabyte pages, `core.x64.paging`, installed with
 -- `arch.x64.cr3 <- …`), the physical frames the loader's memory map
 -- reports as RAM in a bitmap (`core.frames`), one of them allocated,
--- written, read back and released, a wait of one second in `hlt`, then a byte to
+-- written, read back and released, a kernel heap — a zone laid `at` a
+-- megabyte of frames from the same allocator, records made in it and the
+-- frames given back when the zone ends — a wait of one second in `hlt`,
+-- then a byte to
 -- QEMU's isa-debug-exit port (it exits with status 33; on a machine
 -- without that device the write goes nowhere) and `hlt` forever. No
 -- system calls, no libc: nothing in the image but this program.
@@ -326,6 +329,70 @@ proc memory_init()
     frames.release(frame_map[..], a)
 end
 
+layout Record
+    id : u64
+    square : u64
+    next : u64
+end
+
+HEAP_FRAMES : u64 := 256
+
+proc heap_demo()
+    -- The kernel heap (KERNEL_PROGRAMMING.md 4): a megabyte of contiguous
+    -- frames from core.frames, a zone `at` their physical address (the
+    -- first gigabyte is identity-mapped), a thousand records made in it
+    -- and chained, then `try_bytes` refused at the limit instead of a
+    -- trap; at `end` the zone is gone and the frames go back.
+    permit memory.raw
+    free0 := frames.count_free(frame_map[..])
+    base := frames.alloc_run(frame_map[..], HEAP_FRAMES)
+    if base == 0
+        serial_write("heap: no frames\n")
+        ret
+    end
+    total : u64 <- 0
+    made : u64 <- 0
+    refused : u64 <- 0
+    zone kheap 1M at addr u8 (base)
+        first : u64 <- 0
+        i : u64 <- 0
+        while i < 1000
+            r := kheap.make(Record)
+            r.id <- i
+            r.square <- i * i
+            r.next <- first
+            first <- u64(addr u8 (r))
+            made <- made + 1
+            i <- i + 1
+        end
+        p : u64 <- first
+        while p != 0
+            total <- total + [addr u64 (p + 8)]
+            p <- [addr u64 (p + 16)]
+        end
+        spare := kheap.bytes(4096)
+        spare[4095] <- 1
+        big := kheap.try_bytes(1M) else spare[..0]
+        if big.len == 0
+            refused <- 1
+        end
+    end
+    frames.release_run(frame_map[..], base, HEAP_FRAMES)
+    serial_write("heap: ")
+    serial_dec(made)
+    serial_write(" records at ")
+    serial_hex(base)
+    serial_write(", sum of squares ")
+    serial_dec(total)
+    if refused == 1
+        serial_write(", 1M refused")
+    end
+    if frames.count_free(frame_map[..]) == free0
+        serial_write(", frames returned")
+    end
+    serial_write("\n")
+end
+
 proc set_gate(vector : uword, handler : u64)
     -- An interrupt gate (type 0xE, present, ring 0) in the kernel's own
     -- code segment, 0x08 of the GDT the trampoline built.
@@ -381,6 +448,7 @@ proc main -> never
     end
     paging_init()
     memory_init()
+    heap_demo()
     install_idt()
     machine x64
         int 3

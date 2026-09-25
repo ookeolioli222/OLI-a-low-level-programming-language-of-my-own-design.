@@ -1607,7 +1607,8 @@ if [ -n "$QEMU" ]; then
     grep -q '^timer: 100 ticks$' build/kernel.serial || fail "boot: the PIT must have ticked a hundred times"
     grep -q '^memory: [1-9][0-9]* regions, [0-9]* frames free$' build/kernel.serial || fail "boot: the kernel must report the RAM of the loader's memory map"
     grep -q '^frame: 0000000000[0-9a-f]\{6\} written and read$' build/kernel.serial || fail "boot: a frame must be allocated, written and read back"
-    [ "$(wc -l < build/kernel.serial)" = 7 ] || fail "boot: COM1 must carry exactly seven lines, carries $(wc -l < build/kernel.serial)"
+    grep -q '^heap: 1000 records at 0000000000[0-9a-f]\{6\}, sum of squares 332833500, 1M refused, frames returned$' build/kernel.serial || fail "boot: the kernel heap - a zone at a megabyte of frames - must hold a thousand records, refuse 1M more and give its frames back"
+    [ "$(wc -l < build/kernel.serial)" = 8 ] || fail "boot: COM1 must carry exactly eight lines, carries $(wc -l < build/kernel.serial)"
     # The same image with twice the memory: the frame count must follow the
     # machine by exactly 64 MiB / 4 KiB, so it is read, not assumed.
     set +e
@@ -1618,7 +1619,7 @@ if [ -n "$QEMU" ]; then
     f64=$(sed -n 's/^memory: .* regions, \([0-9]*\) frames free$/\1/p' build/kernel.serial)
     f128=$(sed -n 's/^memory: .* regions, \([0-9]*\) frames free$/\1/p' build/kernel128.serial)
     [ -n "$f64" ] && [ -n "$f128" ] && [ "$((f128 - f64))" = 16384 ] || fail "boot: 128 MiB must free 16384 frames more than 64 MiB ($f64, $f128)"
-    echo "ok: BOOT - $("$QEMU" -version | head -1 | sed 's/ (.*//') loads kernel.elf by its Multiboot header in 32-bit mode, the trampoline enters long mode, the kernel greets on COM1, reports cpuid, frees the RAM of the loader's memory map ($f64 frames at 64 MiB, $f128 at 128 MiB) and writes an allocated frame, takes int 3 and 100 timer ticks, and exits through isa-debug-exit with 33"
+    echo "ok: BOOT - $("$QEMU" -version | head -1 | sed 's/ (.*//') loads kernel.elf by its Multiboot header in 32-bit mode, the trampoline enters long mode, the kernel greets on COM1, reports cpuid, frees the RAM of the loader's memory map ($f64 frames at 64 MiB, $f128 at 128 MiB) and writes an allocated frame, runs a heap zone laid at a megabyte of frames, takes int 3 and 100 timer ticks, and exits through isa-debug-exit with 33"
 else
     echo "skipped: no qemu-system-x86_64 here (set OLI_QEMU, and OLI_QEMU_BIOS/OLI_QEMU_DATA for its firmware) - the boot of examples/kernel.oli was verified with QEMU 10.0.13 on 2026-09-24, transcript in docs/PROJECT_STATUS.md"
 fi

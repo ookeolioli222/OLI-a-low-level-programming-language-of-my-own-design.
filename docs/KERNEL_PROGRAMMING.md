@@ -234,6 +234,10 @@ end
    `tests/run/pmm.oli` runs it over a hand-built map; `examples/kernel.oli`
    runs it over the one QEMU's loader writes and prints the free frames.
 4. Kernel heap: a `zone` per subsystem or a slab allocator exposing `zone ... from` handles.
+   **Runs** (2026-09-25): `examples/kernel.oli` takes a megabyte of contiguous
+   frames (`frames.alloc_run`), opens `zone kheap 1M at addr u8 (base)` over
+   them, makes a thousand records there, is refused a further megabyte by
+   `try_bytes`, and gives the frames back (`frames.release_run`) after `end`.
 5. Per-request scratch: nested zones, freed at `end`, no `free` calls, no leaks.
 
 Every step is visible: `--explain-cost kernel.oli` lists each `ZONE`, `KERNEL`,
@@ -245,5 +249,5 @@ boot via Multiboot (**done, booted under QEMU 2026-09-24**) → own stack →
 serial + VGA output → `cpuid` → `hlt` loop — all in `examples/kernel.oli`,
 with the GDT (the trampoline's), the IDT and its handlers, the PIC and PIT
 timer, the page tables and a physical frame allocator over the loader's
-memory map already there. Next, one at a time: a kernel heap, a cooperative
-scheduler.
+memory map and a heap zone over its frames already there. Next: a
+cooperative scheduler.

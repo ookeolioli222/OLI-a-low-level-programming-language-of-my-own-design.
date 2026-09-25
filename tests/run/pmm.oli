@@ -64,6 +64,20 @@ proc start -> s32
     c := frames.alloc(frame_map[..])
     if c != a then ret 12
     if frames.count_free(frame_map[..]) != 16096 - 256 - 2 then ret 13
+    -- Runs: the lowest run long enough, skipping a hole too short for it.
+    frames.init(frame_map[..])
+    frames.free_range(frame_map[..], 0x10000, 0x3000)
+    frames.free_range(frame_map[..], 0x20000, 0x10000)
+    r := frames.alloc_run(frame_map[..], 4)
+    if r != 0x20000 then ret 18
+    r2 := frames.alloc_run(frame_map[..], 3)
+    if r2 != 0x10000 then ret 19
+    if frames.alloc_run(frame_map[..], 13) != 0 then ret 20
+    if frames.count_free(frame_map[..]) != 12 then ret 21
+    frames.release_run(frame_map[..], r, 4)
+    if frames.count_free(frame_map[..]) != 16 then ret 22
+    if frames.alloc_run(frame_map[..], 16) != 0x20000 then ret 23
+    if frames.alloc_run(frame_map[..], 0) != 0 then ret 24
     -- A partial frame at either end of a free range stays in use.
     frames.init(frame_map[..])
     frames.free_range(frame_map[..], 0x1800, 0x3000)
