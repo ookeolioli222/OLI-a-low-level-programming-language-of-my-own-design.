@@ -1317,6 +1317,28 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 51 (2026-09-25): the MMU on AArch64
+
+- New places (design 0025): `arch.a64.ttbr0` (a write is followed by
+  `tlbi vmalle1; dsb ish; isb`: a new address space), `arch.a64.tcr` and
+  `arch.a64.sctlr` (each followed by `dsb ish; isb`), and `arch.a64.mair`.
+- `tests/a64/free/mmu.oli` boots on qemu-system-aarch64 `virt`: it fills
+  three 4 KiB-aligned `[512]u64` tables — device memory at 0-1 GiB, RAM at
+  1-2 GiB with the image's first 2 MiB in 4 KiB pages (code and read-only
+  data read-only at both levels, the user stack read-write at EL0, every
+  other page of statics EL1 only) and an EL1-only alias of RAM at 2-3 GiB
+  — for a 39-bit space, and turns translation and the caches on. It
+  prints `mmu on`, reads `0x1234` back through the alias, and enters EL0,
+  which prints through `svc` under translation; its volatile read of the
+  alias is a level-1 permission fault (ESR 0x9200000d, FAR 0x80080000),
+  recorded and skipped by the kernel. The harness pins the five lines, that
+  syndrome, 51 SVCs and nothing else.
+- The address of a scalar static is `addr u8 (ref x)` (`x.addr` is E0105
+  on a scalar); constants the tables combine are typed `u64`, since an
+  untyped constant is a signed `word`.
+- Not yet on AArch64: more than one CPU (PSCI), TTBR1 and a higher-half
+  kernel, ASIDs.
+
 ## Implemented in stage 50 (2026-09-25): user mode on AArch64
 
 - New places (design 0025): `arch.a64.spsr` (SPSR_EL1) and
@@ -1337,8 +1359,7 @@ constant in `.rodata`).
 - `core.a64.ExceptionFrame` now names its registers `x0` … `x18`: an
   array field indexed through a `ref` (`frame.x[0]`) is E0900 in this
   compiler, a gap of the language, not of AArch64.
-- Not yet: an MMU and page tables on AArch64 (EL0 still reaches all of
-  physical memory), more than one CPU.
+- Not yet then: an MMU (stage 51), more than one CPU.
 
 ## Implemented in stage 49 (2026-09-25): GICv3, synchronous and nested exceptions on AArch64
 
@@ -1774,9 +1795,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 34,639 lines) into
+compiles its own source (`compiler/`, seventeen modules, 34,693 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,572,784 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,574,856 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

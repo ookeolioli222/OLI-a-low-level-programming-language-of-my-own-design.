@@ -34,6 +34,10 @@ kernel needs both, and neither may be a machine-code escape.
 | `arch.a64.icc_sre` | ICC_SRE_EL1 | read, written (then `isb`) |
 | `arch.a64.spsr` | SPSR_EL1 | read, written |
 | `arch.a64.sp_el0` | SP_EL0 | read, written |
+| `arch.a64.ttbr0` | TTBR0_EL1 | read, written (then `tlbi vmalle1; dsb ish; isb`) |
+| `arch.a64.tcr` | TCR_EL1 | read, written (then `dsb ish; isb`) |
+| `arch.a64.mair` | MAIR_EL1 | read, written |
+| `arch.a64.sctlr` | SCTLR_EL1 | read, written (then `dsb ish; isb`) |
 
 `arch.a64.elr` is written too (where the next `eret` goes). Two commands
 complete user mode: `arch.a64.eret(p)` puts the address of procedure `p`
@@ -92,5 +96,9 @@ Nesting works because each slot saves ELR_EL1 and SPSR_EL1 before it
 calls the handler. Stage 50: `tests/a64/free/user.oli` enters EL0 with
 `arch.a64.eret(user_main)`; EL0 code prints through 48 `svc` calls served
 from slot 8, and its read of VBAR_EL1 is refused by the CPU. Exceptions
-from EL0 run on SP_EL1, apart from the user stack. Not yet: an MMU (EL0
-still sees all physical memory), more than one CPU, GICv3 SGIs.
+from EL0 run on SP_EL1, apart from the user stack. Stage 51:
+`tests/a64/free/mmu.oli` builds 4 KiB translation tables in Oli-- arrays,
+turns the MMU on through `mair`, `tcr`, `ttbr0` and `sctlr`, reads a word
+through an alias mapping, and its EL0 program is stopped by a permission
+fault (ESR 0x9200000d) when it reads kernel memory. Not yet: more than one
+CPU, GICv3 SGIs, TTBR1 (a higher-half kernel), ASIDs.

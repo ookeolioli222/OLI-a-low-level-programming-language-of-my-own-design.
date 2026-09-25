@@ -615,7 +615,8 @@ proc a64_kind(t: view u8) -> word
     -- 13 cntfrq, 14 esr, 15 elr, 16 far, 17 vectors, 18 cpacr, and the
     -- GICv3 CPU interface: 19 icc_iar1, 20 icc_eoir1, 21 icc_pmr,
     -- 22 icc_igrpen1, 23 icc_sre; the commands 24 eret(p) and 25 svc(v);
-    -- 26 spsr, 27 sp_el0; -1 for anything else.
+    -- 26 spsr, 27 sp_el0; the MMU: 28 ttbr0, 29 tcr, 30 mair, 31 sctlr;
+    -- -1 for anything else.
     if view_eq(t, "vbar")
         ret 10
     end
@@ -669,6 +670,18 @@ proc a64_kind(t: view u8) -> word
     end
     if view_eq(t, "sp_el0")
         ret 27
+    end
+    if view_eq(t, "ttbr0")
+        ret 28
+    end
+    if view_eq(t, "tcr")
+        ret 29
+    end
+    if view_eq(t, "mair")
+        ret 30
+    end
+    if view_eq(t, "sctlr")
+        ret 31
     end
     ret -1
 end

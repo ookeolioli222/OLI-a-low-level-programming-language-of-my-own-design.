@@ -833,6 +833,22 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
             -- `arch.a64.cpacr <-`: msr cpacr_el1, x9; isb
             a_sys(ob, 0, a_sysenc(18), 9)
             aw(ob, 3573759967)
+        elif ins.val == 28
+            -- `arch.a64.ttbr0 <-`: a new address space — msr; tlbi vmalle1;
+            -- dsb ish; isb
+            a_sys(ob, 0, a_sysenc(28), 9)
+            aw(ob, 3574105887)
+            aw(ob, 3573758879)
+            aw(ob, 3573759967)
+        elif ins.val == 29
+            -- `arch.a64.tcr <-` / `arch.a64.sctlr <-`: msr; dsb ish; isb
+            a_sys(ob, 0, a_sysenc(29), 9)
+            aw(ob, 3573758879)
+            aw(ob, 3573759967)
+        elif ins.val == 31
+            a_sys(ob, 0, a_sysenc(31), 9)
+            aw(ob, 3573758879)
+            aw(ob, 3573759967)
         elif ins.val == 15
             -- `arch.a64.elr <-`: where the next `eret` goes
             a_sys(ob, 0, a_sysenc(15), 9)
@@ -1744,7 +1760,8 @@ proc a_sysenc(r: u64) -> u64
     -- 10 VBAR_EL1, 11 CNTV_CTL_EL0, 12 CNTV_TVAL_EL0, 13 CNTFRQ_EL0,
     -- 14 ESR_EL1, 15 ELR_EL1, 16 FAR_EL1, 18 CPACR_EL1, 19 ICC_IAR1_EL1,
     -- 20 ICC_EOIR1_EL1, 21 ICC_PMR_EL1, 22 ICC_IGRPEN1_EL1, 23 ICC_SRE_EL1,
-    -- 26 and 99 SPSR_EL1, 27 SP_EL0.
+    -- 26 and 99 SPSR_EL1, 27 SP_EL0, 28 TTBR0_EL1, 29 TCR_EL1, 30 MAIR_EL1,
+    -- 31 SCTLR_EL1.
     if r == 10
         ret 49152
     end
@@ -1786,6 +1803,18 @@ proc a_sysenc(r: u64) -> u64
     end
     if r == 27
         ret 16640
+    end
+    if r == 28
+        ret 8192
+    end
+    if r == 29
+        ret 8256
+    end
+    if r == 30
+        ret 41472
+    end
+    if r == 31
+        ret 4096
     end
     -- 26 and 99: SPSR_EL1
     ret 16384

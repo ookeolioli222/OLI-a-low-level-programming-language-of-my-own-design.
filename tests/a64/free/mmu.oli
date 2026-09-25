@@ -1,0 +1,220 @@
+-- target: freestanding
+-- profile: tests/a64/free/virt.oli-target
+module ammu
+import core.a64
+-- The MMU on bare-metal AArch64 (design 0025). The kernel builds 4 KiB
+-- translation tables for a 39-bit address space (`arch.a64.tcr`), with
+-- memory types in `arch.a64.mair`, and turns translation on through
+-- `arch.a64.ttbr0` and `arch.a64.sctlr`. The map:
+--   0-1 GiB      device memory (the UART), EL1 only;
+--   1-2 GiB      RAM, identity: the image's first 2 MiB in 4 KiB pages —
+--                code and read-only data readable at EL0, the user stack
+--                read-write at EL0, every other page of statics EL1 only —
+--                and the rest in 2 MiB blocks, EL1 only;
+--   2-3 GiB      an alias of RAM, EL1 only.
+-- The kernel writes a word and reads it back through the alias; then it
+-- enters EL0, where `user_main` prints through `svc` and tries to read the
+-- alias: a permission fault, which the kernel records and skips.
+
+stack : [16K]u8
+    align 16
+
+user_stack : [8K]u8
+    align 4096
+
+l1 : [512]u64
+    align 4096
+
+l2 : [512]u64
+    align 4096
+
+l3 : [512]u64
+    align 4096
+
+cell : u64
+served : u64
+refused : u64
+refused_class : u64
+refused_far : u64
+
+RAM : u64 := 0x40000000
+ALIAS : u64 := 0x80000000
+EXIT : u64 := 300
+-- Descriptor bits: valid+table/page 3, block 1, AttrIndx << 2, AP << 6,
+-- inner shareable 3 << 8, the access flag 1 << 10, PXN 1 << 53, UXN 1 << 54.
+TABLE : u64 := 3
+PAGE : u64 := 3
+BLOCK : u64 := 1
+NORMAL : u64 := 4
+SHARE : u64 := 768
+AF : u64 := 1024
+AP_EL0_RW : u64 := 64
+AP_RO : u64 := 192
+XN : u64 := 0x60000000000000
+
+proc start -> never
+    entry
+    calls none
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stack.addr) + 16K)
+    cpu.call(main)
+    loop
+        cpu.halt()
+    end
+end
+
+proc putc(c : u8)
+    permit memory.mmio
+    uart := mem.mmio(u32, 0x09000000, 16)
+    while (uart[6] >> 5) & 1 == 1
+    end
+    uart[0] <- u32(c)
+end
+
+proc puts(s : view u8)
+    each c in s
+        putc(c)
+    end
+end
+
+proc puthex(v : u64)
+    puts("0x")
+    i : u64 <- 8
+    while i > 0
+        i <- i - 1
+        d := (v >> (i * 4)) & 15
+        if d < 10
+            putc(u8.wrap(48 + d))
+        else
+            putc(u8.wrap(87 + d))
+        end
+    end
+end
+
+proc on_user(frame : rw ref core.a64.ExceptionFrame)
+    calls interrupt
+    section ".vector.8"
+    permit cpu.interrupt, cpu.control, cpu.halt
+    class := arch.a64.esr >> 26
+    if class == 0x15
+        served <- served + 1
+        req := frame.x0
+        if req < 256
+            putc(u8.wrap(req))
+        elif req == EXIT
+            puts("kernel: user exited; refused class ")
+            puthex(refused_class)
+            puts(" at ")
+            puthex(refused_far)
+            puts("\n")
+            loop
+                cpu.halt()
+            end
+        end
+    else
+        refused <- refused + 1
+        refused_class <- class
+        refused_far <- arch.a64.far
+        frame.elr <- frame.elr + 4
+    end
+end
+
+proc uputs(s : view u8)
+    each c in s
+        _r := arch.a64.svc(u64(c))
+    end
+end
+
+proc user_main -> never
+    permit memory.mmio
+    uputs("hello from EL0 under the MMU\n")
+    kernel := mem.mmio(u64, ALIAS + 0x80000, 1)
+    _v := kernel[0]
+    uputs("still running at EL0\n")
+    _e := arch.a64.svc(EXIT)
+    loop
+    end
+end
+
+proc lowest_static() -> u64
+    -- Where the image's writable statics begin: the lowest of them, to the
+    -- page. Everything of the image below is code and read-only data.
+    permit memory.raw
+    m : u64 <- u64(stack.addr)
+    if u64(user_stack.addr) < m then m <- u64(user_stack.addr)
+    if u64(l1.addr) < m then m <- u64(l1.addr)
+    if u64(l2.addr) < m then m <- u64(l2.addr)
+    if u64(l3.addr) < m then m <- u64(l3.addr)
+    if u64(addr u8 (ref cell)) < m then m <- u64(addr u8 (ref cell))
+    if u64(addr u8 (ref served)) < m then m <- u64(addr u8 (ref served))
+    if u64(addr u8 (ref refused)) < m then m <- u64(addr u8 (ref refused))
+    if u64(addr u8 (ref refused_class)) < m then m <- u64(addr u8 (ref refused_class))
+    if u64(addr u8 (ref refused_far)) < m then m <- u64(addr u8 (ref refused_far))
+    ret m & 0xFFFFFFFFFFFFF000
+end
+
+proc build_tables()
+    permit memory.raw
+    rwp := lowest_static()
+    us := u64(user_stack.addr)
+    -- 0-1 GiB: device memory (AttrIndx 0), EL1 only, never executed.
+    l1[0] <- 0 | AF | XN | BLOCK
+    l1[1] <- u64(l2.addr) | TABLE
+    l1[2] <- RAM | NORMAL | SHARE | AF | XN | BLOCK
+    l2[0] <- u64(l3.addr) | TABLE
+    i : uword <- 1
+    while i < 512
+        l2[i] <- (RAM + u64(i) * 0x200000) | NORMAL | SHARE | AF | XN | BLOCK
+        i <- i + 1
+    end
+    j : uword <- 0
+    while j < 512
+        pa := RAM + u64(j) * 4096
+        d : u64 <- pa | NORMAL | SHARE | AF | PAGE
+        if pa < 0x40080000
+            d <- d | XN
+        elif pa < rwp
+            -- The image's code and read-only data: read-only at both
+            -- levels, executable at both.
+            d <- d | AP_RO
+        elif pa >= us
+            if pa < us + 8K
+                d <- d | AP_EL0_RW | XN
+            else
+                d <- d | XN
+            end
+        else
+            d <- d | XN
+        end
+        l3[j] <- d
+        j <- j + 1
+    end
+end
+
+proc main -> never
+    permit cpu.control, cpu.halt, memory.mmio, memory.raw
+    arch.a64.vbar <- arch.a64.vectors
+    build_tables()
+    -- MAIR: attribute 0 Device-nGnRnE, 1 Normal write-back.
+    arch.a64.mair <- 0xFF00
+    -- TCR: T0SZ 25 (39 bits), 4 KiB granule, walks write-back and inner
+    -- shareable, TTBR1 walks off (EPD1), a 40-bit physical space.
+    arch.a64.tcr <- 25 | (1 << 8) | (1 << 10) | (3 << 12) | (1 << 23) | (2 << 32)
+    arch.a64.ttbr0 <- u64(l1.addr)
+    -- SCTLR: M, C, I.
+    arch.a64.sctlr <- arch.a64.sctlr | 1 | 4 | 4096
+    if arch.a64.sctlr & 1 == 1
+        puts("mmu on\n")
+    end
+    cell <- 0x1234
+    alias := mem.mmio(u64, u64(addr u8 (ref cell)) - RAM + ALIAS, 1)
+    puts("through the alias: ")
+    puthex(alias[0])
+    puts("\n")
+    arch.a64.sp_el0 <- u64(user_stack.addr) + 8K
+    arch.a64.spsr <- 0
+    arch.a64.eret(user_main)
+    loop
+        cpu.halt()
+    end
+end

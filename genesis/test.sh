@@ -1936,6 +1936,19 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     [ "$(grep -A1 'Taking exception 1 \[Undefined Instruction\]' build/auser.qlog | grep -c 'from EL0 to EL1')" = 1 ] || fail "aarch64: the privileged read at EL0 must be refused once"
     [ "$(grep -c 'Taking exception' build/auser.qlog)" = 49 ] || fail "aarch64: the user-mode kernel took an unexpected exception"
     echo "ok: AArch64 USER MODE - the kernel enters EL0 (arch.a64.sp_el0, spsr, eret(user_main)); EL0 prints only through 48 svc calls served by the slot-8 handler, which answers in x0, and its read of VBAR_EL1 is refused by the CPU (undefined instruction from EL0, skipped)"
+    # The MMU: the kernel's own translation tables, an alias read, and EL0
+    # stopped by a permission fault where the tables deny it.
+    ( cd .. && genesis/build/olic < tests/a64/free/mmu.oli > genesis/build/ammu.elf 2> genesis/build/ammu.err ) || fail "aarch64: olic could not compile the MMU kernel: $(head -1 build/ammu.err)"
+    rm -f build/ammu.serial
+    set +e
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/ammu.serial -kernel build/ammu.elf -d int -D build/ammu.qlog > /dev/null 2>&1
+    set -e
+    printf 'mmu on\nthrough the alias: 0x00001234\nhello from EL0 under the MMU\nstill running at EL0\nkernel: user exited; refused class 0x00000024 at 0x80080000\n' > build/ammu.want
+    cmp build/ammu.serial build/ammu.want || fail "aarch64: the MMU kernel printed [$(cat build/ammu.serial)]"
+    grep -q 'with ESR 0x24/0x9200000d' build/ammu.qlog || fail "aarch64: the EL0 read of kernel memory must be a level-1 permission fault (ESR 0x9200000d)"
+    [ "$(grep -c 'Taking exception 2 \[SVC\]' build/ammu.qlog)" = 51 ] || fail "aarch64: the MMU kernel must take exactly 51 SVCs"
+    [ "$(grep -c 'Taking exception' build/ammu.qlog)" = 52 ] || fail "aarch64: the MMU kernel took an unexpected exception"
+    echo "ok: AArch64 MMU - the kernel builds 4 KiB translation tables (arch.a64.mair, tcr, ttbr0 with tlbi, sctlr), reads a word back through an alias mapping, and EL0 - code read-only, its stack read-write, everything else denied - is stopped by a level-1 permission fault when it reads kernel memory"
 else
     echo "ok: AArch64 exceptions - the timer kernel builds with its vector table on a 2 KiB boundary (no qemu-system-aarch64 here: not booted)"
 fi
