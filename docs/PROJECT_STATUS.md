@@ -1317,6 +1317,27 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in back-end stage 40 (2026-09-25): DWARF variables
+
+- **Types and variables in `.debug_info`.** The compile unit carries the
+  base types (u8…s64, `bool`), pointers to each and to `void`, a view
+  structure per element type and a structure per layout (its integer and
+  `bool` fields at their offsets); every subprogram gains a frame base
+  (rbp) and its parameters and variables as children, each with its type.
+- **Locations, honestly.** The OIR builder records every local (name, type
+  class, frame words) and `mem2reg` marks which kept their words. Those get
+  `DW_OP_fbreg` to their first byte; a local promoted to a register gets no
+  location, so gdb prints `<optimized out>` — never a stale frame word.
+- **`-- debug: frame`** at the top of a file promotes no local: every
+  parameter and variable is in its words at every line (the `-O0` of this
+  compiler).
+- `tests/run/debugvars.oli` (with the pragma): the harness stops gdb at the
+  `ret` of `work` and finds `n = 5`, `scale = -2`, `total = 20`, `buf =
+  {11, 0, 0, 44}`, `pt = {x = 7, y = -3}`, `i = 5`, `flag = true`, the text
+  `"hi"` behind a view and `ptype` of the layout; the same source without
+  the pragma shows `total = <optimized out>` and still `pt`. `readelf`
+  decodes the unit without a complaint.
+
 ## Implemented in back-end stage 39 (2026-09-25): position-independent code
 
 - **Every static address is rip-relative.** `O_SADDR`, `O_DADDR` and the
@@ -1480,9 +1501,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 29,718 lines) into
+compiles its own source (`compiler/`, seventeen modules, 30,230 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,282,016 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,370,328 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

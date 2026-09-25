@@ -1,0 +1,33 @@
+-- debug: frame
+module debugvars
+-- `-- debug: frame` (ABI.md 7): every local keeps its frame words, so the
+-- DWARF names each parameter and variable with its type and an rbp-relative
+-- location, and gdb prints all of them at any line. The harness stops at the
+-- `ret` of `work` and compares `info args`, `info locals` and the text
+-- behind the view with what the program computed. Exit 42 when every check
+-- held.
+layout Point
+    x : u32
+    y : s16
+end
+proc work(n : u64, scale : s32) -> u64
+    total : u64 <- 0
+    buf : [4]u16
+    pt : Point <- Point { x: 7, y: -3 }
+    buf[0] <- 11
+    buf[3] <- 44
+    i : u64 <- 0
+    while i < n
+        total <- total + i * 2
+        i <- i + 1
+    end
+    flag := total > 10
+    msg := "hi"
+    ret total + u64(buf[3]) + u64(pt.x)
+end
+proc start -> s32
+    entry
+    r := work(5, -2)
+    if r != 71 then ret 1
+    ret 42
+end

@@ -97,6 +97,7 @@ layout Prog
     fstanding : u64
     loadaddr : u64
     objmode : u64
+    dbgframe : u64
     sectalign : u64
     hasprof : u64
     profsrc : view u8
@@ -150,6 +151,7 @@ proc prog_new(z: zone) -> rw ref Prog
     pg.fstanding <- 0
     pg.loadaddr <- 4194304
     pg.objmode <- 0
+    pg.dbgframe <- 0
     pg.sectalign <- 1
     pg.hasprof <- 0
     pg.curhasres <- 0
@@ -1658,6 +1660,11 @@ proc analyze(pg: rw ref Prog, z: zone, src: view u8)
     pg.fstanding <- target_freestanding(src)
     pg.loadaddr <- target_load(src)
     pg.objmode <- output_object(src)
+    -- `-- debug: frame`: every local keeps its frame words, so a debugger
+    -- reads each one at any line (ABI.md 7) — the `-O0` of this compiler.
+    if view_eq(pragma_value(src, "-- debug: "), "frame")
+        pg.dbgframe <- 1
+    end
     apply_profile(pg, z, src)
     root := add_module(pg, z, src, "stdin")
     load_named(pg, z, "core")

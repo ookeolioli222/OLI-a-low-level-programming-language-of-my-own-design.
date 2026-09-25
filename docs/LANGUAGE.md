@@ -735,7 +735,8 @@ Multiboot2 header is a static layout with an initialiser (`examples/kernel.oli`
 an `mmio` view from `mem.mmio` and reads `cpuid`; the harness checks the image
 structurally, QEMU runs it). A `-- profile: PATH` line names the target profile — load
 address, the order of the sections, their alignment (`docs/FREESTANDING.md`
-§2).
+§2). A `-- debug: frame` line promotes no local to a register, so a debugger
+reads every parameter and variable at any line (`docs/ABI.md` §7).
 
 Conditional compilation (stage 31): at declaration level,
 `when target.FACT … [else …] end` keeps one branch of declarations and

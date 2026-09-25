@@ -197,6 +197,29 @@ O_MSRWR := 49
 O_CPUID := 50
 O_HWCALL := 51
 O_SEGS := 52
+
+-- A local as the debug information describes it (compiler/elf.oli): the
+-- procedure, its module and name token, a type class (DV_BASE and on) with
+-- a code and a count, its first frame word, how many words, whether it
+-- kept them through `mem2reg`, and whether it is a parameter.
+DVAR_MAX := 32768
+DV_N := 10
+DV_Q := 0
+DV_MOD := 1
+DV_NAME := 2
+DV_KIND := 3
+DV_CODE := 4
+DV_COUNT := 5
+DV_OFF := 6
+DV_WORDS := 7
+DV_KEPT := 8
+DV_PARAM := 9
+DVK_BASE := 1
+DVK_PTR := 2
+DVK_ARRAY := 3
+DVK_LAYOUT := 4
+DVK_VIEW := 5
+DVK_LREF := 6
 -- The arithmetic modes: plain arithmetic traps, `wrap` wraps, `sat` clamps,
 -- `checked` answers with a failure (design 0006).
 AM_TRAP := 0
@@ -376,6 +399,11 @@ layout Cell
 end
 
 layout Oir
+    -- The locals of every procedure for the debug information: nine cells
+    -- each (DV_*), `ndvar` of them; `dbgframe` from `-- debug: frame`.
+    dvars : rw view u8
+    ndvar : u64
+    dbgframe : u64
     ins : rw view u8
     procs : rw view u8
     stats : rw view u8
@@ -512,6 +540,7 @@ proc oir_new(z: zone) -> rw ref Oir
     ob.vmap <- z.bytes(INS_MAX * Cell.size)
     ob.cur <- z.bytes(SLOT_MAX * Cell.size)
     ob.noprom <- z.bytes(SLOT_MAX * Cell.size)
+    ob.dvars <- z.bytes(DVAR_MAX * DV_N * Cell.size)
     ob.live <- z.bytes(SLOT_MAX * Cell.size)
     ob.livein <- z.bytes(ENDDEF_MAX * Cell.size)
     ob.enddef <- z.bytes(ENDDEF_MAX * Cell.size)
@@ -539,6 +568,7 @@ proc oir_reset(ob: rw ref Oir)
     -- driver that builds the same program more than once starts here again.
     ob.nins <- 0
     ob.nproc <- 0
+    ob.ndvar <- 0
     ob.nstat <- 0
     ob.ndat <- 0
     ob.dsize <- 0
@@ -5788,6 +5818,143 @@ proc gen_extern_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     ob.nproc <- ob.nproc + 1
 end
 
+proc dv_base(t: view u8) -> word
+    -- The base-type code of an integer or `bool`: 0..3 u8..u64, 4..7
+    -- s8..s64 by width, 8 bool; -1 for anything else.
+    if view_eq(t, "bool")
+        ret 8
+    end
+    nb := int_bits(t)
+    if nb == 0
+        ret -1
+    end
+    k : word <- 3
+    if nb == 8
+        k <- 0
+    elif nb == 16
+        k <- 1
+    elif nb == 32
+        k <- 2
+    end
+    if int_signed(t) == 1
+        k <- k + 4
+    end
+    ret k
+end
+
+proc dv_set(ob: rw ref Oir, i: u64, f: u64, v: u64)
+    cell_set(ob.dvars, i * DV_N + f, v)
+end
+
+proc dv_get(ob: ref Oir, i: u64, f: u64) -> u64
+    ret cell_get(ob.dvars, i * DV_N + f)
+end
+
+proc dv_class(pg: ref Prog, ob: rw ref Oir, i: u64, t: view u8) -> word
+    -- The type class of local `i` from its type text; 0 when the debug
+    -- information has no type for it (a zone, a choice, a port).
+    b := dv_base(t)
+    if b >= 0
+        dv_set(ob, i, DV_CODE, u64.bits(b))
+        ret DVK_BASE
+    end
+    if view_eq(t, "physaddr")
+        dv_set(ob, i, DV_CODE, 3)
+        ret DVK_BASE
+    end
+    if is_view_type(t) == 1
+        vb := dv_base(elem_of(t))
+        if vb < 0
+            dv_set(ob, i, DV_CODE, 9)
+        else
+            dv_set(ob, i, DV_CODE, u64.bits(vb))
+        end
+        ret DVK_VIEW
+    end
+    if is_array_type(t) == 1
+        eb := dv_base(arr_elem(t))
+        if eb < 0
+            ret 0
+        end
+        dv_set(ob, i, DV_CODE, u64.bits(eb))
+        dv_set(ob, i, DV_COUNT, arr_count(pg, t))
+        ret DVK_ARRAY
+    end
+    it := layout_of(pg, t)
+    if it >= 0
+        item := item_at(pg, u64.bits(it))
+        if item.kind != 0
+            ret 0
+        end
+        dv_set(ob, i, DV_CODE, u64.bits(it))
+        if is_ref_type(t) == 1
+            ret DVK_LREF
+        end
+        ret DVK_LAYOUT
+    end
+    p : view u8 <- t
+    if starts_with(p, "rw ")
+        p <- p[3..]
+    end
+    if starts_with(p, "ref ")
+        pb := dv_base(p[4..])
+        if pb < 0
+            dv_set(ob, i, DV_CODE, 9)
+        else
+            dv_set(ob, i, DV_CODE, u64.bits(pb))
+        end
+        ret DVK_PTR
+    end
+    if starts_with(p, "addr ")
+        ab := dv_base(p[5..])
+        if ab < 0
+            dv_set(ob, i, DV_CODE, 9)
+        else
+            dv_set(ob, i, DV_CODE, u64.bits(ab))
+        end
+        ret DVK_PTR
+    end
+    if view_eq(p, "addr")
+        dv_set(ob, i, DV_CODE, 9)
+        ret DVK_PTR
+    end
+    ret 0
+end
+
+proc dv_record_all(pg: ref Prog, ob: rw ref Oir, q: u64)
+    -- Every local of the procedure being built whose type the debug
+    -- information can name, with its frame words; kept or not is settled
+    -- after `mem2reg` (dv_mark_kept in compiler/ssa.oli).
+    b := pg.sbuf
+    k : u64 <- pg.locbase
+    while k < pg.nloc
+        if ob.ndvar < DVAR_MAX
+            l := loc_at(pg, k)
+            i := ob.ndvar
+            dv_set(ob, i, DV_COUNT, 0)
+            dv_set(ob, i, DV_CODE, 0)
+            c := dv_class(pg, ob, i, b[l.t0..l.t1])
+            if c > 0
+                s := k - pg.locbase
+                dv_set(ob, i, DV_Q, q)
+                dv_set(ob, i, DV_MOD, l.mod)
+                dv_set(ob, i, DV_NAME, l.name)
+                dv_set(ob, i, DV_KIND, u64.bits(c))
+                dv_set(ob, i, DV_OFF, local_off(ob, word.bits(s)))
+                dv_set(ob, i, DV_WORDS, local_words(pg, b[l.t0..l.t1]))
+                dv_set(ob, i, DV_KEPT, 0)
+                isp : u64 <- 0
+                if l.kind == L_PARAM
+                    isp <- 1
+                end
+                dv_set(ob, i, DV_PARAM, isp)
+                ob.ndvar <- i + 1
+            end
+        end
+        k <- k + 1
+    end
+end
+
 proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     -- No statement yet: the parameters belong to no line of the last one.
     if proc_is_extern(pg, pi) == 1
@@ -5808,6 +5975,8 @@ proc gen_proc(pg: rw ref Prog, ob: rw ref Oir, pi: u64)
     op.first <- ob.nins
     op.nloc <- count_locals(pg)
     op.nwords <- lay_out_locals(pg, ob)
+    ob.dbgframe <- pg.dbgframe
+    dv_record_all(pg, ob, ob.nproc)
     op.isentry <- 0
     op.codepos <- 0
     op.codeend <- 0

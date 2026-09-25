@@ -1446,6 +1446,22 @@ cp build/kernel.elf build/kernel.dwarf.elf
 kmain=$(grep -n '^proc main' ../examples/kernel.oli | cut -d: -f1)
 gdb -batch -ex 'info line kernel.main' build/kernel.elf 2>&1 | grep -q "Line $kmain of \"kernel.oli\" starts at address" || fail "dwarf: gdb must place kernel.main on kernel.oli:$kmain: $(gdb -batch -ex 'info line kernel.main' build/kernel.elf 2>&1 | tail -1)"
 objdump --dwarf=decodedline build/kernel.elf | grep -q '^core/x64/paging.oli' || fail "dwarf: the lines of the library module core.x64.paging must be in the kernel's line table"
+# Variables: tests/run/debugvars.oli is compiled with `-- debug: frame`, so
+# gdb reads every parameter and local at the `ret` of `work`; without the
+# pragma a promoted scalar is <optimized out>, never a stale value, while an
+# array or a layout (in its frame words either way) still prints.
+dvl=$(grep -n '^    ret total' ../tests/run/debugvars.oli | cut -d: -f1)
+gdb -batch -ex 'directory ../tests/run' -ex "break debugvars.oli:$dvl" -ex run -ex 'info args' -ex 'info locals' -ex 'p *msg.addr@msg.len' -ex 'ptype pt' build/debugvars.elf > build/debugvars.gdb 2>&1 || true
+for want in 'n = 5' 'scale = -2' 'total = 20' 'buf = {11, 0, 0, 44}' 'pt = {x = 7, y = -3}' 'i = 5' 'flag = true' '= "hi"' 'u32 x;' 's16 y;'; do
+    grep -qF "$want" build/debugvars.gdb || fail "dwarf: gdb must print [$want] at the ret of debugvars.work"
+done
+sed '1d' ../tests/run/debugvars.oli > build/debugvars_o2.oli
+( cd .. && genesis/build/olic < genesis/build/debugvars_o2.oli > genesis/build/debugvars_o2.elf ) || fail "dwarf: debugvars without the pragma"
+chmod +x build/debugvars_o2.elf
+gdb -batch -ex 'directory build' -ex "break debugvars.oli:$((dvl - 1))" -ex run -ex 'info locals' build/debugvars_o2.elf > build/debugvars_o2.gdb 2>&1 || true
+grep -qF 'total = <optimized out>' build/debugvars_o2.gdb || fail "dwarf: a promoted local must be <optimized out> without the pragma"
+grep -qF 'pt = {x = 7, y = -3}' build/debugvars_o2.gdb || fail "dwarf: a layout in its frame words must print without the pragma"
+[ "$(readelf --debug-dump=info build/debugvars.elf 2>&1 | grep -ci 'warn\|error')" = 0 ] || fail "dwarf: readelf complains about the variables of debugvars.elf"
 echo "ok: DWARF 4 line tables and a compile unit with a subprogram per procedure: objdump --dwarf decodes them, addr2line names the entry's line, gdb places kernel.main on its line, library modules are files of their own"
 # The self-test of arith.oli is decided at compile time, and the messages of
 # the checks that were proved away are not in its image.

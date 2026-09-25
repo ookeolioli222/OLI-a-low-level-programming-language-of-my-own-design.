@@ -58,6 +58,7 @@ proc ssa_proc(ob: rw ref Oir, q: u64)
     end
     ob.nslot <- ssa_slots(ob, q)
     mark_addr_taken(ob, op)
+    dv_mark_kept(ob, q)
     oldb := op.bfirst
     oldn := op.nblk
     -- `rpo` and the walk order belong to whichever procedure was ordered
@@ -95,6 +96,41 @@ proc mark_addr_taken(ob: rw ref Oir, op: ref OProc)
             if ins.a < ob.nslot
                 cell_set(ob.noprom, ins.a, 1)
             end
+        end
+        i <- i + 1
+    end
+    if ob.dbgframe == 1
+        -- `-- debug: frame`: no local is promoted, so each one is in its
+        -- words at every line a debugger stops at.
+        k : u64 <- 0
+        while k < op.nwords
+            if k < ob.nslot
+                cell_set(ob.noprom, k, 1)
+            end
+            k <- k + 1
+        end
+    end
+end
+
+proc dv_mark_kept(ob: rw ref Oir, q: u64)
+    -- A local keeps its frame words when any of them is not promoted: its
+    -- loads and stores stay, so the debug information may name the words.
+    i : u64 <- 0
+    while i < ob.ndvar
+        if dv_get(ob, i, DV_Q) == q
+            off := dv_get(ob, i, DV_OFF)
+            w := dv_get(ob, i, DV_WORDS)
+            kept : u64 <- 0
+            j : u64 <- 0
+            while j < w
+                if off + j < ob.nslot
+                    if cell_get(ob.noprom, off + j) == 1
+                        kept <- 1
+                    end
+                end
+                j <- j + 1
+            end
+            dv_set(ob, i, DV_KEPT, kept)
         end
         i <- i + 1
     end

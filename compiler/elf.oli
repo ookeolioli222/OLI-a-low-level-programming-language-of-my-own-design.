@@ -299,6 +299,11 @@ layout Dbg
     ninfo : u64
     line : rw view u8
     nline : u64
+    -- The offsets of the type entries in .debug_info: 0..8 the base types,
+    -- 9 `void *`, 10..18 pointers to the base types, 19..28 the view
+    -- structures by element type, then from 30 per item its structure and
+    -- a pointer to it.
+    tys : rw view u8
 end
 
 DBG_MAX := 4194304
@@ -416,20 +421,306 @@ proc dbg_abbrev(d: rw ref Dbg)
     o <- db_uleb(b, o, 23)
     o <- db_u8(b, o, 0)
     o <- db_u8(b, o, 0)
-    -- 2: subprogram, no children: name, low_pc, high_pc.
+    -- 2: subprogram, with children (its parameters and variables): name,
+    -- low_pc, high_pc, frame_base (an exprloc: rbp).
     o <- db_uleb(b, o, 2)
     o <- db_uleb(b, o, 46)
+    o <- db_u8(b, o, 1)
+    o <- db_attr(b, o, 3, 8)
+    o <- db_attr(b, o, 17, 1)
+    o <- db_attr(b, o, 18, 7)
+    o <- db_attr(b, o, 64, 24)
+    o <- db_attr(b, o, 0, 0)
+    -- 3 variable, 4 formal_parameter: name, type, location (exprloc).
+    o <- db_abbr_var(b, o, 3, 52, 1)
+    o <- db_abbr_var(b, o, 4, 5, 1)
+    -- 12 variable, 13 formal_parameter without a location: promoted to a
+    -- register by `mem2reg`, which the debug information does not follow.
+    o <- db_abbr_var(b, o, 12, 52, 0)
+    o <- db_abbr_var(b, o, 13, 5, 0)
+    -- 5 base_type: name, encoding (data1), byte_size (data1).
+    o <- db_uleb(b, o, 5)
+    o <- db_uleb(b, o, 36)
     o <- db_u8(b, o, 0)
-    o <- db_uleb(b, o, 3)
-    o <- db_uleb(b, o, 8)
-    o <- db_uleb(b, o, 17)
-    o <- db_uleb(b, o, 1)
-    o <- db_uleb(b, o, 18)
+    o <- db_attr(b, o, 3, 8)
+    o <- db_attr(b, o, 62, 11)
+    o <- db_attr(b, o, 11, 11)
+    o <- db_attr(b, o, 0, 0)
+    -- 6 pointer_type to void: byte_size; 7 pointer_type: byte_size, type.
+    o <- db_uleb(b, o, 6)
+    o <- db_uleb(b, o, 15)
+    o <- db_u8(b, o, 0)
+    o <- db_attr(b, o, 11, 11)
+    o <- db_attr(b, o, 0, 0)
     o <- db_uleb(b, o, 7)
+    o <- db_uleb(b, o, 15)
     o <- db_u8(b, o, 0)
+    o <- db_attr(b, o, 11, 11)
+    o <- db_attr(b, o, 73, 19)
+    o <- db_attr(b, o, 0, 0)
+    -- 8 array_type, with children: type; 9 subrange_type: count (data8).
+    o <- db_uleb(b, o, 8)
+    o <- db_uleb(b, o, 1)
+    o <- db_u8(b, o, 1)
+    o <- db_attr(b, o, 73, 19)
+    o <- db_attr(b, o, 0, 0)
+    o <- db_uleb(b, o, 9)
+    o <- db_uleb(b, o, 33)
     o <- db_u8(b, o, 0)
+    o <- db_attr(b, o, 55, 7)
+    o <- db_attr(b, o, 0, 0)
+    -- 10 structure_type, with children: name, byte_size (data8);
+    -- 11 member: name, type, data_member_location (data8).
+    o <- db_uleb(b, o, 10)
+    o <- db_uleb(b, o, 19)
+    o <- db_u8(b, o, 1)
+    o <- db_attr(b, o, 3, 8)
+    o <- db_attr(b, o, 11, 7)
+    o <- db_attr(b, o, 0, 0)
+    o <- db_uleb(b, o, 11)
+    o <- db_uleb(b, o, 13)
+    o <- db_u8(b, o, 0)
+    o <- db_attr(b, o, 3, 8)
+    o <- db_attr(b, o, 73, 19)
+    o <- db_attr(b, o, 56, 7)
+    o <- db_attr(b, o, 0, 0)
     o <- db_u8(b, o, 0)
     d.nab <- o
+end
+
+proc db_attr(b: rw view u8, off: u64, attr: u64, form: u64) -> u64
+    o := db_uleb(b, off, attr)
+    ret db_uleb(b, o, form)
+end
+
+proc db_abbr_var(b: rw view u8, off: u64, code: u64, tag: u64, hasloc: u64) -> u64
+    o : u64 <- db_uleb(b, off, code)
+    o <- db_uleb(b, o, tag)
+    o <- db_u8(b, o, 0)
+    o <- db_attr(b, o, 3, 8)
+    o <- db_attr(b, o, 73, 19)
+    if hasloc == 1
+        o <- db_attr(b, o, 2, 24)
+    end
+    ret db_attr(b, o, 0, 0)
+end
+
+proc dw_base_name(k: u64) -> view u8
+    if k == 0
+        ret "u8"
+    end
+    if k == 1
+        ret "u16"
+    end
+    if k == 2
+        ret "u32"
+    end
+    if k == 3
+        ret "u64"
+    end
+    if k == 4
+        ret "s8"
+    end
+    if k == 5
+        ret "s16"
+    end
+    if k == 6
+        ret "s32"
+    end
+    if k == 7
+        ret "s64"
+    end
+    ret "bool"
+end
+
+proc dbg_types(pg: ref Prog, d: rw ref Dbg, off: u64) -> u64
+    -- The type entries every variable refers to, recorded in `d.tys`.
+    b := d.info
+    o : u64 <- off
+    k : u64 <- 0
+    while k < 9
+        cell_set(d.tys, k, o)
+        o <- db_uleb(b, o, 5)
+        o <- db_str(b, o, dw_base_name(k))
+        enc : u64 <- 7
+        if k >= 4
+            enc <- 5
+        end
+        if k == 8
+            enc <- 2
+        end
+        o <- db_u8(b, o, enc)
+        sz : u64 <- 8
+        if k % 4 == 0
+            sz <- 1
+        elif k % 4 == 1
+            sz <- 2
+        elif k % 4 == 2
+            sz <- 4
+        end
+        if k == 8
+            sz <- 1
+        end
+        o <- db_u8(b, o, sz)
+        k <- k + 1
+    end
+    cell_set(d.tys, 9, o)
+    o <- db_uleb(b, o, 6)
+    o <- db_u8(b, o, 8)
+    k <- 0
+    while k < 9
+        cell_set(d.tys, 10 + k, o)
+        o <- db_uleb(b, o, 7)
+        o <- db_u8(b, o, 8)
+        put_u32(b, o, cell_get(d.tys, k))
+        o <- o + 4
+        k <- k + 1
+    end
+    -- A view local, one per element type (19 + code, the last `void`): two
+    -- frame words, the length in the lower one and the address above it
+    -- (the frame grows down; the address is word 0).
+    k <- 0
+    while k < 10
+        cell_set(d.tys, 19 + k, o)
+        o <- db_uleb(b, o, 10)
+        o <- db_str(b, o, "view")
+        put_u64v(b, o, 16)
+        o <- o + 8
+        pt : u64 <- cell_get(d.tys, 9)
+        if k < 9
+            pt <- cell_get(d.tys, 10 + k)
+        end
+        o <- db_data8(b, db_member(b, o, "addr", pt), 8)
+        o <- db_data8(b, db_member(b, o, "len", cell_get(d.tys, 3)), 0)
+        o <- db_u8(b, o, 0)
+        k <- k + 1
+    end
+    -- Every layout: its fields of an integer or `bool` type at their
+    -- offsets (ABI.md 3); a field of another type is left out.
+    it : u64 <- 0
+    while it < pg.nitem
+        item := item_at(pg, it)
+        if item.kind == 0
+            cx := mod_ctx(pg, item.mod)
+            nd := node_at(cx, item.node)
+            cell_set(d.tys, 30 + it * 2, o)
+            o <- db_uleb(b, o, 10)
+            o <- db_str(b, o, tok_text(cx, nd.t0))
+            put_u64v(b, o, item.size)
+            o <- o + 8
+            f : u64 <- 0
+            while f < item.nfld
+                fr := fld_at(pg, item.first + f)
+                fcx := mod_ctx(pg, fr.mod)
+                fn := node_at(fcx, fr.node)
+                tn := node_at(fcx, kid1(fcx, fr.node))
+                if tn.t1 == tn.t0 + 1
+                    fb := dv_base(tok_text(fcx, tn.t0))
+                    if fb >= 0
+                        mo := db_member(b, o, tok_text(fcx, fn.t0), cell_get(d.tys, u64.bits(fb)))
+                        o <- db_data8(b, mo, fr.off)
+                    end
+                end
+                f <- f + 1
+            end
+            o <- db_u8(b, o, 0)
+            cell_set(d.tys, 31 + it * 2, o)
+            o <- db_uleb(b, o, 7)
+            o <- db_u8(b, o, 8)
+            put_u32(b, o, cell_get(d.tys, 30 + it * 2))
+            o <- o + 4
+        end
+        it <- it + 1
+    end
+    ret o
+end
+
+proc db_member(b: rw view u8, off: u64, name: view u8, ty: u64) -> u64
+    -- A member's tag, name and type; its offset (data8) is the caller's.
+    o : u64 <- db_uleb(b, off, 11)
+    o <- db_str(b, o, name)
+    put_u32(b, o, ty)
+    ret o + 4
+end
+
+proc db_data8(b: rw view u8, off: u64, v: u64) -> u64
+    put_u64v(b, off, v)
+    ret off + 8
+end
+
+proc dbg_vars(pg: ref Prog, ob: ref Oir, d: rw ref Dbg, off: u64, q: u64) -> u64
+    -- The parameters and variables of procedure `q`: each with its type
+    -- and, when it kept its frame words, `DW_OP_fbreg` to the first of its
+    -- bytes (the frame base is rbp; a local's bytes start at its last
+    -- word, `rbp - 8 * (off + words)`).
+    b := d.info
+    o : u64 <- off
+    i : u64 <- 0
+    while i < ob.ndvar
+        if dv_get(ob, i, DV_Q) == q
+            if o + 256 < DBG_MAX
+                o <- dbg_var(pg, ob, d, o, i)
+            end
+        end
+        i <- i + 1
+    end
+    ret o
+end
+
+proc dbg_var(pg: ref Prog, ob: ref Oir, d: rw ref Dbg, off: u64, i: u64) -> u64
+    b := d.info
+    o : u64 <- off
+    k := dv_get(ob, i, DV_KIND)
+    c := dv_get(ob, i, DV_CODE)
+    ty : u64 <- 0
+    if k == DVK_BASE
+        ty <- cell_get(d.tys, c)
+    elif k == DVK_PTR
+        if c == 9
+            ty <- cell_get(d.tys, 9)
+        else
+            ty <- cell_get(d.tys, 10 + c)
+        end
+    elif k == DVK_VIEW
+        ty <- cell_get(d.tys, 19 + c)
+    elif k == DVK_LAYOUT
+        ty <- cell_get(d.tys, 30 + c * 2)
+    elif k == DVK_LREF
+        ty <- cell_get(d.tys, 31 + c * 2)
+    else
+        -- An array of a base type: its own type entry, here.
+        ty <- o
+        o <- db_uleb(b, o, 8)
+        put_u32(b, o, cell_get(d.tys, c))
+        o <- o + 4
+        o <- db_uleb(b, o, 9)
+        put_u64v(b, o, dv_get(ob, i, DV_COUNT))
+        o <- o + 8
+        o <- db_u8(b, o, 0)
+    end
+    kept := dv_get(ob, i, DV_KEPT)
+    code : u64 <- 3
+    if dv_get(ob, i, DV_PARAM) == 1
+        code <- 4
+    end
+    if kept == 0
+        code <- code + 9
+    end
+    cx := mod_ctx(pg, dv_get(ob, i, DV_MOD))
+    o <- db_uleb(b, o, code)
+    o <- db_str(b, o, tok_text(cx, dv_get(ob, i, DV_NAME)))
+    put_u32(b, o, ty)
+    o <- o + 4
+    if kept == 1
+        -- exprloc: its length, DW_OP_fbreg (0x91), the signed offset.
+        lenpos := o
+        o <- o + 1
+        o <- db_u8(b, o, 145)
+        disp := 8 * (dv_get(ob, i, DV_OFF) + dv_get(ob, i, DV_WORDS))
+        o <- db_sleb(b, o, 18446744073709551615 - (disp - 1))
+        put_u8(b, lenpos, o - lenpos - 1)
+    end
+    ret o
 end
 
 proc dbg_info(pg: ref Prog, ob: ref Oir, d: rw ref Dbg, codeaddr: u64)
@@ -446,6 +737,7 @@ proc dbg_info(pg: ref Prog, ob: ref Oir, d: rw ref Dbg, codeaddr: u64)
     o <- o + 8
     put_u32(b, o, 0)
     o <- o + 4
+    o <- dbg_types(pg, d, o)
     q : u64 <- 0
     while q < ob.nproc
         op := oproc_at(ob, q)
@@ -462,6 +754,13 @@ proc dbg_info(pg: ref Prog, ob: ref Oir, d: rw ref Dbg, codeaddr: u64)
                 o <- o + 8
                 put_u64v(b, o, op.codeend - op.codepos)
                 o <- o + 8
+                -- frame_base: DW_OP_reg6 (rbp).
+                o <- db_u8(b, o, 1)
+                o <- db_u8(b, o, 86)
+                if op.nocalls == 0
+                    o <- dbg_vars(pg, ob, d, o, q)
+                end
+                o <- db_u8(b, o, 0)
             end
         end
         q <- q + 1
@@ -578,7 +877,8 @@ end
 
 proc dbg_build(pg: ref Prog, ob: ref Oir, mc: ref Mach, z: zone, codeaddr: u64) -> rw ref Dbg
     d := z.make(Dbg)
-    d.ab <- z.bytes(256)
+    d.ab <- z.bytes(512)
+    d.tys <- z.bytes((30 + ITEM_MAX * 2) * Cell.size)
     d.info <- z.bytes(DBG_MAX)
     d.line <- z.bytes(DBG_MAX)
     dbg_abbrev(d)

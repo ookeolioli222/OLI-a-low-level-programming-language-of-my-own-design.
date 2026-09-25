@@ -159,10 +159,18 @@ Code only lets you click a breakpoint into a language a debugger declares.
 
 Two things to know. The line table names each module's file as the module
 path says (`core/frames.oli` for `core.frames`), so both configurations tell
-gdb where to look: next to the program, in `examples/`, and in `lib/`. Values
-of locals are not shown yet: the DWARF has lines and procedures but no
-variable locations (`docs/ABI.md` §7), so step, stop and read the stack, and
-use the registers view or `-exec p $rax` in the Debug Console for values.
+gdb where to look: next to the program, in `examples/`, and in `lib/`.
+
+The Variables pane shows parameters and locals with their types — integers,
+`bool`, arrays, layouts with their fields, views (`addr`, `len`; the text is
+`-exec p *msg.addr@msg.len`), addresses and refs. By default the compiler keeps
+most scalars in registers (`mem2reg`), and those show as `<optimized out>`;
+put this line at the top of the file to keep every local in its frame words
+while you debug it, the `-O0` of this compiler:
+
+```oli
+-- debug: frame
+```
 
 The same from a terminal:
 
