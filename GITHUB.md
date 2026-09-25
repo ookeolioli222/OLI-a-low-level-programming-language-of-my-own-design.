@@ -30,7 +30,14 @@ remain available as the detailed and normative references linked below.
 
 ## Status
 
-The project is in Genesis G4 and M1/M2 development.
+The project is an experimental, self-hosting x86-64 systems-language project.
+The compiler has a native OIR-to-x86-64-to-ELF path, a second AArch64 back end,
+a freestanding target and a QEMU-tested kernel example. It is not yet a production replacement for C:
+portability, libraries, tool stability and parts of the language remain limited.
+
+For the candid comparison with C, the distinction between native code and
+compiler abstractions, and the current limitations, see
+[`docs/OCENA_NISKIPOZIOMOWA.md`](docs/OCENA_NISKIPOZIOMOWA.md).
 
 | Area | Status |
 |------|--------|
@@ -42,8 +49,9 @@ The project is in Genesis G4 and M1/M2 development.
 | G4 back end | OIR, CFG, verifier, SSA, optimization, x86-64 lowering and ELF64 output implemented for a growing V0 subset |
 | M1 | high-level `examples/hello.oli` compiles to a static ELF64 and runs without libc or a linker |
 | M2 | variables, arithmetic, control flow, procedures, zones, views, `each`, layouts and refs run; more features remain |
-| M3 freestanding output and M4 kernel | planned |
-| Standard library, IDE and ecosystem libraries | planned or gated on later milestones |
+| M3 freestanding output | implemented; own entry, stack, traps, sections and target profiles |
+| M4 kernel path | demonstrated under QEMU; kernel facilities are still narrow |
+| Standard library, IDE and ecosystem libraries | small or planned |
 
 The verified details and completion gates are maintained in
 [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md). This status is deliberately
@@ -191,10 +199,11 @@ source
 
 The semantic graph attaches a type and region to every expression. The OIR
 represents checks as instructions, keeps memory-space and capability metadata,
-and preserves the evidence used to remove a check. The current optimizer covers
-constant folding, check elision with recorded proofs, copy propagation and
-dead-code elimination. The current x86-64 lowering uses frame words for values;
-register allocation and common-subexpression elimination remain future work.
+and preserves the evidence used to remove a check. The optimizer covers
+constant folding, check elision with recorded proofs, copy propagation, dead
+code elimination and common-subexpression elimination. The backend also has a
+conservative linear-scan register allocation path, though the generated code
+and optimization coverage are not comparable to mature C compilers.
 
 The detailed architecture is in
 [`docs/COMPILER_ARCHITECTURE.md`](docs/COMPILER_ARCHITECTURE.md), while the
@@ -238,18 +247,18 @@ not replace them:
 The order is intentional: each layer is designed, specified, implemented,
 tested and documented before the next.
 
-1. Finish G4: remaining V0 lowering, fallible results, `case`, machine blocks,
-   statics, register allocation, common-subexpression elimination and the
-   `stage2 == stage3` fixpoint.
-2. Complete M2 with the full native runtime surface.
-3. Build freestanding M3 output with an own entry point and stack.
-4. Build the minimal M4 kernel in Oli--.
-5. Add V1 features: generics, ownership resources, atomics, MMIO, port I/O,
-   interrupts and bitfields.
-6. Add V2 features: floating point, SIMD, threads, FFI, libraries and Windows PE/COFF.
-7. Implement `core`, `std`, allocator-explicit collections, then the gated
+1. Keep the G4 self-hosting fixpoint green while completing the remaining V0
+   edge cases and broadening the accepted machine and target profiles.
+2. Complete the native runtime and stabilize the command-line tool and build
+   workflow.
+3. Expand `core` and `std` with allocator-explicit collections, files, process,
+   networking and threading support.
+4. Add the remaining V1 features, such as generics and additional hardware APIs
+   (bitfields and unions in C's layout landed in stage 52).
+5. Add V2 features: floating point, SIMD, threads, FFI, libraries and Windows PE/COFF.
+6. Implement the gated
    `oli.compute` and `oli.sec` ecosystems.
-8. Build the `olis` language service and `olide` editor after the language and
+7. Build the `olis` language service and `olide` editor after the language and
    toolchain foundations are stable.
 
 The detailed schedule is [`ROADMAP.md`](ROADMAP.md), the IDE plan is
