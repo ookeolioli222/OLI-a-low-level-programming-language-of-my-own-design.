@@ -821,6 +821,7 @@ Implemented today **[runs]**:
 | E0031 | chained comparison |
 | E0032 | `{` at the end of a line used as a block opener |
 | E0101 | a name already in scope is shadowed |
+| E0102 | a procedure of this name is already declared in the program (procedures are found by their bare name, `mod.proc` included) |
 | E0106 | constant depends on itself |
 | E0110 | store into an immutable binding |
 | E0111 | store into a read-only place |

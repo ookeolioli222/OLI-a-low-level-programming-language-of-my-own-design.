@@ -1,0 +1,151 @@
+--- A cooperative scheduler for x86-64 (KERNEL_PROGRAMMING.md §5, M4): tasks
+--- that run until they yield, each on a stack the caller owns, switched
+--- round-robin. Nothing is allocated here and nothing touches the hardware
+--- but the stack pointer: the task table and the stacks are memory the
+--- caller owns, so the same module runs in a process and in the kernel.
+--- Task 0 is whoever called `init_tasks` — the kernel's main loop — and keeps
+--- the stack it already has. A task's entry is a `-> never` procedure that
+--- ends in `exit`; its address comes from a machine block
+--- (`mov rax, task; out rax -> e`).
+module core.x64.sched
+
+--- The states of a slot of the task table.
+pub FREE : u64 := 0
+pub READY : u64 := 1
+pub DONE : u64 := 2
+
+--- One task: the stack pointer it was switched out at, and its state.
+pub layout Task
+    sp : u64
+    state : u64
+end
+
+--- The running task and the number of switches made.
+pub layout Sched
+    cur : u64
+    switches : u64
+end
+
+--- The whole switch: the callee-saved registers pushed on this stack, rsp
+--- saved through rdi, the next stack's pointer from rsi, its registers
+--- popped and `ret` into whatever that stack was doing. Every other
+--- register is the caller's to lose across a call (SysV), so nothing else
+--- needs saving.
+pub proc switch(save : u64, next : u64)
+    calls none
+    permit cpu.asm
+    machine x64
+        push rbp
+        push rbx
+        push r12
+        push r13
+        push r14
+        push r15
+        mov [rdi], rsp
+        mov rsp, rsi
+        pop r15
+        pop r14
+        pop r13
+        pop r12
+        pop rbx
+        pop rbp
+        ret
+    end
+end
+
+--- Every slot free but slot 0, the caller, which is running.
+pub proc init_tasks(sc : rw ref Sched, ttab : rw view Task)
+    i : uword <- 0
+    while i < ttab.len
+        ttab[i].sp <- 0
+        ttab[i].state <- FREE
+        i <- i + 1
+    end
+    ttab[0].state <- READY
+    sc.cur <- 0
+    sc.switches <- 0
+end
+
+--- A new task that starts at `start_at` on `stack`: the slot it took, or 0
+--- when every slot is taken or the stack is shorter than 128 bytes. The
+--- stack starts as six zero registers under `start_at`, so the first switch
+--- into it pops them and returns into `start_at` with rsp at 8 mod 16, as
+--- after a call.
+pub proc spawn(ttab : rw view Task, tstack : rw view u8, start_at : u64) -> u64
+    permit memory.raw
+    if tstack.len < 128 then ret 0
+    i : uword <- 1
+    while i < ttab.len
+        if ttab[i].state != READY
+            top := (u64(tstack.addr) + u64(tstack.len)) & ~u64(15)
+            [addr u64 (top - 8)] <- 0
+            [addr u64 (top - 16)] <- start_at
+            k : u64 <- 0
+            while k < 6
+                [addr u64 (top - 24 - k * 8)] <- 0
+                k <- k + 1
+            end
+            ttab[i].sp <- top - 64
+            ttab[i].state <- READY
+            ret u64(i)
+        end
+        i <- i + 1
+    end
+    ret 0
+end
+
+--- The ready tasks, the running one among them.
+pub proc ready(ttab : view Task) -> u64
+    n : u64 <- 0
+    i : uword <- 0
+    while i < ttab.len
+        if ttab[i].state == READY then n <- n + 1
+        i <- i + 1
+    end
+    ret n
+end
+
+--- The first ready task after `cur`, round the table; `cur` itself when
+--- no other is ready, or the table length when none is.
+proc next_ready(ttab : view Task, cur : u64) -> u64
+    n := u64(ttab.len)
+    k : u64 <- 1
+    while k <= n
+        j := (cur + k) % n
+        if ttab[uword(j)].state == READY then ret j
+        k <- k + 1
+    end
+    ret n
+end
+
+--- Switches from the running task to task `to`.
+proc switch_from(sc : rw ref Sched, ttab : rw view Task, to : u64)
+    prev := sc.cur
+    sc.cur <- to
+    sc.switches <- sc.switches + 1
+    save := u64(ttab.addr) + prev * Task.size + Task.sp.offset
+    switch(save, ttab[uword(to)].sp)
+end
+
+--- Gives the processor to the next ready task and returns when the
+--- scheduler comes back round to this one; at once when no other task is
+--- ready.
+pub proc yield(sc : rw ref Sched, ttab : rw view Task)
+    to := next_ready(ttab, sc.cur)
+    if to == sc.cur then ret
+    switch_from(sc, ttab, to)
+end
+
+--- Ends the running task: its slot is DONE (free for `spawn` again) and
+--- the next ready task runs. With no task left ready there is nothing to
+--- run, and the processor spins.
+pub proc exit(sc : rw ref Sched, ttab : rw view Task) -> never
+    ttab[uword(sc.cur)].state <- DONE
+    to := next_ready(ttab, sc.cur)
+    if to < u64(ttab.len)
+        switch_from(sc, ttab, to)
+    end
+    loop
+        cpu.pause()
+    end
+end

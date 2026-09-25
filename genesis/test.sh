@@ -1123,7 +1123,7 @@ grep -q 'E0200' build/chk.err || fail "checks: kernel_sketch must report its typ
 for f in ../tests/sema/ok/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli; do
     ( cd .. && genesis/build/show_sema < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
 done
-echo "ok: olic reports exactly the diagnostics of all twenty-one tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces, implicit narrowing, linear own values, members of scalars, float rules, vector rules and bitfield rules - and none on any positive fixture"
+echo "ok: olic reports exactly the diagnostics of all twenty-two tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces, implicit narrowing, linear own values, members of scalars, float rules, vector rules, bitfield rules and duplicate procedure names - and none on any positive fixture"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic front end and semantic analysis) passed"
 
@@ -1652,7 +1652,8 @@ if [ -n "$QEMU" ]; then
     grep -q '^memory: [1-9][0-9]* regions, [0-9]* frames free$' build/kernel.serial || fail "boot: the kernel must report the RAM of the loader's memory map"
     grep -q '^frame: 0000000000[0-9a-f]\{6\} written and read$' build/kernel.serial || fail "boot: a frame must be allocated, written and read back"
     grep -q '^heap: 1000 records at 0000000000[0-9a-f]\{6\}, sum of squares 332833500, 1M refused, frames returned$' build/kernel.serial || fail "boot: the kernel heap - a zone at a megabyte of frames - must hold a thousand records, refuse 1M more and give its frames back"
-    [ "$(wc -l < build/kernel.serial)" = 8 ] || fail "boot: COM1 must carry exactly eight lines, carries $(wc -l < build/kernel.serial)"
+    [ "$(sed -n 6p build/kernel.serial)" = "sched: 12121 in 11 switches, both tasks done" ] || fail "boot: the cooperative scheduler (core.x64.sched) must run ping three rounds and pong two, round-robin with main, in eleven switches: [$(sed -n 6p build/kernel.serial)]"
+    [ "$(wc -l < build/kernel.serial)" = 9 ] || fail "boot: COM1 must carry exactly nine lines, carries $(wc -l < build/kernel.serial)"
     # The same image with twice the memory: the frame count must follow the
     # machine by exactly 64 MiB / 4 KiB, so it is read, not assumed.
     set +e
@@ -1663,7 +1664,7 @@ if [ -n "$QEMU" ]; then
     f64=$(sed -n 's/^memory: .* regions, \([0-9]*\) frames free$/\1/p' build/kernel.serial)
     f128=$(sed -n 's/^memory: .* regions, \([0-9]*\) frames free$/\1/p' build/kernel128.serial)
     [ -n "$f64" ] && [ -n "$f128" ] && [ "$((f128 - f64))" = 16384 ] || fail "boot: 128 MiB must free 16384 frames more than 64 MiB ($f64, $f128)"
-    echo "ok: BOOT - $("$QEMU" -version | head -1 | sed 's/ (.*//') loads kernel.elf by its Multiboot header in 32-bit mode, the trampoline enters long mode, the kernel greets on COM1, reports cpuid, frees the RAM of the loader's memory map ($f64 frames at 64 MiB, $f128 at 128 MiB) and writes an allocated frame, runs a heap zone laid at a megabyte of frames, takes int 3 and 100 timer ticks, and exits through isa-debug-exit with 33"
+    echo "ok: BOOT - $("$QEMU" -version | head -1 | sed 's/ (.*//') loads kernel.elf by its Multiboot header in 32-bit mode, the trampoline enters long mode, the kernel greets on COM1, reports cpuid, frees the RAM of the loader's memory map ($f64 frames at 64 MiB, $f128 at 128 MiB) and writes an allocated frame, runs a heap zone laid at a megabyte of frames, runs two tasks on their own stacks under a cooperative scheduler, takes int 3 and 100 timer ticks, and exits through isa-debug-exit with 33"
 else
     echo "skipped: no qemu-system-x86_64 here (set OLI_QEMU, and OLI_QEMU_BIOS/OLI_QEMU_DATA for its firmware) - the boot of examples/kernel.oli was verified with QEMU 10.0.13 on 2026-09-24, transcript in docs/PROJECT_STATUS.md"
 fi
@@ -1844,6 +1845,12 @@ set +e; ./build/pa.elf; st=$?; set -e
 a=$(nm build/pa.elf | awk '/ pa\.b$/{print $1}')
 [ $(( 0x$a % 64 )) = 0 ] || fail "proc align: pa.b at 0x$a is not on 64 bytes"
 echo "ok: every key of a target profile is applied or checked - an unknown key, code_model other than small, stack_probe, and an entry that names another procedure are refused; a section on an initialised static is E0900; align N on a procedure is honoured"
+# core.x64.sched.switch (lib/core/x64/sched.oli) is exactly its block: six
+# pushes, rsp saved through rdi and loaded from rsi, six pops and ret
+# (then the ud2 every procedure ends in).
+objdump -d --no-show-raw-insn build/sched.elf | awk '/<core.x64.sched.switch>:/,/^$/' | sed 1d | sed '/^$/d' | awk '{$1=""; print}' | tr -s ' ' > build/sched.dis
+[ "$(tr '\n' ';' < build/sched.dis)" = " push %rbp; push %rbx; push %r12; push %r13; push %r14; push %r15; mov %rsp,(%rdi); mov %rsi,%rsp; pop %r15; pop %r14; pop %r13; pop %r12; pop %rbx; pop %rbp; ret; ud2;" ] || fail "sched: core.x64.sched.switch must be exactly its block, is [$(tr '\n' ';' < build/sched.dis)]"
+echo "ok: core.x64.sched - tests/run/sched.oli runs three tasks and main round-robin (the order, 13 switches, locals across yields, a yield five frames deep, a DONE slot taken again, a full table and a short stack refused); switch is exactly its block of pushes, two rsp moves, pops and ret"
 # tests/run/switch.oli: a calls-none procedure's machine block is the whole
 # procedure - the lowering saves nothing through rbp, which it does not own.
 objdump -d --no-show-raw-insn build/switch.elf | awk '/<switch_test.switch_to>:/,/^$/' > build/switch.dis

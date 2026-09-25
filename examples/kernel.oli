@@ -4,6 +4,7 @@ module kernel
 import core.x64
 import core.x64.paging
 import core.frames
+import core.x64.sched
 -- M3 (docs/FREESTANDING.md §8) and the first steps of M4: a flat kernel
 -- image for QEMU or GRUB — a Multiboot2 header and a Multiboot 1 header
 -- (the a.out kludge QEMU's `-kernel` needs) in `.text.boot`, an entry that is the 32-bit code a Multiboot loader
@@ -85,6 +86,15 @@ mb_info : u32
 
 -- One bit per four-kilobyte frame of the first gigabyte (core.frames).
 frame_map : [32K]u8
+
+ktasks : [3]sched.Task
+ksched : sched.Sched
+kstack1 : [8K]u8
+    align 16
+kstack2 : [8K]u8
+    align 16
+sched_log : [8]u8
+sched_n : u64
 
 proc mb1 -> never
     -- The Multiboot 1 header QEMU's `-kernel` looks for (it loads no 64-bit
@@ -393,6 +403,69 @@ proc heap_demo()
     serial_write("\n")
 end
 
+proc sched_note(c : u8)
+    sched_log[uword(sched_n)] <- c
+    sched_n <- sched_n + 1
+end
+
+proc ping -> never
+    -- three rounds, then done
+    r : u64 <- 0
+    while r < 3
+        sched_note(0x31)
+        sched.yield(ref ksched, ktasks[..])
+        r <- r + 1
+    end
+    sched.exit(ref ksched, ktasks[..])
+end
+
+proc pong -> never
+    -- two rounds, then done
+    r : u64 <- 0
+    while r < 2
+        sched_note(0x32)
+        sched.yield(ref ksched, ktasks[..])
+        r <- r + 1
+    end
+    sched.exit(ref ksched, ktasks[..])
+end
+
+proc sched_demo()
+    -- The cooperative scheduler (KERNEL_PROGRAMMING.md 5): two tasks on
+    -- stacks of their own beside main's, each noting its number and
+    -- yielding, round-robin with main, until both have exited.
+    permit cpu.asm
+    e1 : u64 <- 0
+    e2 : u64 <- 0
+    machine x64
+        mov rax, ping
+        out rax -> e1
+    end
+    machine x64
+        mov rax, pong
+        out rax -> e2
+    end
+    sched.init_tasks(ref ksched, ktasks[..])
+    n1 := sched.spawn(ktasks[..], kstack1[..], e1)
+    n2 := sched.spawn(ktasks[..], kstack2[..], e2)
+    if n1 == 0
+        serial_write("sched: no task\n")
+        ret
+    end
+    if n2 == 0
+        serial_write("sched: no task\n")
+        ret
+    end
+    while sched.ready(ktasks[..]) > 1
+        sched.yield(ref ksched, ktasks[..])
+    end
+    serial_write("sched: ")
+    serial_write(sched_log[..uword(sched_n)])
+    serial_write(" in ")
+    serial_dec(ksched.switches)
+    serial_write(" switches, both tasks done\n")
+end
+
 proc set_gate(vector : uword, handler : u64)
     -- An interrupt gate (type 0xE, present, ring 0) in the kernel's own
     -- code segment, 0x08 of the GDT the trampoline built.
@@ -449,6 +522,7 @@ proc main -> never
     paging_init()
     memory_init()
     heap_demo()
+    sched_demo()
     install_idt()
     machine x64
         int 3

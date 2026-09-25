@@ -249,5 +249,8 @@ boot via Multiboot (**done, booted under QEMU 2026-09-24**) → own stack →
 serial + VGA output → `cpuid` → `hlt` loop — all in `examples/kernel.oli`,
 with the GDT (the trampoline's), the IDT and its handlers, the PIC and PIT
 timer, the page tables and a physical frame allocator over the loader's
-memory map and a heap zone over its frames already there. Next: a
-cooperative scheduler.
+memory map and a heap zone over its frames already there, and a cooperative
+scheduler (`core.x64.sched`, stage 53): `init_tasks`, `spawn(table, stack,
+entry)`, `yield`, `exit` and `ready` over a task table and stacks the kernel
+owns — `ping` and `pong` run round-robin with main before interrupts are on.
+Next: preemption from the timer interrupt.

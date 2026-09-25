@@ -1317,6 +1317,47 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 53 (2026-09-25): a cooperative scheduler
+
+- `core.x64.sched` (`lib/core/x64/sched.oli`): tasks that run until they
+  yield, round-robin, each on a stack the caller owns, in a task table the
+  caller owns — nothing allocated, nothing touched but the stack pointer,
+  so the same module runs in a process and in the kernel. `init_tasks`
+  makes the caller task 0 on the stack it already has; `spawn(table,
+  stack, entry)` lays six zero registers under the entry's address on the
+  new stack (the first switch returns into it with rsp at 8 mod 16, as
+  after a call) and answers the slot, or 0 when the table is full or the
+  stack is shorter than 128 bytes; `yield` switches to the next ready task
+  and returns when the round comes back; `exit` marks the slot `DONE`,
+  free for `spawn` again; `ready` counts. `switch` is a `calls none`
+  procedure that is exactly its block: the six callee-saved registers
+  pushed, rsp saved through rdi, the next rsp from rsi, the six popped,
+  `ret` — every other register is the caller's to lose across a call.
+- `tests/run/sched.oli` runs three tasks and main in a process: the log
+  is the round-robin order (1 2 3 1 3 1), thirteen switches, a task's
+  locals survive its yields, a task yields five frames deep and resumes
+  there, a `DONE` slot is taken again, a full table and a short stack give
+  no task; 26 checks. The harness also pins `switch`'s disassembly.
+- `examples/kernel.oli` runs `ping` (three rounds) and `pong` (two)
+  round-robin with main on two 8 KiB stacks before it takes interrupts;
+  under QEMU COM1 now carries nine lines, the sixth `sched: 12121 in 11
+  switches, both tasks done`, and the harness pins it.
+- Found on the way, and fixed: a procedure is found by its bare name even
+  when called as `mod.proc(...)`, so `sched.init` in the kernel — which
+  also imports `core.frames`, whose `init` takes a view — was lowered
+  against `frames.init`'s parameters and broke OIR invariant 1. Two
+  procedures of one name anywhere in the program are now E0102 (at the
+  program's own one when the other is a library's;
+  `tests/sema/err/duplicate.oli`, the twenty-second negative semantic
+  fixture), and the scheduler's is `init_tasks`. The library's parameters
+  are `sc`, `ttab` and `tstack`, since a parameter may not share a name
+  with a static of the program (E0101).
+- `olic` compiles itself (35,875 lines) into 1,637,104 bytes, stage2 ==
+  stage3.
+- Not yet: preemption (a timer interrupt that switches tasks), per-task
+  address spaces, a scheduler on AArch64, qualified procedure lookup (so
+  two modules could share a procedure name).
+
 ## Implemented in stage 52 (2026-09-25): bitfields, unions, globals across the C boundary, sections in objects
 
 - Bitfields (ABI.md §3): `name : T bits N` over an integer `T`, laid out
@@ -1839,9 +1880,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 35,836 lines) into
+compiles its own source (`compiler/`, seventeen modules, 35,875 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,635,448 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,637,104 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

@@ -43,6 +43,9 @@ proc smsg(code: u64) -> view u8
     if code == 101
         ret "a name of this program is already in scope"
     end
+    if code == 102
+        ret "a procedure of this name is already declared in the program"
+    end
     if code == 200
         ret "type mismatch"
     end
@@ -2090,6 +2093,42 @@ proc check_items(pg: ref Prog)
         q <- q + 1
     end
     check_static_sections(pg)
+    check_proc_names(pg)
+end
+
+proc check_proc_names(pg: rw ref Prog)
+    -- A procedure is found by its bare name, `mod.proc(...)` included
+    -- (names are program-wide), so two procedures of one name — in two
+    -- modules, say two libraries' `init` — would have every call reach the
+    -- first: the second is E0102 at its name — or, against a library's,
+    -- the program's own.
+    q : u64 <- 1
+    while q < pg.nproc
+        v := proc_at(pg, q)
+        cx := mod_ctx(pg, v.mod)
+        nd := node_at(cx, v.node)
+        name := tok_text(cx, nd.t0)
+        p : u64 <- 0
+        while p < q
+            w := proc_at(pg, p)
+            cxw := mod_ctx(pg, w.mod)
+            ndw := node_at(cxw, w.node)
+            if view_eq(tok_text(cxw, ndw.t0), name)
+                if w.mod == 0
+                    if v.mod != 0
+                        -- the program's own against a library's: said
+                        -- where the program can rename it
+                        sdiag(pg, w.mod, 102, ndw.t0)
+                        break
+                    end
+                end
+                sdiag(pg, v.mod, 102, nd.t0)
+                break
+            end
+            p <- p + 1
+        end
+        q <- q + 1
+    end
 end
 
 proc bitfield_type(t: view u8) -> u64

@@ -1,0 +1,11 @@
+-- Procedures are found by their bare name, program-wide: a second `init`
+-- beside core.frames.init would take its calls, so it is E0102.
+import core.frames
+proc init(n : u64) -> u64
+    ret n
+end
+proc main -> s32
+    entry
+    ret s32.wrap(init(3))
+end
+-- expect: E0102 @ 4:6

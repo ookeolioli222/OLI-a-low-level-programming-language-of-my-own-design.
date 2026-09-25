@@ -1,0 +1,135 @@
+module sched_test
+import core.x64.sched
+-- `core.x64.sched` (lib/core/x64/sched.oli), executed in a process: three
+-- tasks on stacks of their own beside the main one, each logging its
+-- number and yielding, one, two and three rounds, then exiting. The log
+-- is the round-robin order, the switches are counted, a task's locals
+-- and callee-saved registers survive every yield, a slot a task left is
+-- taken again, and a full table or a short stack gives no task. The exit
+-- status is the number of the check that failed; 42 when every one held.
+
+table : [4]sched.Task
+sch : sched.Sched
+stack_a : [8K]u8
+    align 16
+stack_b : [8K]u8
+    align 16
+stack_c : [8K]u8
+    align 16
+tiny : [64]u8
+log : [16]u64
+nlog : u64
+sum_a : u64
+
+proc note(n : u64)
+    log[uword(nlog)] <- n
+    nlog <- nlog + 1
+end
+
+proc depth(n : u64) -> u64
+    -- a few frames deep across a yield
+    if n == 0
+        sched.yield(ref sch, table[..])
+        ret 0
+    end
+    ret n + depth(n - 1)
+end
+
+proc task_a -> never
+    s : u64 <- 1000
+    i : u64 <- 0
+    while i < 3
+        note(1)
+        s <- s + i * 7
+        sched.yield(ref sch, table[..])
+        i <- i + 1
+    end
+    sum_a <- s
+    sched.exit(ref sch, table[..])
+end
+
+proc task_b -> never
+    note(2)
+    sched.yield(ref sch, table[..])
+    sched.exit(ref sch, table[..])
+end
+
+proc task_c -> never
+    i : u64 <- 0
+    while i < 2
+        note(3)
+        sched.yield(ref sch, table[..])
+        i <- i + 1
+    end
+    sched.exit(ref sch, table[..])
+end
+
+proc task_d -> never
+    note(4 + depth(5))
+    sched.exit(ref sch, table[..])
+end
+
+proc start -> s32
+    entry
+    permit cpu.asm
+    ea : u64 <- 0
+    eb : u64 <- 0
+    ec : u64 <- 0
+    ed : u64 <- 0
+    machine x64
+        mov rax, task_a
+        out rax -> ea
+    end
+    machine x64
+        mov rax, task_b
+        out rax -> eb
+    end
+    machine x64
+        mov rax, task_c
+        out rax -> ec
+    end
+    machine x64
+        mov rax, task_d
+        out rax -> ed
+    end
+    sched.init_tasks(ref sch, table[..])
+    if sched.ready(table[..]) != 1 then ret 1
+    -- yielding alone is a no-op
+    sched.yield(ref sch, table[..])
+    if sch.switches != 0 then ret 2
+    if sched.spawn(table[..], tiny[..], ea) != 0 then ret 3
+    if sched.spawn(table[..], stack_a[..], ea) != 1 then ret 4
+    if sched.spawn(table[..], stack_b[..], eb) != 2 then ret 5
+    if sched.spawn(table[..], stack_c[..], ec) != 3 then ret 6
+    if sched.spawn(table[..], stack_c[..], ec) != 0 then ret 7
+    if sched.ready(table[..]) != 4 then ret 8
+    kept : u64 <- 77
+    rounds : u64 <- 0
+    while sched.ready(table[..]) > 1
+        sched.yield(ref sch, table[..])
+        kept <- kept + 1
+        rounds <- rounds + 1
+    end
+    if sch.cur != 0 then ret 9
+    if rounds != 4 then ret 10
+    if kept != 81 then ret 11
+    if nlog != 6 then ret 12
+    if log[0] != 1 then ret 13
+    if log[1] != 2 then ret 14
+    if log[2] != 3 then ret 15
+    if log[3] != 1 then ret 16
+    if log[4] != 3 then ret 17
+    if log[5] != 1 then ret 18
+    if sch.switches != 13 then ret 19
+    if sum_a != 1021 then ret 20
+    if table[1].state != sched.DONE then ret 21
+    -- a slot left DONE is taken again; the task yields five frames deep
+    if sched.spawn(table[..], stack_b[..], ed) != 1 then ret 22
+    sched.yield(ref sch, table[..])
+    if nlog != 6 then ret 23
+    sched.yield(ref sch, table[..])
+    if nlog != 7 then ret 24
+    if log[6] != 19 then ret 25
+    if sched.ready(table[..]) != 1 then ret 26
+    ret 42
+end
