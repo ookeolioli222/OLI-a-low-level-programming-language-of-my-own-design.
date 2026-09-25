@@ -58,6 +58,10 @@ layout Fld
     off : u64
     size : u64
     variant : u64
+    -- A bitfield (`name : T bits N`): `bitw` = N, 0 for a whole field, and
+    -- `bitsh` its lowest bit in the unit of T that starts at `off`.
+    bitw : u64
+    bitsh : u64
 end
 
 layout Val
@@ -466,11 +470,18 @@ proc field_align(pg: ref Prog, size: u64, explicit: u64, ispacked: u64) -> u64
 end
 
 proc resolve_layout(pg: ref Prog, idx: u64)
+    -- Fields in order, each at the next offset its alignment allows (ABI.md
+    -- §3). A bitfield `T bits N` goes at the bit after the last one when the
+    -- N bits fit in the aligned unit of T that holds it, else at the start
+    -- of the next unit — the SysV rule C compilers follow. A `union` lays
+    -- every field at offset 0.
     it := item_at(pg, idx)
     cx := mod_ctx(pg, it.mod)
     nd := node_at(cx, it.node)
-    ispacked := nd.sub
+    ispacked : u64 <- u64(nd.sub) & 1
+    isunion : u64 <- (u64(nd.sub) >> 1) & 1
     cursor : u64 <- 0
+    bitcur : u64 <- 0
     maxalign : u64 <- 1
     f : u64 <- 0
     while f < it.nfld
@@ -482,11 +493,44 @@ proc resolve_layout(pg: ref Prog, idx: u64)
         if al > maxalign
             maxalign <- al
         end
-        off := round_up(cursor, al)
         fr2 := fld_at(pg, it.first + f)
-        fr2.off <- off
         fr2.size <- sz
-        cursor <- off + sz
+        bw := u64(fn.sub)
+        if bw > 0
+            unit : u64 <- sz * 8
+            if unit == 0
+                unit <- 8
+            end
+            if isunion == 1
+                bitcur <- 0
+            end
+            if (bitcur % unit) + bw > unit
+                bitcur <- round_up(bitcur, unit)
+            end
+            ustart := bitcur - bitcur % unit
+            fr2.off <- ustart / 8
+            fr2.bitw <- bw
+            fr2.bitsh <- bitcur - ustart
+            bitcur <- bitcur + bw
+            if (bitcur + 7) / 8 > cursor
+                cursor <- (bitcur + 7) / 8
+            end
+        else
+            off : u64 <- 0
+            if isunion == 0
+                off <- round_up((bitcur + 7) / 8, al)
+                if cursor > off
+                    off <- round_up(cursor, al)
+                end
+            end
+            fr2.off <- off
+            if off + sz > cursor
+                cursor <- off + sz
+            end
+            if isunion == 0
+                bitcur <- (off + sz) * 8
+            end
+        end
         f <- f + 1
     end
     it2 := item_at(pg, idx)
@@ -584,6 +628,8 @@ proc add_fld(pg: rw ref Prog, mi: u64, node: u64, variant: u64)
     fr.off <- 0
     fr.size <- 0
     fr.variant <- variant
+    fr.bitw <- 0
+    fr.bitsh <- 0
     pg.nfld <- i + 1
 end
 
@@ -1435,11 +1481,164 @@ proc pragma_value(src: view u8, mark: view u8) -> view u8
     ret src[0..0]
 end
 
+proc profile_refuse(key: view u8, val: view u8, why: view u8)
+    -- A profile line this compiler cannot honour stops the compilation: a
+    -- key it does not know, or a value it would have to ignore.
+    permit os.syscall
+    put(2, "olic: profile: ")
+    put(2, key)
+    if val.len > 0
+        put(2, " = ")
+        put(2, val)
+    end
+    put(2, ": ")
+    put(2, why)
+    put(2, "\n")
+    os.syscall(60, 1)
+end
+
+proc profile_known(key: view u8) -> u64
+    -- The keys of FREESTANDING.md §2, each of which `apply_profile` either
+    -- applies or checks.
+    if view_eq(key, "arch")
+        ret 1
+    end
+    if view_eq(key, "os")
+        ret 1
+    end
+    if view_eq(key, "code_model")
+        ret 1
+    end
+    if view_eq(key, "load_address")
+        ret 1
+    end
+    if view_eq(key, "red_zone")
+        ret 1
+    end
+    if view_eq(key, "stack_probe")
+        ret 1
+    end
+    if view_eq(key, "entry")
+        ret 1
+    end
+    if view_eq(key, "sections")
+        ret 1
+    end
+    if view_eq(key, "align_sections")
+        ret 1
+    end
+    ret 0
+end
+
+proc profile_keys(txt: view u8)
+    -- Every line is blank, a `#` comment, the `[target]` header, or
+    -- `key = value` with a key of `profile_known`; anything else is refused
+    -- by name rather than skipped.
+    i : u64 <- 0
+    while i < txt.len
+        e : u64 <- i
+        while e < txt.len
+            if txt[e] == 10
+                break
+            end
+            e <- e + 1
+        end
+        s : u64 <- i
+        while s < e
+            if txt[s] == 32
+                s <- s + 1
+            elif txt[s] == 9
+                s <- s + 1
+            elif txt[s] == 13
+                s <- s + 1
+            else
+                break
+            end
+        end
+        if s < e
+            c := txt[s]
+            if c == 35
+                -- `#`: a comment
+                s <- e
+            elif c == 91
+                if view_eq(txt[s..e], "[target]") == 0
+                    profile_refuse(txt[s..e], txt[0..0], "only a [target] table is known")
+                end
+                s <- e
+            end
+        end
+        if s < e
+            k : u64 <- s
+            while k < e
+                kc := txt[k]
+                if kc == 32
+                    break
+                end
+                if kc == 61
+                    break
+                end
+                k <- k + 1
+            end
+            if profile_known(txt[s..k]) == 0
+                profile_refuse(txt[s..k], txt[0..0], "not a key of a target profile")
+            end
+            q : u64 <- k
+            while q < e
+                if txt[q] == 61
+                    break
+                end
+                q <- q + 1
+            end
+            if q == e
+                profile_refuse(txt[s..k], txt[0..0], "a key needs `= value`")
+            end
+        end
+        i <- e + 1
+    end
+end
+
+proc profile_check_entry(pg: ref Prog)
+    -- `entry = "module.name"` must name the procedure that carries `entry`,
+    -- the one the image starts at; a profile that says otherwise is refused.
+    permit os.syscall
+    if pg.hasprof == 0
+        ret
+    end
+    ev := profile_value(pg.profsrc, "entry")
+    if ev.len == 0
+        ret
+    end
+    want := unquoted(ev)
+    if pg.entrynode == 0
+        profile_refuse("entry", ev, "the program has no entry procedure")
+    end
+    cx := mod_ctx(pg, pg.entrymod)
+    root := node_at(cx, cx.root)
+    mn := mod_text(cx, root.t0, root.t1)
+    en := node_at(cx, pg.entrynode)
+    pn := tok_text(cx, en.t0)
+    ok : u64 <- 0
+    if want.len == mn.len + 1 + pn.len
+        if view_eq(want[0..mn.len], mn)
+            if want[mn.len] == 46
+                if view_eq(want[mn.len + 1..want.len], pn)
+                    ok <- 1
+                end
+            end
+        end
+    end
+    if ok == 0
+        profile_refuse("entry", ev, "the entry procedure of the program has another name")
+    end
+end
+
 proc apply_profile(pg: rw ref Prog, z: zone, src: view u8)
     -- `-- profile: PATH`: the target profile (FREESTANDING.md §2), a file
-    -- of `key = value` lines read like a module — its `load_address`,
-    -- `align_sections` and `sections` order apply; the other keys are
-    -- accepted and not needed yet.
+    -- of `key = value` lines read like a module. `arch`, `os`,
+    -- `load_address`, `align_sections` and `sections` apply; `code_model`,
+    -- `red_zone`, `stack_probe` and `entry` are checked against what the
+    -- compiler does — a value it could not honour is refused, and so is a
+    -- key it does not know.
     permit os.syscall
     path := pragma_value(src, "-- profile: ")
     if path.len == 0
@@ -1454,6 +1653,32 @@ proc apply_profile(pg: rw ref Prog, z: zone, src: view u8)
     end
     pg.profsrc <- txt
     pg.hasprof <- 1
+    profile_keys(txt)
+    -- The code is position-independent and within 2 GiB of itself: the
+    -- small model, and nothing else.
+    cm := profile_value(txt, "code_model")
+    if cm.len > 0
+        if view_eq(unquoted(cm), "small") == 0
+            profile_refuse("code_model", cm, "only \"small\" is generated")
+        end
+    end
+    -- No procedure writes below rsp, so a red zone is never relied on:
+    -- `false` and `true` (which only permits one) both hold.
+    rz := profile_value(txt, "red_zone")
+    if rz.len > 0
+        if view_eq(rz, "false") == 0
+            if view_eq(rz, "true") == 0
+                profile_refuse("red_zone", rz, "must be true or false")
+            end
+        end
+    end
+    -- Frames are not probed page by page.
+    sp := profile_value(txt, "stack_probe")
+    if sp.len > 0
+        if view_eq(sp, "false") == 0
+            profile_refuse("stack_probe", sp, "stack probes are not generated; only false holds")
+        end
+    end
     -- The backend writes x86-64 code for Linux or for no operating system;
     -- a profile that names anything else is refused, never compiled for
     -- x86-64 regardless.
@@ -1590,6 +1815,61 @@ proc clause_section(pg: ref Prog, mi: u64, node: u64) -> view u8
     ret b[0..0]
 end
 
+proc static_is_extern(pg: ref Prog, vi: u64) -> u64
+    -- 1 for `extern NAME : T`, a static place the linker resolves.
+    v := val_at(pg, vi)
+    if v.kind != 1
+        ret 0
+    end
+    cx := mod_ctx(pg, v.mod)
+    vn := node_at(cx, v.node)
+    if vn.val == 3
+        ret 1
+    end
+    ret 0
+end
+
+proc static_exported(pg: ref Prog, vi: u64) -> u64
+    -- 1 when a static carries `export`: C may name it, and a program that
+    -- links the object may hold its own copy, so the object reaches it
+    -- through the GOT like an `extern` one.
+    v := val_at(pg, vi)
+    cx := mod_ctx(pg, v.mod)
+    k : u64 <- kid1(cx, v.node)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_EXPORT
+                ret 1
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    ret 0
+end
+
+proc proc_align(pg: ref Prog, pi: u64) -> u64
+    -- The alignment of a procedure's first instruction: its `align N`
+    -- clause, or 1.
+    v := proc_at(pg, pi)
+    cx := mod_ctx(pg, v.mod)
+    al : u64 <- 1
+    k : u64 <- kid1(cx, v.node)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_ALIGN
+                c := node_at(cx, kid1(cx, k))
+                if c.val > al
+                    al <- c.val
+                end
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    ret al
+end
+
 proc proc_sect(pg: ref Prog, pi: u64) -> view u8
     -- The code section of a procedure: its clause, or `.text`.
     v := proc_at(pg, pi)
@@ -1684,5 +1964,6 @@ proc analyze(pg: rw ref Prog, z: zone, src: view u8)
         i <- i + 1
     end
     resolve_all(pg)
+    profile_check_entry(pg)
     check_items(pg)
 end

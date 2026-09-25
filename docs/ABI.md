@@ -58,6 +58,8 @@ does not promise for the upper bits — declare C-facing parameters as `s64`,
 - `packed`: no padding, alignment 1; accesses use unaligned moves (`ZERO` cost on x86-64, `CHECK`-free).
 - `align N` on a layout raises its alignment; `align N` on a field inserts padding before it.
 - `be T` / `le T` fields occupy exactly the bytes of `T` in that byte order.
+- A bitfield `name : T bits N` (T an integer type, 1 ≤ N ≤ the bits of T) takes N bits of the aligned unit of `T` that holds the next free bit: at that bit when the N bits fit in the unit, else at the start of the next unit — the SysV rule GCC and Clang follow, so a layout with bitfields is the C struct with the same declarations (`tests/c/bits_side.oli` compares the bytes). Bits are numbered from the least significant; a read shifts and masks (a signed field is sign-extended), a write keeps every other bit of the unit, and a value wider than the field traps `overflow`. A bitfield has no address of its own; it is E0900 in a `packed` layout and in a `choice` payload, E0212 when N exceeds the bits of T (stage 52).
+- `layout Name union` lays every field at offset 0: the size is the largest field's, rounded up to the largest alignment — a C `union`. A literal of it names exactly one field (E0208 otherwise).
 - `bool` is one byte holding 0 or 1. `choice` tags are the smallest unsigned integer that fits the variant count; a variant's tag is its number in declaration order, from 0. A choice whose image fits eight bytes travels in a register as that image (the tag in the low byte, each field at its offset); a wider one is held by its address and passed and returned like a layout of its size (the pair up to sixteen bytes, `sret` beyond). This is what `olic` does today.
 - `view T` is `{ addr: u64, len: u64 }` in memory; `zone` is `{ base, cursor, limit: u64 }`.
 
@@ -70,6 +72,8 @@ does not promise for the upper bits — declare C-facing parameters as `s64`,
 | `export` clause | the procedure's bare name, e.g. `f`; `export "name"` chooses the name |
 | `entry` clause | the symbol placed in `e_entry` |
 | static places/bindings | `a.b.name`, in `.data`, `.bss` or `.rodata` (or the `section` clause) |
+| `export` on a static | a second `STB_GLOBAL` `STT_OBJECT` symbol, the bare name or `export "name"` |
+| `extern NAME : T` | `NAME`, undefined and global; object files only |
 
 Dots are legal in ELF symbol names; no mangling scheme is needed until generics (V1),
 which will append a stable hash of the instantiation arguments.
@@ -82,6 +86,20 @@ trap routine as `olic.trap` — and eight section headers (`.rodata`, `.text`,
 `.data`, `.bss`, `.symtab`, `.strtab`, `.shstrtab`), so `nm`, `readelf -S`,
 `objdump -d` and `gdb` read it as it is. The tables follow the loaded image
 and are not mapped.
+
+Implemented (stage 52, 2026-09-25): in an object file every code group (`.text`,
+each `section` a procedure names, `.text.trap`) and every zero-static group
+(`.bss`, each `section` a zero static names) is an ELF section of its own,
+with a `.rela` section per code group and an `STT_SECTION` symbol per section;
+a call, branch or address that crosses from one group into another is a
+relocation (`PC32`/`PLT32`, on AArch64 `CALL26`/`ADR_PREL_*`), so a linker
+script places each group by its name (`tests/c/sect.ld`). `align N` on a
+procedure or a static becomes its section's alignment (and in an executable
+puts the procedure's first instruction on the boundary, padded with `int3`,
+or `nop` on AArch64). An `extern` static, and an exported one, is reached
+through the GOT — `R_X86_64_REX_GOTPCRELX`, on AArch64
+`ADR_GOT_PAGE`/`LD64_GOT_LO12_NC` — so the object links into an executable, a
+PIE and a shared library without text relocations (`tests/c/global_side.oli`).
 
 ## 4a. AArch64 (`arch = "aarch64"`, stage 43)
 

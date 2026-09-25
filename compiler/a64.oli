@@ -602,6 +602,15 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_DADDR
         d := dat_at(ob, ins.a)
+        if d.got == 1
+            -- `extern NAME : T` or an exported static of an object file: `adrp x9, :got:NAME; ldr x9, [x9,
+            -- :got_lo12:NAME]` — the address from the GOT.
+            add_fix(mc, ob.ncode, AF_GOT, ins.a)
+            aw(ob, 2415919104 | 9)
+            aw(ob, 4181721088 | (9 << 5) | 9)
+            a_st(ob, mc, 9, i)
+            ret
+        end
         add_fix(mc, ob.ncode, AF_ADRP, d.off)
         aw(ob, 2415919104 | 9)
         aw(ob, 2432696320 | (9 << 5) | 9)
@@ -1660,6 +1669,48 @@ proc a_rel(target: u64, here: u64, nb: u64) -> u64
     ret ((one << nb) - ((here - target) >> 2)) & mask
 end
 
+proc a_pad_proc(pg: ref Prog, ob: rw ref Oir, gstart: u64, database: u64, al: u64)
+    -- `align N` on a procedure: `nop` words until its first instruction is
+    -- on the boundary (the code is always on four bytes).
+    if al <= 4
+        ret
+    end
+    if pg.objmode == 1
+        while (ob.ncode - gstart) % al != 0
+            aw(ob, 3573751839)
+        end
+        ret
+    end
+    while (database + ob.ndata + ob.ncode) % al != 0
+        aw(ob, 3573751839)
+    end
+end
+
+proc a_cross_group(ob: ref Oir, mc: ref Mach, f: ref Fix) -> u64
+    -- 1 when a call (`bl`), a branch to the trap routine or an `adr` of a
+    -- procedure leaves the code section group it is in: in an object file
+    -- the linker fills it (compiler/elf.oli a64_build_rela).
+    t : u64 <- 0
+    if f.kind == AF_CALL
+        op := oproc_at(ob, f.target)
+        if op.isextern == 1
+            ret 0
+        end
+        t <- op.codepos
+    elif f.kind == AF_TRAP
+        t <- mc.trappos
+    elif f.kind == AF_PADR
+        op2 := oproc_at(ob, f.target)
+        t <- op2.codepos
+    else
+        ret 0
+    end
+    if code_group_of(ob, f.pos) != code_group_of(ob, t)
+        ret 1
+    end
+    ret 0
+end
+
 proc a_apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
     codebase := database + ob.ndata
     i : u64 <- 0
@@ -1680,6 +1731,11 @@ proc a_apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
                 if opx.isextern == 1
                     skip <- 1
                 end
+            end
+        end
+        if mc.objmode == 1
+            if a_cross_group(ob, mc, f) == 1
+                skip <- 1
             end
         end
         if skip == 1
@@ -2029,6 +2085,7 @@ proc a64_lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u
                 if opq.isextern == 0
                     if view_eq(proc_sect(pg, opq.pi), sect_name(ob, g))
                         opq.sect <- g
+                        a_pad_proc(pg, ob, sg.start, database, proc_align(pg, opq.pi))
                         a_proc(pg, ob, mc, q)
                         opq.codeend <- ob.ncode
                     end

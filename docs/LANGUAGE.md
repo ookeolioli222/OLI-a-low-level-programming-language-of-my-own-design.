@@ -335,6 +335,28 @@ layout GdtPointer packed
 end                     -- size 10, align 1
 ```
 
+A bitfield `name : T bits N` packs N bits into the aligned unit of the
+integer type `T`, after the previous bitfield when they fit and at the next
+unit otherwise — C's SysV layout; `layout Name union` puts every field at
+offset 0 (`docs/ABI.md` §3, stage 52):
+
+```oli
+layout Pte
+    present : u64 bits 1   -- bit 0
+    writable : u64 bits 1  -- bit 1
+    pad : u64 bits 10      -- bits 2..11
+    frame : u64 bits 40    -- bits 12..51
+end                        -- size 8, align 8
+
+layout Word union
+    raw : u64
+    byte0 : u8             -- the low byte of raw
+end                        -- size 8
+```
+
+A write of a value wider than the field traps `overflow`; a bitfield has no
+address (`ref p.frame` is refused).
+
 `Name.size`, `Name.align`, `Name.field.offset` and `Name.field.size` are
 compile-time constants; `Name.at(v)` makes a
 `ref Name` from a `view u8`, trapping when the view is too short or misaligned.

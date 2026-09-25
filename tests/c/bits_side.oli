@@ -1,0 +1,78 @@
+-- output: object
+module bits_side
+-- The Oli-- half of the bitfield and union ABI check: tests/c/bits_main.c
+-- declares the same records in C, lets each side write them, and compares
+-- the bytes - GCC's layout and olic's must be one.
+layout Pte
+    present : u64 bits 1
+    writable : u64 bits 1
+    user : u64 bits 1
+    pad : u64 bits 9
+    frame : u64 bits 40
+    avail : u64 bits 11
+    nx : u64 bits 1
+end
+
+layout Mixed
+    a : u8
+    b : u32 bits 3
+    c : s32 bits 5
+    d : u32 bits 30
+    e : u16
+    f : s8 bits 4
+end
+
+layout Word union
+    raw : u64
+    half : u32
+    byte0 : u8
+end
+
+layout Reg union
+    all : u32
+    lo : u32 bits 16
+end
+
+INIT : Pte := Pte { present: 1, writable: 0, user: 1, pad: 0, frame: 0x12345, avail: 0, nx: 1 }
+
+pub proc oli_pte(p : rw ref Pte, frame : u64) -> u64
+    export "oli_pte"
+    p.present <- 1
+    p.writable <- 1
+    p.frame <- frame
+    p.nx <- 1
+    ret p.frame + p.user
+end
+
+pub proc oli_mixed(m : rw ref Mixed) -> s64
+    export "oli_mixed"
+    m.a <- 0xAA
+    m.b <- 5
+    m.c <- -3
+    m.d <- 0x2ABCDEF1
+    m.e <- 0xBEEF
+    m.f <- -8
+    ret s64(m.c) * 100 + s64(m.f)
+end
+
+pub proc oli_sizes() -> u64
+    export "oli_sizes"
+    ret Pte.size * 1000000 + Mixed.size * 10000 + Word.size * 100 + Reg.size
+end
+
+pub proc oli_union(x : u64) -> u64
+    export "oli_union"
+    w : Word <- Word { raw: x }
+    r : Reg <- Reg { all: 0xDEADBEEF }
+    ret u64(w.byte0) + u64(w.half) + u64(r.lo)
+end
+
+pub proc oli_init() -> u64
+    export "oli_init"
+    ret INIT.frame * 10 + INIT.nx + INIT.present + INIT.user
+end
+
+pub proc oli_overflow(p : rw ref Pte, v : u64)
+    export "oli_overflow"
+    p.user <- v
+end

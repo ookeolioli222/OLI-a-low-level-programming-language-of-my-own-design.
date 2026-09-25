@@ -383,6 +383,10 @@ proc word_operand(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64, o: rw ref Opnd)
         di := data_of(ob, u64.bits(vi))
         if di >= 0
             d := dat_at(ob, u64.bits(di))
+            if d.ext == 1
+                -- an `extern` static has no address of this image's
+                ret 0
+            end
             o.kind <- OK_STATIC
             o.sym <- d.off
             o.ro <- 0
@@ -474,6 +478,9 @@ proc mem_operand(pg: ref Prog, ob: rw ref Oir, mi: u64, n: u64, o: rw ref Opnd) 
                 di := data_of(ob, u64.bits(vi))
                 if di >= 0
                     d := dat_at(ob, u64.bits(di))
+                    if d.ext == 1
+                        ret 0
+                    end
                     o.sym <- d.off
                 else
                     ri := rodata_of(ob, u64.bits(vi))

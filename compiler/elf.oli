@@ -118,6 +118,21 @@ layout Elfw
     bssadj : u64
     secidx : rw view u8
     datasec : u64
+    -- 1 in an object file: a symbol's value is its offset in its section.
+    objrel : u64
+end
+
+proc code_value(ob: ref Oir, w: ref Elfw, g: u64, pos: u64) -> u64
+    -- The value of a symbol at code offset `pos` of group `g`: its address
+    -- in an executable, its offset in the group's section in an object.
+    if w.objrel == 1
+        if g < ob.nsect
+            s := sect_at(ob, g)
+            ret pos - s.start
+        end
+        ret pos
+    end
+    ret w.base + w.textoff + pos
 end
 
 proc str_put(w: rw ref Elfw, s: view u8)
@@ -190,16 +205,16 @@ proc sym_procs(pg: ref Prog, ob: ref Oir, w: rw ref Elfw, want_pub: u64)
         end
         if ispub == want_pub
             off := qualified(pg, w, v.mod, tok_text(cx, nd.t0))
-            add_sym(w, off, 2 + want_pub * 16, cell_get(w.secidx, op.sect), w.base + w.textoff + op.codepos, op.codeend - op.codepos)
+            add_sym(w, off, 2 + want_pub * 16, cell_get(w.secidx, op.sect), code_value(ob, w, op.sect, op.codepos), op.codeend - op.codepos)
         end
         if want_pub == 1
-            sym_export(pg, w, op)
+            sym_export(pg, ob, w, op)
         end
         q <- q + 1
     end
 end
 
-proc sym_export(pg: ref Prog, w: rw ref Elfw, op: ref OProc)
+proc sym_export(pg: ref Prog, ob: ref Oir, w: rw ref Elfw, op: ref OProc)
     -- An `export` clause: a second, global symbol at the same address — the
     -- bare name, or the string the clause gives.
     v := proc_at(pg, op.pi)
@@ -225,11 +240,49 @@ proc sym_export(pg: ref Prog, w: rw ref Elfw, op: ref OProc)
                     end
                 end
                 str_term(w)
-                add_sym(w, off, 18, cell_get(w.secidx, op.sect), w.base + w.textoff + op.codepos, op.codeend - op.codepos)
+                add_sym(w, off, 18, cell_get(w.secidx, op.sect), code_value(ob, w, op.sect, op.codepos), op.codeend - op.codepos)
             end
         end
         k <- sibling(cx, k)
     end
+end
+
+proc export_alias(pg: ref Prog, w: rw ref Elfw, vi: u64, shndx: u64, value: u64, sz: u64) -> u64
+    -- An `export` clause on static `vi`: a second, global `STT_OBJECT`
+    -- symbol at the same place, under the bare name or the string the
+    -- clause gives; its index, 0 without the clause.
+    v := val_at(pg, vi)
+    node := v.node
+    cx := mod_ctx(pg, v.mod)
+    nd := node_at(cx, node)
+    k : u64 <- kid1(cx, node)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_EXPORT
+                off := w.nstr
+                sk := kid1(cx, k)
+                if sk == 0
+                    str_put(w, tok_text(cx, nd.t0))
+                else
+                    sn := node_at(cx, sk)
+                    st := tok_text(cx, sn.t0)
+                    if st.len >= 2
+                        se := st.len - 1
+                        str_put(w, st[1..se])
+                    else
+                        str_put(w, st)
+                    end
+                end
+                str_term(w)
+                idx := w.nsym
+                add_sym(w, off, 17, shndx, value, sz)
+                ret idx
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    ret 0
 end
 
 proc sym_trap(ob: ref Oir, mc: ref Mach, w: rw ref Elfw)
@@ -242,10 +295,12 @@ proc sym_trap(ob: ref Oir, mc: ref Mach, w: rw ref Elfw)
     str_term(w)
     tg := sect_find(ob, ".text.trap", 0)
     ts : u64 <- 2
+    tgi : u64 <- SECT_MAX
     if tg >= 0
-        ts <- cell_get(w.secidx, u64.bits(tg))
+        tgi <- u64.bits(tg)
+        ts <- cell_get(w.secidx, tgi)
     end
-    add_sym(w, off, 2, ts, w.base + w.textoff + mc.trappos, ob.ncode - mc.trappos)
+    add_sym(w, off, 2, ts, code_value(ob, w, tgi, mc.trappos), ob.ncode - mc.trappos)
 end
 
 proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
@@ -254,17 +309,31 @@ proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
     k : u64 <- 0
     while k < ob.ndat
         d := dat_at(ob, k)
+        if d.ext == 1
+            -- an `extern` static is `sym_externs`'s, undefined
+            k <- k + 1
+            continue
+        end
         v := val_at(pg, d.val)
         cx := mod_ctx(pg, v.mod)
         vn := node_at(cx, v.node)
         off := qualified(pg, w, v.mod, tok_text(cx, vn.t0))
         sh : u64 <- cell_get(w.secidx, d.sect)
         adj : u64 <- w.bssadj
+        if w.objrel == 1
+            -- An object file: the offset in the zero group's own section.
+            ds := sect_at(ob, d.sect)
+            adj <- ds.start
+        end
         if d.init == 1
             sh <- w.datasec
             adj <- 0
         end
         add_sym(w, off, 17, sh, w.base + w.dofs + d.off - adj, d.size)
+        ai := export_alias(pg, w, d.val, sh, w.base + w.dofs + d.off - adj, d.size)
+        if d.ext == 0
+            d.symidx <- ai
+        end
         k <- k + 1
     end
     vi : u64 <- 0
@@ -279,6 +348,7 @@ proc sym_statics(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
             vn2 := node_at(cx2, v2.node)
             off2 := qualified(pg, w, v2.mod, tok_text(cx2, vn2.t0))
             add_sym(w, off2, 17, 1, w.base + w.rodoff + st.off, st.len)
+            _ai := export_alias(pg, w, vi, 1, w.base + w.rodoff + st.off, st.len)
         end
         vi <- vi + 1
     end
@@ -614,11 +684,14 @@ proc dbg_types(pg: ref Prog, d: rw ref Dbg, off: u64) -> u64
                 fcx := mod_ctx(pg, fr.mod)
                 fn := node_at(fcx, fr.node)
                 tn := node_at(fcx, kid1(fcx, fr.node))
-                if tn.t1 == tn.t0 + 1
-                    fb := dv_base(tok_text(fcx, tn.t0))
-                    if fb >= 0
-                        mo := db_member(b, o, tok_text(fcx, fn.t0), cell_get(d.tys, u64.bits(fb)))
-                        o <- db_data8(b, mo, fr.off)
+                -- A bitfield has no byte of its own to name: left out.
+                if fr.bitw == 0
+                    if tn.t1 == tn.t0 + 1
+                        fb := dv_base(tok_text(fcx, tn.t0))
+                        if fb >= 0
+                            mo := db_member(b, o, tok_text(fcx, fn.t0), cell_get(d.tys, u64.bits(fb)))
+                            o <- db_data8(b, mo, fr.off)
+                        end
                     end
                 end
                 f <- f + 1
@@ -956,6 +1029,7 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     w.textoff <- hs + ob.ndata
     w.hasdata <- 0
     w.bssadj <- 0
+    w.objrel <- 0
     w.dofs <- total
     if ob.dsize + ob.bsize > 0
         w.hasdata <- 1
@@ -1108,12 +1182,12 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
             shdr_kind(sh, si, cell_get(nameoff, g), 1, 6)
             shdr_place(sh, si, ob.base + w.textoff + sg5.start, w.textoff + sg5.start, sg5.size)
             shdr_link(sh, si, 0, 0)
-            shdr_align(sh, si, pg.sectalign, 0)
+            shdr_align(sh, si, max_u(pg.sectalign, code_align(pg, ob, g, 1)), 0)
         else
             shdr_kind(sh, si, cell_get(nameoff, g), 8, 3)
             shdr_place(sh, si, ob.base + w.dofs + sg5.start, w.dofs + ob.dsize, sg5.size)
             shdr_link(sh, si, 0, 0)
-            shdr_align(sh, si, 8, 0)
+            shdr_align(sh, si, data_align(pg, ob, g), 0)
         end
         g <- g + 1
     end
@@ -1124,7 +1198,7 @@ proc write_elf(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
         shdr_place(sh, w.datasec, 0, total, 0)
     end
     shdr_link(sh, w.datasec, 0, 0)
-    shdr_align(sh, w.datasec, 8, 0)
+    shdr_align(sh, w.datasec, data_align(pg, ob, SECT_MAX), 0)
     shdr_kind(sh, symsec, nsym, 2, 0)
     shdr_place(sh, symsec, 0, symoff, w.nsym * SYM_SIZE)
     shdr_link(sh, symsec, symsec + 1, nlocal)
@@ -1161,16 +1235,77 @@ end
 -- symbol under its bare name. The entry procedure, when there is one, is
 -- also `_start`, for `ld` without a C runtime.
 
-NSECT_OBJ := 9
-SHSTR_OBJ := 63
 RELA_SIZE := 24
 RELA_MAX := 262144
 
-proc sym_sections(w: rw ref Elfw)
-    -- `STT_SECTION` symbols 1..4 for `.rodata`, `.text`, `.data`, `.bss`:
-    -- what the relocations of the object refer to.
+proc max_u(a: u64, b: u64) -> u64
+    if a > b
+        ret a
+    end
+    ret b
+end
+
+proc code_align(pg: ref Prog, ob: ref Oir, g: u64, least: u64) -> u64
+    -- The alignment a code group's section needs: `least`, raised by the
+    -- `align N` of every procedure in it.
+    al : u64 <- least
+    q : u64 <- 0
+    while q < ob.nproc
+        op := oproc_at(ob, q)
+        if op.isextern == 0
+            if op.sect == g
+                al <- max_u(al, proc_align(pg, op.pi))
+            end
+        end
+        q <- q + 1
+    end
+    ret al
+end
+
+proc data_align(pg: ref Prog, ob: ref Oir, g: u64) -> u64
+    -- The alignment of `.data` (`g` = SECT_MAX) or of a zero group: eight,
+    -- raised by the alignment of every static in it.
+    al : u64 <- 8
+    k : u64 <- 0
+    while k < ob.ndat
+        d := dat_at(ob, k)
+        mine : u64 <- 0
+        if g == SECT_MAX
+            if d.init == 1
+                mine <- 1
+            end
+        elif d.init == 0
+            if d.sect == g
+                mine <- 1
+            end
+        end
+        if d.ext == 1
+            mine <- 0
+        end
+        if mine == 1
+            al <- max_u(al, static_align(pg, d.val, d.size))
+        end
+        k <- k + 1
+    end
+    ret al
+end
+
+proc rodata_align(ob: ref Oir) -> u64
+    al : u64 <- 8
+    i : u64 <- 0
+    while i < ob.nstat
+        st := stat_at(ob, i)
+        al <- max_u(al, st.alg)
+        i <- i + 1
+    end
+    ret al
+end
+
+proc sym_sections(w: rw ref Elfw, nimg: u64)
+    -- An `STT_SECTION` symbol for every section of the image, symbol k for
+    -- section k: what the relocations of the object refer to.
     k : u64 <- 1
-    while k <= 4
+    while k <= nimg
         add_sym(w, 0, 3, k, 0, 0)
         k <- k + 1
     end
@@ -1194,6 +1329,22 @@ proc sym_externs(pg: ref Prog, ob: ref Oir, w: rw ref Elfw)
         end
         q <- q + 1
     end
+    -- Every `extern NAME : T`: global, undefined, under its bare name.
+    k : u64 <- 0
+    while k < ob.ndat
+        d := dat_at(ob, k)
+        if d.ext == 1
+            v2 := val_at(pg, d.val)
+            cx2 := mod_ctx(pg, v2.mod)
+            vn2 := node_at(cx2, v2.node)
+            off2 := w.nstr
+            str_put(w, tok_text(cx2, vn2.t0))
+            str_term(w)
+            d.symidx <- w.nsym
+            add_sym(w, off2, 16, 0, 0, 0)
+        end
+        k <- k + 1
+    end
 end
 
 proc sym_start(pg: ref Prog, ob: ref Oir, mc: ref Mach, w: rw ref Elfw)
@@ -1203,7 +1354,8 @@ proc sym_start(pg: ref Prog, ob: ref Oir, mc: ref Mach, w: rw ref Elfw)
     off := w.nstr
     str_put(w, "_start")
     str_term(w)
-    add_sym(w, off, 18, 2, mc.entrypos, 0)
+    g := code_group_of(ob, mc.entrypos)
+    add_sym(w, off, 18, cell_get(w.secidx, g), code_value(ob, w, g, mc.entrypos), 0)
 end
 
 proc put_rela(b: rw view u8, n: u64, pos: u64, info: u64, addend: u64)
@@ -1213,11 +1365,56 @@ proc put_rela(b: rw view u8, n: u64, pos: u64, info: u64, addend: u64)
     put_u64v(b, o + 16, addend)
 end
 
-proc a64_build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
+proc get_u64v(b: view u8, off: u64) -> u64
+    v : u64 <- 0
+    i : u64 <- 8
+    while i > 0
+        i <- i - 1
+        v <- (v << 8) | u64(b[off + i])
+    end
+    ret v
+end
+
+proc code_target(ob: ref Oir, w: ref Elfw, pos: u64) -> u64
+    -- The section symbol of the code group `pos` lies in.
+    ret cell_get(w.secidx, code_group_of(ob, pos))
+end
+
+proc code_off(ob: ref Oir, pos: u64) -> u64
+    -- `pos` as an offset of its code group's section.
+    g := code_group_of(ob, pos)
+    if g < ob.nsect
+        s := sect_at(ob, g)
+        ret pos - s.start
+    end
+    ret pos
+end
+
+proc data_target(ob: ref Oir, w: ref Elfw, off: u64) -> u64
+    -- The section symbol of what an offset of the writable segment names:
+    -- `.data` below `dsize`, else the zero group that holds it.
+    g := data_group_of(ob, off)
+    if g == SECT_MAX
+        ret w.datasec
+    end
+    ret cell_get(w.secidx, g)
+end
+
+proc data_off(ob: ref Oir, off: u64) -> u64
+    g := data_group_of(ob, off)
+    if g == SECT_MAX
+        ret off
+    end
+    s := sect_at(ob, g)
+    ret off - s.start
+end
+
+proc a64_build_rela(ob: ref Oir, mc: ref Mach, w: ref Elfw, rb: rw view u8) -> u64
     -- The AArch64 object's relocations (ELF for the Arm 64-bit
     -- Architecture): R_AARCH64_CALL26 (283) for a call to an `extern`
-    -- procedure, R_AARCH64_ADR_PREL_LO21 (274) for an `adr` into .rodata,
-    -- and for an `adrp`+`add` into .data or .bss the pair
+    -- procedure or into another code section, R_AARCH64_ADR_PREL_LO21 (274)
+    -- for an `adr` into .rodata or of a procedure in another code section,
+    -- and for an `adrp`+`add` into .data or a zero group the pair
     -- R_AARCH64_ADR_PREL_PG_HI21 (275) and R_AARCH64_ADD_ABS_LO12_NC (277).
     permit os.syscall
     n : u64 <- 0
@@ -1233,17 +1430,34 @@ proc a64_build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
             if opc.isextern == 1
                 put_rela(rb, n, f.pos, opc.symidx * 4294967296 + 283, 0)
                 n <- n + 1
+            elif a_cross_group(ob, mc, f) == 1
+                put_rela(rb, n, f.pos, code_target(ob, w, opc.codepos) * 4294967296 + 283, code_off(ob, opc.codepos))
+                n <- n + 1
+            end
+        elif f.kind == AF_TRAP
+            if a_cross_group(ob, mc, f) == 1
+                put_rela(rb, n, f.pos, code_target(ob, w, mc.trappos) * 4294967296 + 283, code_off(ob, mc.trappos))
+                n <- n + 1
+            end
+        elif f.kind == AF_PADR
+            if a_cross_group(ob, mc, f) == 1
+                opp := oproc_at(ob, f.target)
+                put_rela(rb, n, f.pos, code_target(ob, w, opp.codepos) * 4294967296 + 274, code_off(ob, opp.codepos))
+                n <- n + 1
             end
         elif f.kind == AF_ADR
             put_rela(rb, n, f.pos, 4294967296 + 274, f.target)
             n <- n + 1
+        elif f.kind == AF_GOT
+            -- `extern NAME : T`: R_AARCH64_ADR_GOT_PAGE (311) and
+            -- R_AARCH64_LD64_GOT_LO12_NC (312) against its symbol.
+            dg := dat_at(ob, f.target)
+            put_rela(rb, n, f.pos, dg.symidx * 4294967296 + 311, 0)
+            put_rela(rb, n + 1, f.pos + 4, dg.symidx * 4294967296 + 312, 0)
+            n <- n + 2
         elif f.kind == AF_ADRP
-            sym : u64 <- 3
-            off : u64 <- f.target
-            if f.target >= ob.dsize
-                sym <- 4
-                off <- f.target - ob.dsize
-            end
+            sym := data_target(ob, w, f.target)
+            off := data_off(ob, f.target)
             put_rela(rb, n, f.pos, sym * 4294967296 + 275, off)
             put_rela(rb, n + 1, f.pos + 4, sym * 4294967296 + 277, off)
             n <- n + 2
@@ -1253,12 +1467,14 @@ proc a64_build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
     ret n
 end
 
-proc build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
+proc build_rela(ob: ref Oir, mc: ref Mach, w: ref Elfw, rb: rw view u8) -> u64
     -- The relocations, from the fixes the executable would have patched:
-    -- `r_info` is the symbol index shifted by 32 over the type.
+    -- `r_info` is the symbol index shifted by 32 over the type. `r_offset`
+    -- is still an offset of the whole code here; `write_object` hands each
+    -- entry to the `.rela` section of its code group.
     permit os.syscall
     if mc.a64 == 1
-        ret a64_build_rela(ob, mc, rb)
+        ret a64_build_rela(ob, mc, w, rb)
     end
     n : u64 <- 0
     i : u64 <- 0
@@ -1275,34 +1491,51 @@ proc build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
             put_rela(rb, n, f.pos, 4294967296 + 11, f.target)
             n <- n + 1
         elif f.kind == 5
+            -- the absolute address of a procedure: R_X86_64_64 against the
+            -- section of its code group.
             op5 := oproc_at(ob, f.target)
-            put_rela(rb, n, f.pos, 2 * 4294967296 + 1, op5.codepos)
+            put_rela(rb, n, f.pos, code_target(ob, w, op5.codepos) * 4294967296 + 1, code_off(ob, op5.codepos))
             n <- n + 1
         elif f.kind == 10
             -- `lea r, [rip + .rodata + off]`: PC32 against .rodata.
             put_rela(rb, n, f.pos, 4294967296 + 2, pc_addend(f.target))
             n <- n + 1
         elif f.kind == 11
-            data_rela(ob, rb, n, f)
+            data_rela(ob, w, rb, n, f)
+            n <- n + 1
+        elif f.kind == 12
+            -- `extern NAME : T`: R_X86_64_REX_GOTPCRELX (42) against its
+            -- undefined symbol, less the four bytes of the displacement.
+            dx := dat_at(ob, f.target)
+            put_rela(rb, n, f.pos, dx.symidx * 4294967296 + 42, 18446744073709551612)
             n <- n + 1
         elif f.kind == 9
-            -- `addr32` of a procedure: `R_X86_64_32` against .text.
+            -- `addr32` of a procedure: `R_X86_64_32` against its section.
             op9 := oproc_at(ob, f.target)
-            put_rela(rb, n, f.pos, 2 * 4294967296 + 10, op9.codepos)
+            put_rela(rb, n, f.pos, code_target(ob, w, op9.codepos) * 4294967296 + 10, code_off(ob, op9.codepos))
             n <- n + 1
         elif f.kind == 4
-            data_rela(ob, rb, n, f)
+            data_rela(ob, w, rb, n, f)
             n <- n + 1
         elif f.kind == 6
-            data_rela(ob, rb, n, f)
+            data_rela(ob, w, rb, n, f)
             n <- n + 1
         elif f.kind == 7
-            data_rela(ob, rb, n, f)
+            data_rela(ob, w, rb, n, f)
             n <- n + 1
         elif f.kind == 0
             op0 := oproc_at(ob, f.target)
             if op0.isextern == 1
                 put_rela(rb, n, f.pos, op0.symidx * 4294967296 + 4, 18446744073709551612)
+                n <- n + 1
+            elif cross_group(ob, mc, f) == 1
+                -- a call into another code section: PC32 against it.
+                put_rela(rb, n, f.pos, code_target(ob, w, op0.codepos) * 4294967296 + 2, pc_addend(code_off(ob, op0.codepos)))
+                n <- n + 1
+            end
+        elif f.kind == 3
+            if cross_group(ob, mc, f) == 1
+                put_rela(rb, n, f.pos, code_target(ob, w, mc.trappos) * 4294967296 + 2, pc_addend(code_off(ob, mc.trappos)))
                 n <- n + 1
             end
         end
@@ -1311,20 +1544,17 @@ proc build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
     ret n
 end
 
-proc data_rela(ob: ref Oir, rb: rw view u8, n: u64, f: ref Fix)
-    -- An address in the writable segment: `.data` below `dsize`, `.bss`
-    -- from there on, each from its own start; an imm64 (kinds 4 and 6) is
-    -- `R_X86_64_64`, a disp32 (kind 7) `R_X86_64_32S`.
+proc data_rela(ob: ref Oir, w: ref Elfw, rb: rw view u8, n: u64, f: ref Fix)
+    -- An address in the writable segment, against the section symbol of
+    -- `.data` or of the zero group that holds it, from that section's
+    -- start; an imm64 (kinds 4 and 6) is `R_X86_64_64`, a disp32 (kind 7)
+    -- `R_X86_64_32S`.
     kind : u64 <- 1
     if f.kind == 7
         kind <- 11
     end
-    off : u64 <- f.target
-    sym : u64 <- 3
-    if f.target >= ob.dsize
-        off <- f.target - ob.dsize
-        sym <- 4
-    end
+    off := data_off(ob, f.target)
+    sym := data_target(ob, w, f.target)
     if f.kind == 11
         -- rip-relative (`lea r, [rip + …]`): PC32, the addend less the four
         -- bytes of the displacement itself.
@@ -1342,7 +1572,7 @@ proc pc_addend(off: u64) -> u64
     ret 18446744073709551612 + off
 end
 
-proc obj_header(b: rw view u8, shoff: u64)
+proc obj_header(b: rw view u8, shoff: u64, nsect: u64, shstrndx: u64)
     i : u64 <- 0
     while i < b.len
         b[i] <- 0
@@ -1361,11 +1591,29 @@ proc obj_header(b: rw view u8, shoff: u64)
     put_u64v(b, 40, shoff)
     put_u16(b, 52, EHDR_SIZE)
     put_u16(b, 58, SHDR_SIZE)
-    put_u16(b, 60, NSECT_OBJ)
-    put_u16(b, 62, 7)
+    put_u16(b, 60, nsect)
+    put_u16(b, 62, shstrndx)
+end
+
+proc rela_count(ob: ref Oir, rb: view u8, nrela: u64, g: u64) -> u64
+    -- How many relocations fall in code group `g`.
+    c : u64 <- 0
+    j : u64 <- 0
+    while j < nrela
+        if code_group_of(ob, get_u64v(rb, j * RELA_SIZE)) == g
+            c <- c + 1
+        end
+        j <- j + 1
+    end
+    ret c
 end
 
 proc write_object(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
+    -- The sections: null, .rodata, one per code group (`.text`, every
+    -- `section` a procedure names, `.text.trap`), .data, one per zero
+    -- group (`.bss` and every `section` a zero static names), .symtab,
+    -- .strtab, .shstrtab, then a `.rela` section for each code group —
+    -- so a linker script places each group by its own name.
     w := z.make(Elfw)
     w.symtab <- z.bytes(SYMTAB_MAX * SYM_SIZE)
     w.strtab <- z.bytes(STRTAB_MAX)
@@ -1385,19 +1633,33 @@ proc write_object(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     w.dofs <- 0
     w.hasdata <- 1
     w.bssadj <- ob.dsize
+    w.objrel <- 1
     w.secidx <- z.bytes(SECT_MAX * Cell.size)
-    w.datasec <- 3
-    og : u64 <- 0
-    while og < ob.nsect
-        osg := sect_at(ob, og)
-        if osg.kind == 0
-            cell_set(w.secidx, og, 2)
-        else
-            cell_set(w.secidx, og, 4)
+    ncode : u64 <- 0
+    nbss : u64 <- 0
+    g : u64 <- 0
+    while g < ob.nsect
+        sg := sect_at(ob, g)
+        if sg.kind == 0
+            cell_set(w.secidx, g, 2 + ncode)
+            ncode <- ncode + 1
         end
-        og <- og + 1
+        g <- g + 1
     end
-    sym_sections(w)
+    w.datasec <- 2 + ncode
+    g <- 0
+    while g < ob.nsect
+        sg2 := sect_at(ob, g)
+        if sg2.kind == 1
+            cell_set(w.secidx, g, w.datasec + 1 + nbss)
+            nbss <- nbss + 1
+        end
+        g <- g + 1
+    end
+    nimg := w.datasec + nbss
+    symsec := nimg + 1
+    nsect := symsec + 3 + ncode
+    sym_sections(w, nimg)
     sym_procs(pg, ob, w, 0)
     sym_trap(ob, mc, w)
     nlocal := w.nsym
@@ -1406,8 +1668,72 @@ proc write_object(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     sym_start(pg, ob, mc, w)
     sym_externs(pg, ob, w)
     rb := z.bytes(RELA_MAX * RELA_SIZE)
-    nrela := build_rela(ob, mc, rb)
-    -- File: header, .rodata, .text, .data, then the tables, each on an
+    nrela := build_rela(ob, mc, w, rb)
+    -- The relocations regrouped by code group, in section order, each
+    -- `r_offset` made an offset of its own section.
+    rp := z.bytes(nrela * RELA_SIZE + 8)
+    np : u64 <- 0
+    g <- 0
+    while g < ob.nsect
+        sg3 := sect_at(ob, g)
+        if sg3.kind == 0
+            j : u64 <- 0
+            while j < nrela
+                pos := get_u64v(rb, j * RELA_SIZE)
+                if code_group_of(ob, pos) == g
+                    put_rela(rp, np, pos - sg3.start, get_u64v(rb, j * RELA_SIZE + 8), get_u64v(rb, j * RELA_SIZE + 16))
+                    np <- np + 1
+                end
+                j <- j + 1
+            end
+        end
+        g <- g + 1
+    end
+    -- The section names.
+    shs := z.bytes(2 * SNAME_MAX + 256)
+    shs[0] <- 0
+    nameoff := z.bytes(SECT_MAX * Cell.size)
+    relname := z.bytes(SECT_MAX * Cell.size)
+    n1 : u64 <- shs_name(shs, 1, ".rodata")
+    g <- 0
+    while g < ob.nsect
+        sg4 := sect_at(ob, g)
+        if sg4.kind == 0
+            cell_set(nameoff, g, n1)
+            n1 <- shs_name(shs, n1, sect_name(ob, g))
+        end
+        g <- g + 1
+    end
+    ndata := n1
+    n1 <- shs_name(shs, n1, ".data")
+    g <- 0
+    while g < ob.nsect
+        sg5 := sect_at(ob, g)
+        if sg5.kind == 1
+            cell_set(nameoff, g, n1)
+            n1 <- shs_name(shs, n1, sect_name(ob, g))
+        end
+        g <- g + 1
+    end
+    nsym := n1
+    n1 <- shs_name(shs, n1, ".symtab")
+    nstr := n1
+    n1 <- shs_name(shs, n1, ".strtab")
+    nshs := n1
+    n1 <- shs_name(shs, n1, ".shstrtab")
+    g <- 0
+    while g < ob.nsect
+        sg6 := sect_at(ob, g)
+        if sg6.kind == 0
+            cell_set(relname, g, n1)
+            n1 <- shs_name(shs, n1, ".rela")
+            -- over the terminator: `.rela` and the group's name are one
+            n1 <- shs_name(shs, n1 - 1, sect_name(ob, g))
+        end
+        g <- g + 1
+    end
+    shslen := n1
+    -- File: header, .rodata, the code, .data, then the tables, each on an
     -- eight-byte boundary, and the section headers last.
     rodoff : u64 <- 64
     textoff := rodoff + ob.ndata
@@ -1416,10 +1742,10 @@ proc write_object(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     symoff := round8(imgend)
     stroff := symoff + w.nsym * SYM_SIZE
     shstroff := stroff + w.nstr
-    relaoff := round8(shstroff + SHSTR_OBJ)
-    shoff := round8(relaoff + nrela * RELA_SIZE)
+    relaoff := round8(shstroff + shslen)
+    shoff := round8(relaoff + np * RELA_SIZE)
     hdr := z.bytes(EHDR_SIZE)
-    obj_header(hdr, shoff)
+    obj_header(hdr, shoff, nsect, symsec + 2)
     if mc.a64 == 1
         -- EM_AARCH64
         put_u16(hdr, 18, 183)
@@ -1439,65 +1765,69 @@ proc write_object(pg: rw ref Prog, ob: ref Oir, mc: ref Mach, z: zone)
     put(1, st[..w.nsym * SYM_SIZE])
     sb := w.strtab
     put(1, sb[..w.nstr])
-    shs := z.bytes(SHSTR_OBJ)
-    shs[0] <- 0
-    n1 := shs_name(shs, 1, ".rodata")
-    n2 := shs_name(shs, n1, ".text")
-    n3 := shs_name(shs, n2, ".data")
-    n4 := shs_name(shs, n3, ".bss")
-    n5 := shs_name(shs, n4, ".symtab")
-    n6 := shs_name(shs, n5, ".strtab")
-    n7 := shs_name(shs, n6, ".shstrtab")
-    _n8 := shs_name(shs, n7, ".rela.text")
-    put(1, shs)
-    if relaoff > shstroff + SHSTR_OBJ
-        pad2 := z.bytes(relaoff - shstroff - SHSTR_OBJ)
+    put(1, shs[..shslen])
+    if relaoff > shstroff + shslen
+        pad2 := z.bytes(relaoff - shstroff - shslen)
         put(1, pad2)
     end
-    if nrela > 0
-        put(1, rb[..nrela * RELA_SIZE])
+    if np > 0
+        put(1, rp[..np * RELA_SIZE])
     end
-    if shoff > relaoff + nrela * RELA_SIZE
-        pad3 := z.bytes(shoff - relaoff - nrela * RELA_SIZE)
+    if shoff > relaoff + np * RELA_SIZE
+        pad3 := z.bytes(shoff - relaoff - np * RELA_SIZE)
         put(1, pad3)
     end
-    sh := z.bytes(NSECT_OBJ * SHDR_SIZE)
+    sh := z.bytes(nsect * SHDR_SIZE)
     zi2 : u64 <- 0
-    while zi2 < NSECT_OBJ * SHDR_SIZE
+    while zi2 < nsect * SHDR_SIZE
         sh[zi2] <- 0
         zi2 <- zi2 + 1
     end
     shdr_kind(sh, 1, 1, 1, 2)
     shdr_place(sh, 1, 0, rodoff, ob.ndata)
     shdr_link(sh, 1, 0, 0)
-    shdr_align(sh, 1, 8, 0)
-    shdr_kind(sh, 2, n1, 1, 6)
-    shdr_place(sh, 2, 0, textoff, ob.ncode)
-    shdr_link(sh, 2, 0, 0)
-    shdr_align(sh, 2, 16, 0)
-    shdr_kind(sh, 3, n2, 1, 3)
-    shdr_place(sh, 3, 0, dataoff, ob.dsize)
-    shdr_link(sh, 3, 0, 0)
-    shdr_align(sh, 3, 8, 0)
-    shdr_kind(sh, 4, n3, 8, 3)
-    shdr_place(sh, 4, 0, imgend, ob.bsize)
-    shdr_link(sh, 4, 0, 0)
-    shdr_align(sh, 4, 8, 0)
-    shdr_kind(sh, 5, n4, 2, 0)
-    shdr_place(sh, 5, 0, symoff, w.nsym * SYM_SIZE)
-    shdr_link(sh, 5, 6, nlocal)
-    shdr_align(sh, 5, 8, SYM_SIZE)
-    shdr_kind(sh, 6, n5, 3, 0)
-    shdr_place(sh, 6, 0, stroff, w.nstr)
-    shdr_link(sh, 6, 0, 0)
-    shdr_align(sh, 6, 1, 0)
-    shdr_kind(sh, 7, n6, 3, 0)
-    shdr_place(sh, 7, 0, shstroff, SHSTR_OBJ)
-    shdr_link(sh, 7, 0, 0)
-    shdr_align(sh, 7, 1, 0)
-    shdr_kind(sh, 8, n7, 4, 64)
-    shdr_place(sh, 8, 0, relaoff, nrela * RELA_SIZE)
-    shdr_link(sh, 8, 5, 2)
-    shdr_align(sh, 8, 8, RELA_SIZE)
+    shdr_align(sh, 1, rodata_align(ob), 0)
+    rpos : u64 <- relaoff
+    g <- 0
+    while g < ob.nsect
+        sg7 := sect_at(ob, g)
+        si := cell_get(w.secidx, g)
+        if sg7.kind == 0
+            shdr_kind(sh, si, cell_get(nameoff, g), 1, 6)
+            shdr_place(sh, si, 0, textoff + sg7.start, sg7.size)
+            shdr_link(sh, si, 0, 0)
+            shdr_align(sh, si, code_align(pg, ob, g, 16), 0)
+            -- its relocations: SHT_RELA, SHF_INFO_LINK, against .symtab
+            ri := symsec + 3 + (si - 2)
+            cnt := rela_count(ob, rb, nrela, g)
+            shdr_kind(sh, ri, cell_get(relname, g), 4, 64)
+            shdr_place(sh, ri, 0, rpos, cnt * RELA_SIZE)
+            shdr_link(sh, ri, symsec, si)
+            shdr_align(sh, ri, 8, RELA_SIZE)
+            rpos <- rpos + cnt * RELA_SIZE
+        else
+            shdr_kind(sh, si, cell_get(nameoff, g), 8, 3)
+            shdr_place(sh, si, 0, imgend, sg7.size)
+            shdr_link(sh, si, 0, 0)
+            shdr_align(sh, si, data_align(pg, ob, g), 0)
+        end
+        g <- g + 1
+    end
+    shdr_kind(sh, w.datasec, ndata, 1, 3)
+    shdr_place(sh, w.datasec, 0, dataoff, ob.dsize)
+    shdr_link(sh, w.datasec, 0, 0)
+    shdr_align(sh, w.datasec, data_align(pg, ob, SECT_MAX), 0)
+    shdr_kind(sh, symsec, nsym, 2, 0)
+    shdr_place(sh, symsec, 0, symoff, w.nsym * SYM_SIZE)
+    shdr_link(sh, symsec, symsec + 1, nlocal)
+    shdr_align(sh, symsec, 8, SYM_SIZE)
+    shdr_kind(sh, symsec + 1, nstr, 3, 0)
+    shdr_place(sh, symsec + 1, 0, stroff, w.nstr)
+    shdr_link(sh, symsec + 1, 0, 0)
+    shdr_align(sh, symsec + 1, 1, 0)
+    shdr_kind(sh, symsec + 2, nshs, 3, 0)
+    shdr_place(sh, symsec + 2, 0, shstroff, shslen)
+    shdr_link(sh, symsec + 2, 0, 0)
+    shdr_align(sh, symsec + 2, 1, 0)
     put(1, sh)
 end

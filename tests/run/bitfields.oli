@@ -1,0 +1,92 @@
+module bitfields
+-- Bitfields and unions (ABI.md §3). `name : T bits N` packs N bits into
+-- the aligned unit of T, at the bit after the last field when they fit and
+-- at the next unit otherwise — the SysV rule, so the image is C's (the C
+-- half is tests/c/bits_side.oli). A read shifts and masks, or sign-extends
+-- a signed field; a write clears the field's bits, ors the value in and
+-- keeps every other bit of the unit; a value wider than the field traps
+-- (tests/run/trap/bitfield.oli). `layout Name union` lays every field at
+-- offset 0. The exit status is the number of the check that failed, or 42.
+
+layout Pte
+    present : u64 bits 1
+    writable : u64 bits 1
+    user : u64 bits 1
+    pad : u64 bits 9
+    frame : u64 bits 40
+    avail : u64 bits 11
+    nx : u64 bits 1
+end
+
+layout Mixed
+    a : u8
+    b : u32 bits 3
+    c : s32 bits 5
+    d : u32 bits 30
+    e : u16
+    f : s8 bits 4
+end
+
+layout Word union
+    raw : u64
+    half : u32
+    byte0 : u8
+end
+
+layout Reg union
+    all : u32
+    lo : u32 bits 16
+end
+
+INIT : Pte := Pte { present: 1, writable: 0, user: 1, pad: 0, frame: 0x12345, avail: 0, nx: 1 }
+
+proc start -> s32
+    entry
+    permit memory.raw
+    if Pte.size != 8 then ret 1
+    if Mixed.size != 12 then ret 2
+    if Mixed.align != 4 then ret 3
+    if Word.size != 8 then ret 4
+    if Reg.size != 4 then ret 5
+    p : Pte <- Pte { present: 0, writable: 0, user: 1, pad: 0, frame: 0, avail: 0, nx: 0 }
+    p.present <- 1
+    p.writable <- 1
+    p.frame <- 0xABCDE
+    p.nx <- 1
+    raw := [addr u64 (ref p)]
+    if raw != 0x80000000ABCDE007 then ret 6
+    if p.frame != 0xABCDE then ret 7
+    if p.user != 1 then ret 8
+    if p.avail != 0 then ret 9
+    p.frame <- 0xFFFFFFFFFF
+    if [addr u64 (ref p)] != 0x800FFFFFFFFFF007 then ret 10
+    m : Mixed <- Mixed { a: 0, b: 0, c: 0, d: 0, e: 0, f: 0 }
+    m.a <- 0xAA
+    m.b <- 5
+    m.c <- -3
+    m.d <- 0x2ABCDEF1
+    m.e <- 0xBEEF
+    m.f <- -8
+    if m.b != 5 then ret 11
+    if m.c != -3 then ret 12
+    if m.d != 0x2ABCDEF1 then ret 13
+    if m.f != -8 then ret 14
+    if m.e != 0xBEEF then ret 15
+    -- b and c share the unit of a, the u32 at 0 (bits 8..10 and 11..15), as
+    -- in C; d does not fit after them and starts the next unit, at 4
+    if [addr u8 (u64(addr u8 (ref m)) + 1)] != 0xED then ret 16
+    if [addr u32 (u64(addr u8 (ref m)) + 4)] & 0x3FFFFFFF != 0x2ABCDEF1 then ret 17
+    w : Word <- Word { raw: 0x1122334455667788 }
+    if w.byte0 != 0x88 then ret 18
+    if w.half != 0x55667788 then ret 19
+    w.byte0 <- 0x11
+    if w.raw != 0x1122334455667711 then ret 20
+    r : Reg <- Reg { all: 0xDEADBEEF }
+    if r.lo != 0xBEEF then ret 21
+    r.lo <- 0x1234
+    if r.all != 0xDEAD1234 then ret 22
+    if INIT.frame != 0x12345 then ret 23
+    if INIT.nx != 1 then ret 24
+    if INIT.writable != 0 then ret 25
+    ret 42
+end

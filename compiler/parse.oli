@@ -62,6 +62,7 @@ KW_LE := 50
 KW_WRAP := 51
 KW_SAT := 52
 KW_CHECKED := 53
+KW_BITS := 55
 
 -- Two-character operators, in the order of the table in olic.lex.
 OP_BIND := 1
@@ -2474,6 +2475,16 @@ proc p_place_clauses(cx: ref Ctx, parent: u64)
             code <- C_ALIGN
         end
         if code == 0
+            if at_kw(cx, KW_EXPORT)
+                pn := node_at(cx, parent)
+                if pn.kind == N_STATIC
+                    -- `export ["sym"]` on a static: a global symbol under its
+                    -- bare name (or the one given), for C to name.
+                    code <- C_EXPORT
+                end
+            end
+        end
+        if code == 0
             other := clause_code(cx)
             if other > 0
                 -- `permit`, `calls`, `entry`, `export` and `traps` belong to a
@@ -2578,11 +2589,33 @@ proc p_fielddecl(cx: ref Ctx) -> u64
         diag_at(cx, 11, tpos(cx))
     end
     add_kid(cx, n, p_type(cx))
+    if at_kw(cx, KW_BITS)
+        -- `name : T bits N`: a bitfield of N bits (1 to 64) in `sub`.
+        adv(cx)
+        if tkind(cx) == TK_INT
+            tb := ctok(cx, tpos(cx))
+            if tb.val == 0
+                diag_at(cx, 18, tpos(cx))
+            elif tb.val > 64
+                diag_at(cx, 18, tpos(cx))
+            else
+                ndb := node_at(cx, n)
+                ndb.sub <- u32.wrap(tb.val)
+            end
+            adv(cx)
+        else
+            diag_at(cx, 18, tpos(cx))
+        end
+    end
     if at_kw(cx, KW_ALIGN)
         adv(cx)
         if tkind(cx) == TK_INT
             t := ctok(cx, tpos(cx))
             nd := node_at(cx, n)
+            if nd.sub > 0
+                -- a bitfield lies where its unit does
+                diag_at(cx, 18, tpos(cx))
+            end
             nd.val <- t.val
             adv(cx)
         else
@@ -2597,8 +2630,21 @@ proc p_layout(cx: ref Ctx) -> u64
     nm := want_name(cx)
     n := mk(cx, N_LAYOUT, nm)
     nd := node_at(cx, n)
-    if eat_kw(cx, KW_PACKED)
-        nd.sub <- 1
+    -- `packed` sets bit 0 of `sub`, `union` (a word of its own here, not
+    -- reserved) bit 1: every field at offset 0, the size the largest one's.
+    loop
+        if eat_kw(cx, KW_PACKED)
+            nd.sub <- nd.sub | 1
+        elif at_ident(cx)
+            if view_eq(tok_text(cx, tpos(cx)), "union")
+                adv(cx)
+                nd.sub <- nd.sub | 2
+            else
+                break
+            end
+        else
+            break
+        end
     end
     if at_kw(cx, KW_ALIGN)
         adv(cx)
@@ -2715,6 +2761,24 @@ proc p_decl(cx: rw ref Ctx, mod: u64)
         adv(cx)
         if at_kw(cx, KW_PROC)
             add_kid(cx, mod, p_proc(cx, 2))
+            cx.ndecl <- cx.ndecl + 1
+            ret
+        end
+        if at_ident(cx)
+            -- `extern NAME : T`: a static place another object defines — a
+            -- type and nothing else; `val` 3 marks it (2 is a typed one).
+            n := p_const(cx)
+            nd := node_at(cx, n)
+            if nd.kind != N_STATIC
+                diag_at(cx, 11, nd.t0)
+            elif nd.val != 2
+                diag_at(cx, 11, nd.t0)
+            elif nd.sub == 1
+                diag_at(cx, 11, nd.t0)
+            else
+                nd.val <- 3
+            end
+            add_kid(cx, mod, n)
             cx.ndecl <- cx.ndecl + 1
             ret
         end

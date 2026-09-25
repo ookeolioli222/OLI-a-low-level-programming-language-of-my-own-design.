@@ -364,6 +364,13 @@ layout Dat
     init : u64
     val : u64
     sect : u64
+    -- 1 for `extern NAME : T`: no bytes of its own, reached through the
+    -- GOT under the undefined symbol `symidx` of the object file.
+    ext : u64
+    symidx : u64
+    -- 1 for an `export`ed static in an object file: reached through the
+    -- GOT under its exported symbol, as an `extern` one is.
+    got : u64
 end
 
 layout Sect
@@ -419,6 +426,8 @@ layout Cell
 end
 
 layout Oir
+    -- `volatile` for the bitfield store in progress (`gen_bits_store`).
+    bvol : u64
     -- The locals of every procedure for the debug information: nine cells
     -- each (DV_*), `ndvar` of them; `dbgframe` from `-- debug: frame`.
     dvars : rw view u8
@@ -698,6 +707,46 @@ proc sect_name(ob: ref Oir, i: u64) -> view u8
     s := sect_at(ob, i)
     t := ob.snames
     ret t[s.noff..s.noff + s.nlen]
+end
+
+proc code_group_of(ob: ref Oir, pos: u64) -> u64
+    -- The code section group a code offset lies in, SECT_MAX when none does:
+    -- in an object file each group is a section of its own, so a rel32 from
+    -- one group into another is the linker's to fill.
+    i : u64 <- 0
+    while i < ob.nsect
+        s := sect_at(ob, i)
+        if s.kind == 0
+            if pos >= s.start
+                if pos < s.start + s.size
+                    ret i
+                end
+            end
+        end
+        i <- i + 1
+    end
+    ret SECT_MAX
+end
+
+proc data_group_of(ob: ref Oir, off: u64) -> u64
+    -- The zero-static group an offset of the writable segment lies in,
+    -- SECT_MAX for `.data` (below `dsize`) or none.
+    if off < ob.dsize
+        ret SECT_MAX
+    end
+    i : u64 <- 0
+    while i < ob.nsect
+        s := sect_at(ob, i)
+        if s.kind == 1
+            if off >= s.start
+                if off < s.start + s.size
+                    ret i
+                end
+            end
+        end
+        i <- i + 1
+    end
+    ret SECT_MAX
 end
 
 proc sect_find(ob: ref Oir, name: view u8, kind: u64) -> word
@@ -1421,7 +1470,7 @@ proc collect_data(pg: rw ref Prog, ob: rw ref Oir)
             k : u64 <- 0
             while k < ob.ndat
                 d := dat_at(ob, k)
-                if d.init == 0
+                if d.init + d.ext == 0
                     if view_eq(static_sect(pg, d.val, 0), sect_name(ob, g))
                         here := round_up(ob.dsize + ob.bsize, static_align(pg, d.val, d.size))
                         if first == 1
@@ -1508,8 +1557,19 @@ proc add_data(pg: rw ref Prog, ob: rw ref Oir, vi: u64)
     d.init <- 0
     d.off <- 0
     d.sect <- 0
+    d.ext <- static_is_extern(pg, vi)
+    d.symidx <- 0
+    d.got <- d.ext
+    if pg.objmode == 1
+        if static_exported(pg, vi) == 1
+            d.got <- 1
+        end
+    end
     cell_set(ob.dmap, vi, k + 1)
     ob.ndat <- k + 1
+    if d.ext == 1
+        ret
+    end
     if vn.sub == 1
         -- An initialiser: a constant at the place's width, an array literal
         -- element by element, or a layout literal field by field.
@@ -1665,6 +1725,32 @@ proc init_bytes(pg: rw ref Prog, ob: rw ref Oir, vi: u64, dst: rw view u8, off: 
                     f <- sibling(cx, f)
                     continue
                 end
+            end
+            if fr.bitw > 0
+                -- a bitfield: or-ed into its unit, and only if it fits
+                cvb := const_value(pg, v.mod, kid1(cx, f))
+                if int_signed(native_int(tok_text(cx, ftn.t0))) == 1
+                    if fr.bitw < 64
+                        lim := bits_mask(fr.bitw - 1)
+                        if cvb > lim
+                            if cvb < 18446744073709551615 - lim
+                                oir_err(ob, pg, v.mod, 212, kid1(cx, f))
+                            end
+                        end
+                    end
+                elif cvb > bits_mask(fr.bitw)
+                    oir_err(ob, pg, v.mod, 212, kid1(cx, f))
+                end
+                cur : u64 <- 0
+                bi : u64 <- fw
+                while bi > 0
+                    bi <- bi - 1
+                    cur <- (cur << 8) | u64(dst[off + fr.off + bi])
+                end
+                cur <- cur | ((cvb & bits_mask(fr.bitw)) << fr.bitsh)
+                put_bytes(dst, off + fr.off, fw, cur)
+                f <- sibling(cx, f)
+                continue
             end
             put_bytes(dst, off + fr.off, fw, const_value(pg, v.mod, kid1(cx, f)))
             f <- sibling(cx, f)
@@ -3095,7 +3181,7 @@ proc is_packed(pg: ref Prog, it: u64) -> word
     item := item_at(pg, it)
     cx := mod_ctx(pg, item.mod)
     nd := node_at(cx, item.node)
-    if nd.sub == 1
+    if u64(nd.sub) & 1 == 1
         ret 1
     end
     ret 0
@@ -3178,6 +3264,76 @@ proc gen_bswap(ob: rw ref Oir, v: u64, nb: u64) -> u64
     ret r
 end
 
+proc bits_mask(w: u64) -> u64
+    -- The low `w` bits set.
+    if w >= 64
+        ret 18446744073709551615
+    end
+    one : u64 <- 1
+    ret (one << w) - 1
+end
+
+proc gen_bits_load(pg: ref Prog, ob: rw ref Oir, p: u64, fi: u64, vol: u64) -> u64
+    -- A bitfield read: its unit loaded, shifted down, and either masked
+    -- (unsigned) or sign-extended from its top bit (signed).
+    fr := fld_at(pg, fi)
+    ft := native_int(field_text(pg, fi))
+    w := fr.bitw
+    v : u64 <- emit_ins(ob, O_RLOAD, p, fr.size, 0, vol)
+    if fr.bitsh > 0
+        v <- emit_bin(ob, B_SHR, v, emit_ins(ob, O_CONST, 0, 0, 0, fr.bitsh), 0)
+    end
+    if int_signed(ft) == 1
+        if w < 64
+            up := emit_ins(ob, O_CONST, 0, 0, 0, 64 - w)
+            v <- emit_bin(ob, B_SHR, emit_bin(ob, B_SHL, v, up, 0), up, 1)
+        end
+        ret v
+    end
+    if w + fr.bitsh < fr.size * 8
+        v <- emit_bin(ob, B_AND, v, emit_ins(ob, O_CONST, 0, 0, 0, bits_mask(w)), 0)
+    end
+    ret v
+end
+
+proc gen_bits_store(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, p: u64, v: u64)
+    -- A bitfield write, field `pg.lastft` at unit address `p`: a value that
+    -- does not fit its N bits traps `overflow` (never cut silently); the
+    -- unit is loaded, the field's bits cleared and the value or-ed in, and
+    -- the unit stored (`ob.bvol`: volatile both ways).
+    fi := pg.lastft
+    fr := fld_at(pg, fi)
+    ft := native_int(field_text(pg, fi))
+    w := fr.bitw
+    vol := ob.bvol
+    if w < 64
+        bad : u64 <- 0
+        if int_signed(ft) == 1
+            up := emit_ins(ob, O_CONST, 0, 0, 0, 64 - w)
+            sx := emit_bin(ob, B_SHR, emit_bin(ob, B_SHL, v, up, 0), up, 1)
+            bad <- emit_bin(ob, B_NE, sx, v, 0)
+        else
+            hi := emit_bin(ob, B_SHR, v, emit_ins(ob, O_CONST, 0, 0, 0, w), 0)
+            bad <- emit_bin(ob, B_NE, hi, emit_ins(ob, O_CONST, 0, 0, 0, 0), 0)
+        end
+        lok := new_label(ob)
+        emit_ins(ob, O_BRANCH, bad, 0, 0, lok)
+        t := emit_ins(ob, O_TRAP, 0, 0, TK_OVF, 0)
+        ti := ins_at(ob, t)
+        ti.site <- trap_static(pg, ob, mi, TK_OVF, n) + 1
+        emit_ins(ob, O_LABEL, lok, 0, 0, 0)
+    end
+    m := bits_mask(w)
+    keep := 18446744073709551615 - (m << fr.bitsh)
+    old := emit_ins(ob, O_RLOAD, p, fr.size, 0, vol)
+    cleared := emit_bin(ob, B_AND, old, emit_ins(ob, O_CONST, 0, 0, 0, keep), 0)
+    part : u64 <- emit_bin(ob, B_AND, v, emit_ins(ob, O_CONST, 0, 0, 0, m), 0)
+    if fr.bitsh > 0
+        part <- emit_bin(ob, B_SHL, part, emit_ins(ob, O_CONST, 0, 0, 0, fr.bitsh), 0)
+    end
+    emit_ins(ob, O_RSTORE, p, emit_bin(ob, B_OR, cleared, part, 0), fr.size, vol)
+end
+
 proc gen_field_load(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     -- `r.f`, by the field's type: an integer at its width and signedness
     -- (a `be` one byte-swapped after the load, then re-extended), a view as
@@ -3187,6 +3343,11 @@ proc gen_field_load(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
     b := pg.sbuf
     vol := u64.bits(is_mmio(ety(pg, mi, kid1(cx, n), b[0..0])))
     p := gen_field_addr(pg, ob, mi, n)
+    frb := fld_at(pg, pg.lastft)
+    if frb.bitw > 0
+        ob.lastlen <- 0
+        ret gen_bits_load(pg, ob, p, pg.lastft, vol)
+    end
     ft0 := field_text(pg, pg.lastft)
     bo := byte_order(ft0)
     ft := native_int(ft0)
@@ -3245,6 +3406,13 @@ proc gen_store_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
     bo := byte_order(ft0)
     ft := native_int(ft0)
     v0 := gen_expr(pg, ob, mi, kid2(cx, n), ft)
+    frb := fld_at(pg, fi)
+    if frb.bitw > 0
+        pg.lastft <- fi
+        ob.bvol <- vol
+        gen_bits_store(pg, ob, mi, n, p, v0)
+        ret
+    end
     v : u64 <- v0
     if bo == 1
         -- A `be` field: the bytes reversed before the store.
@@ -3853,6 +4021,11 @@ proc gen_unop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -
         end
         if pn.kind == N_FIELD
             pa := gen_field_addr(pg, ob, mi, arg)
+            frr := fld_at(pg, pg.lastft)
+            if frr.bitw > 0
+                -- a bitfield has no address of its own
+                oir_err(ob, pg, mi, 900, n)
+            end
             ob.lastlen <- 0
             ret pa
         end
@@ -5115,7 +5288,14 @@ proc gen_layout_lit(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, li: u64) -
             off2 := emit_ins(ob, O_CONST, 0, 0, 0, fr.off)
             p <- addr_add(ob, base, off2)
         end
-        gen_store_typed(pg, ob, p, v, ft)
+        frl := fld_at(pg, u64.bits(fi))
+        if frl.bitw > 0
+            pg.lastft <- u64.bits(fi)
+            ob.bvol <- 0
+            gen_bits_store(pg, ob, mi, f, p, v)
+        else
+            gen_store_typed(pg, ob, p, v, ft)
+        end
         f <- sibling(cx, f)
     end
     ob.lastlen <- 0
@@ -6919,6 +7099,8 @@ proc print_oir(pg: ref Prog, ob: rw ref Oir)
         put_uint(1, tmp, d.size)
         if d.init == 1
             put(1, " init")
+        elif d.ext == 1
+            put(1, " extern")
         else
             put(1, " zero")
         end

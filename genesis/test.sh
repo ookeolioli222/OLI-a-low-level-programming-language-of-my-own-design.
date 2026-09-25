@@ -1123,7 +1123,7 @@ grep -q 'E0200' build/chk.err || fail "checks: kernel_sketch must report its typ
 for f in ../tests/sema/ok/*.oli ../examples/*.oli ../lib/*.oli ../lib/*/*.oli; do
     ( cd .. && genesis/build/show_sema < "${f#../}" > /dev/null 2> genesis/build/chk.err ) || fail "checks: $f reported $(head -1 build/chk.err)"
 done
-echo "ok: olic reports exactly the diagnostics of all twenty tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces, implicit narrowing, linear own values, members of scalars, float rules and vector rules - and none on any positive fixture"
+echo "ok: olic reports exactly the diagnostics of all twenty-one tests/sema/err fixtures - capabilities, E0900, constants, layouts, scopes, definite assignment, reachability, failures, exhaustiveness, read-only places, region escapes, literal types, literal and pattern fields, address spaces, implicit narrowing, linear own values, members of scalars, float rules, vector rules and bitfield rules - and none on any positive fixture"
 echo "ok: olic prints every procedure signature and every local - parameters, places, bindings, zones and case patterns with inferred types - exactly as tests/snapshots/*.sema"
 echo "genesis: layer 4 (olic front end and semantic analysis) passed"
 
@@ -1675,7 +1675,7 @@ echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2
 # `_start` for an entry procedure. Two Oli-- objects link with ld alone and
 # run; the C half of tests/c links with cc, calls into Oli-- and is called
 # back, and prints what tests/c/expected.out says.
-for n in oli_side lib_side main_side pic_side float_side; do
+for n in oli_side lib_side main_side pic_side float_side sect_side global_side bits_side; do
     ( cd .. && genesis/build/olic < tests/c/$n.oli > genesis/build/$n.o 2> genesis/build/$n.err ) || fail "object: olic could not compile tests/c/$n.oli: $(head -1 build/$n.err)"
 done
 readelf -h build/oli_side.o | grep -q 'Type: *REL' || fail "object: oli_side.o is not ET_REL"
@@ -1690,6 +1690,21 @@ nm build/main_side.o | grep -q ' T _start$' || fail "object: the entry procedure
 ld -o build/two build/main_side.o build/lib_side.o 2> build/ld.err || fail "object: ld could not link two Oli-- objects: $(head -1 build/ld.err)"
 set +e; ./build/two; st=$?; set -e
 [ "$st" = 42 ] || fail "object: the program linked from two Oli-- objects exited $st, want 42"
+# Sections in an object (tests/c/sect_side.oli): each group its own ELF
+# section with its own .rela, a linker script places them by name, and the
+# calls between them are the linker's.
+[ "$(readelf -SW build/sect_side.o | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text .boot .text.trap .data .lowdata .symtab .strtab .shstrtab .rela.text .rela.boot .rela.text.trap " ] || fail "object sections: $(readelf -SW build/sect_side.o | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
+readelf -SW build/sect_side.o | grep -q '\.boot .* AX .* 64$' || fail "object sections: .boot must carry the 64-byte alignment of its procedure"
+readelf -SW build/sect_side.o | grep -q '\.lowdata *NOBITS .* WA .* 64$' || fail "object sections: .lowdata must carry the 64-byte alignment of its static"
+readelf -rW build/sect_side.o | grep -q 'R_X86_64_PC32 .* \.boot - 4' || fail "object sections: the call from .text into .boot must be a PC32 relocation"
+readelf -a build/sect_side.o > /dev/null 2> build/readelf.err || fail "object sections: readelf -a rejects sect_side.o"
+[ ! -s build/readelf.err ] || fail "object sections: readelf -a warns: $(head -1 build/readelf.err)"
+ld -T ../tests/c/sect.ld -o build/sect build/sect_side.o 2> build/ld.err || fail "object sections: ld -T could not link sect_side.o: $(head -1 build/ld.err)"
+nm build/sect | grep -q '^0000000000800000 t sect_side.early$' || fail "object sections: the linker script must place early at 0x800000"
+nm build/sect | grep -q '^0000000000900000 B sect_side.table$' || fail "object sections: the linker script must place table at 0x900000"
+set +e; ./build/sect; st=$?; set -e
+[ "$st" = 42 ] || fail "object sections: the program linked by tests/c/sect.ld exited $st, want 42"
+echo "ok: sections in an object file - every code and zero-static group is a section of its own with its own .rela, align on a procedure or a static is the section's alignment, and a linker script places them by name (ld -T tests/c/sect.ld runs)"
 if command -v cc > /dev/null 2>&1; then
     cc -no-pie -o build/c_prog build/oli_side.o ../tests/c/c_side.c 2> build/cc.err || fail "object: cc could not link oli_side.o with tests/c/c_side.c: $(head -1 build/cc.err)"
     ./build/c_prog > build/c_prog.out || fail "object: the C program linked with Oli-- exited non-zero"
@@ -1716,6 +1731,29 @@ if command -v cc > /dev/null 2>&1; then
     cc -o build/float_c ../tests/c/float_main.c build/float_side.o -lm 2> build/cc.err || fail "float: cc could not link float_side.o: $(head -1 build/cc.err)"
     ./build/float_c > build/float_c.out || fail "float: the C program exited non-zero"
     cmp build/float_c.out ../tests/c/float_expected.out || fail "float: the C program printed $(cat build/float_c.out), want $(cat ../tests/c/float_expected.out)"
+    # Globals both ways (tests/c/global_side.oli): extern statics of C and
+    # of libc through the GOT, and exported statics of Oli-- - linked into
+    # an executable, a PIE and a shared library, each run.
+    [ "$(readelf -rW build/global_side.o | grep 'R_X86_64_REX_GOTPCRELX' | awk '{print $5}' | sort -u | tr '\n' ' ')" = "c_counter c_pt c_table oli_limit oli_seen stdout " ] || fail "globals: the four extern statics and the two exported ones must be reached through the GOT, under their symbols"
+    [ "$(nm build/global_side.o | grep -c ' U c_counter$\| U c_table$\| U c_pt$\| U stdout$')" = 4 ] || fail "globals: the extern statics must be undefined symbols"
+    nm build/global_side.o | grep -q ' D oli_seen$' || fail "globals: export on a static must give the global symbol oli_seen"
+    nm build/global_side.o | grep -q ' D oli_limit$' || fail "globals: export \"oli_limit\" must name the static limit"
+    cc -no-pie -o build/global_exe ../tests/c/global_main.c build/global_side.o 2> build/cc.err || fail "globals: cc could not link an executable: $(head -1 build/cc.err)"
+    cc -o build/global_pie ../tests/c/global_main.c build/global_side.o 2> build/cc.err || fail "globals: cc could not link a PIE: $(head -1 build/cc.err)"
+    cc -shared -o build/libglobal_side.so build/global_side.o 2> build/cc.err || fail "globals: cc could not make a shared library: $(head -1 build/cc.err)"
+    ! readelf -d build/libglobal_side.so | grep -q TEXTREL || fail "globals: the shared library needs text relocations"
+    cc -o build/global_so ../tests/c/global_main.c -Lbuild -lglobal_side 2> build/cc.err || fail "globals: cc could not link against libglobal_side.so"
+    for x in global_exe global_pie global_so; do
+        LD_LIBRARY_PATH=build ./build/$x > build/$x.out || fail "globals: $x exited non-zero"
+        cmp build/$x.out ../tests/c/global_expected.out || fail "globals: $x printed $(cat build/$x.out)"
+    done
+    # Bitfields and unions (tests/c/bits_side.oli): C and Oli-- write the
+    # same records and the bytes must be the same - GCC's layout is olic's.
+    cc -o build/bits_c ../tests/c/bits_main.c build/bits_side.o 2> build/cc.err || fail "bits: cc could not link bits_side.o: $(head -1 build/cc.err)"
+    ./build/bits_c > build/bits_c.out || fail "bits: the C program exited non-zero"
+    cmp build/bits_c.out ../tests/c/bits_expected.out || fail "bits: the C program printed $(cat build/bits_c.out)"
+    echo "ok: bitfields and unions have C's layout - each side writes the same page-table entry, mixed signed and unsigned fields sharing units, and unions, and the bytes compare equal with GCC's"
+    echo "ok: globals across the C boundary - extern statics of C and libc's stdout through the GOT, exported statics of Oli-- read by C - in an executable, a PIE and a shared library"
     echo "ok: f64/f32 across the C boundary - sqrt from libm and a C function with mixed xmm and integer arguments called from Oli--, Oli-- float procedures called from C, narrow integers re-extended both ways"
 else
     echo "ok: object files: two Oli-- objects link with ld alone and run (no cc on this machine: the C half of tests/c was not linked)"
@@ -1770,6 +1808,42 @@ set -e
 [ "$st" = 1 ] || fail "profile: arch riscv64 exited $st, want a refusal"
 grep -q 'not a target of this compiler' build/arm.err || fail "profile: arch riscv64 must be refused by name"
 [ ! -s build/arm.elf ] || fail "profile: a refused target still wrote a file"
+# Every key of a profile is applied or checked, never skipped: an unknown
+# key, a code model or stack probing the compiler does not generate, and an
+# `entry` that names another procedure are refused by name.
+printf -- '-- profile: genesis/build/pk.oli-target\nmodule pk\nproc start -> s32\n    entry\n    ret 0\nend\n' > build/pk.oli
+for bad in 'linker_script = "x.ld"|not a key of a target profile' 'code_model = "large"|only "small"' 'stack_probe = true|stack probes are not generated' 'entry = "pk.main"|another name' 'arch = "x86_64"\n[linker]|only a \[target\] table'; do
+    line=${bad%%|*}
+    why=${bad#*|}
+    printf "[target]\n$line\n" > build/pk.oli-target
+    set +e
+    ( cd .. && genesis/build/olic < genesis/build/pk.oli > genesis/build/pk.elf 2> genesis/build/pk.err )
+    st=$?
+    set -e
+    [ "$st" = 1 ] || fail "profile: [$line] exited $st, want a refusal"
+    grep -q "$why" build/pk.err || fail "profile: [$line] must be refused with '$why', said: $(head -1 build/pk.err)"
+    [ ! -s build/pk.elf ] || fail "profile: [$line] still wrote a file"
+done
+printf '[target]\n# a comment\narch = "x86_64"\nos = "linux"\ncode_model = "small"\nred_zone = true\nstack_probe = false\nentry = "pk.start"\n' > build/pk.oli-target
+( cd .. && genesis/build/olic < genesis/build/pk.oli > genesis/build/pk.elf 2> genesis/build/pk.err ) || fail "profile: a profile of known keys was refused: $(head -1 build/pk.err)"
+# A section on an initialised static other than .data is E0900, and so is
+# a read-only static in a section other than .rodata in an object file.
+printf 'module si\nt : u64 <- 3\n    section ".mydata"\nproc start -> s32\n    entry\n    ret s32.wrap(t)\nend\n' > build/si.oli
+set +e
+( cd .. && genesis/build/olic < genesis/build/si.oli > genesis/build/si.elf 2> genesis/build/si.err )
+st=$?
+set -e
+[ "$st" = 1 ] || fail "static section: an initialised static in .mydata exited $st, want E0900"
+grep -q 'E0900' build/si.err || fail "static section: an initialised static in .mydata must be E0900"
+# `align N` on a procedure puts its first instruction on the boundary.
+printf 'module pa\nproc a -> u64\n    ret 1\nend\nproc b -> u64\n    align 64\n    ret 2\nend\nproc start -> s32\n    entry\n    ret s32.wrap(a() + b())\nend\n' > build/pa.oli
+( cd .. && genesis/build/olic < genesis/build/pa.oli > genesis/build/pa.elf 2> genesis/build/pa.err ) || fail "proc align: olic could not compile: $(head -1 build/pa.err)"
+chmod +x build/pa.elf
+set +e; ./build/pa.elf; st=$?; set -e
+[ "$st" = 3 ] || fail "proc align: the program exited $st, want 3"
+a=$(nm build/pa.elf | awk '/ pa\.b$/{print $1}')
+[ $(( 0x$a % 64 )) = 0 ] || fail "proc align: pa.b at 0x$a is not on 64 bytes"
+echo "ok: every key of a target profile is applied or checked - an unknown key, code_model other than small, stack_probe, and an entry that names another procedure are refused; a section on an initialised static is E0900; align N on a procedure is honoured"
 # tests/run/switch.oli: a calls-none procedure's machine block is the whole
 # procedure - the lowering saves nothing through rbp, which it does not own.
 objdump -d --no-show-raw-insn build/switch.elf | awk '/<switch_test.switch_to>:/,/^$/' > build/switch.dis

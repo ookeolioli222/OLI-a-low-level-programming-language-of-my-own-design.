@@ -1,0 +1,36 @@
+-- output: object
+module global_side
+-- Globals across the C boundary, both ways. `extern NAME : T` is a static
+-- place another object defines — C's `c_counter`, `c_table`, `c_pt`, and
+-- the C library's own `stdout` — reached through the GOT
+-- (R_X86_64_REX_GOTPCRELX), so the object links into an executable, a PIE
+-- and a shared library alike. `export` on a static gives C a name for
+-- one of ours: `oli_seen` and, under the name the clause gives, `limit` as
+-- `oli_limit`. tests/c/global_main.c checks what each side wrote.
+
+layout Pt
+    x : s32
+    y : s32
+end
+
+extern c_counter : u64
+extern c_table : [4]u32
+extern c_pt : Pt
+extern stdout : addr u8
+extern proc fputs(s : addr u8, f : addr u8) -> s32
+
+oli_seen : u64 <- 0
+    export
+limit : u32 <- 9
+    export "oli_limit"
+
+pub proc oli_globals() -> u64
+    export "oli_globals"
+    c_counter <- c_counter + 5
+    c_table[2] <- c_table[1] * 10
+    c_pt.y <- c_pt.x + 1
+    oli_seen <- c_counter + u64(limit)
+    msg := "oli: through the C library's stdout\n\0"
+    fputs(msg.addr, stdout)
+    ret c_counter + u64(c_table[2]) + u64.bits(s64(c_pt.y))
+end

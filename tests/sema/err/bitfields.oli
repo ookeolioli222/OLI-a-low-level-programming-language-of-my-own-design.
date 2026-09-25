@@ -1,0 +1,29 @@
+-- A bitfield is an integer field of a layout that is not packed, no wider
+-- than its type; a union literal names exactly one field; a bitfield has
+-- no address of its own.
+layout Bad packed
+    a : u8 bits 3
+end
+layout TooWide
+    a : u8 bits 9
+end
+layout NotInt
+    a : f32 bits 3
+end
+layout U union
+    a : u32
+    b : u16
+end
+choice C
+    v { x : u8 bits 2 }
+end
+proc main -> s32
+    entry
+    u := U { a: 1, b: 2 }
+    ret 0
+end
+-- expect: E0900 @ 5:5
+-- expect: E0212 @ 8:5
+-- expect: E0900 @ 11:9
+-- expect: E0900 @ 18:9
+-- expect: E0208 @ 22:10

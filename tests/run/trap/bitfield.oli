@@ -1,0 +1,13 @@
+module trap_bitfield
+-- expect: trap: overflow at stdin:11
+layout Flags
+    lo : u8 bits 3
+    hi : u8 bits 5
+end
+proc start -> s32
+    entry
+    f : Flags <- Flags { lo: 0, hi: 0 }
+    v : u8 <- 8
+    f.lo <- v
+    ret s32(f.lo)
+end

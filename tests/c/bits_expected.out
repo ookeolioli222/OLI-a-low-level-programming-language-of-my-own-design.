@@ -1,0 +1,5 @@
+pte r=abcdf same_bits=1 raw=80000000abcde007
+mixed r=-308 same_bytes=1 C: c=-3 f=-8 sizeof=12
+sizes oli=8120804 C=8,12,8
+union=556736ff want 556736ff
+init=745653 want 745653

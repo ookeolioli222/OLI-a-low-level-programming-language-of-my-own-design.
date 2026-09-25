@@ -92,6 +92,10 @@ first) stays in front of the code — where a boot loader's header must be —
 and `.data` on the page after the code, whatever the list says; `entry`,
 `code_model`, `arch`, `os`, `red_zone` and `stack_probe` are read for what
 they document and not needed yet (`entry` is the `entry` clause).
+Since stage 52 no key is skipped: `code_model` must be `"small"`,
+`stack_probe` `false`, `entry` the procedure that carries `entry`, and a key
+this list does not name, or a table other than `[target]`, stops the
+compilation by name.
 `tests/freestanding/profile.oli` and `examples/kernel.oli` each carry one.
 
 ## 3. Entry, stack, sections

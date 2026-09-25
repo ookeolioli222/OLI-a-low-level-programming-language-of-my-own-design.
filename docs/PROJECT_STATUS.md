@@ -1317,6 +1317,50 @@ constant in `.rodata`).
   fixture); the harness pins the `.sema` form (an `own` result, parameter
   and place, three moves) and that the OIR carries no conversion.
 
+## Implemented in stage 52 (2026-09-25): bitfields, unions, globals across the C boundary, sections in objects
+
+- Bitfields (ABI.md §3): `name : T bits N` over an integer `T`, laid out
+  by the SysV rule — at the bit after the previous field when the N bits
+  fit in the aligned unit of `T`, else at the next unit. A read shifts and
+  masks, or sign-extends a signed field; a write clears the field's bits,
+  ors the value in and keeps the rest of the unit; a value wider than the
+  field traps `overflow` (`tests/run/trap/bitfield.oli`). Constants and
+  literals of a layout with bitfields are packed at compile time.
+  `layout Name union` lays every field at offset 0; its literal names
+  exactly one field (E0208). A bitfield in a `packed` layout, in a `choice`
+  payload or over a non-integer type is E0900, one wider than its type
+  E0212 (`tests/sema/err/bitfields.oli`, the twenty-first negative semantic
+  fixture); `ref` of a bitfield is E0900. `tests/run/bitfields.oli` runs 25
+  checks (a page-table entry, mixed signed and unsigned fields sharing
+  units, two unions); `tests/c/bits_side.oli` writes the same records as
+  `tests/c/bits_main.c` and GCC's bytes and olic's compare equal.
+- Globals across the C boundary: `extern NAME : T` is a static another
+  object defines, read and written like our own, reached through the GOT
+  (`R_X86_64_REX_GOTPCRELX`; `ADR_GOT_PAGE`/`LD64_GOT_LO12_NC` on AArch64);
+  `export ["sym"]` on a static adds a global `STT_OBJECT` symbol, and an
+  exported static is also reached through the GOT, since a program that
+  links the object may hold its own copy. `tests/c/global_side.oli` changes
+  C's `c_counter`, `c_table` and `c_pt`, writes through libc's `stdout`,
+  and is linked into an executable, a PIE and a shared library, each run.
+  An `extern` static in an executable, or with a `section` or `align`, is
+  E0900.
+- Sections in an object file: every code group and zero-static group is a
+  section of its own with its own `.rela`, calls and addresses between
+  groups are relocations, and `align N` on a procedure or a static is the
+  section's alignment; `tests/c/sect.ld` places `.boot` at 0x800000 and
+  `.lowdata` at 0x900000 and the linked program runs. `align N` on a
+  procedure is honoured in an executable too (`int3`, or `nop` words on
+  AArch64). An initialised static in a section other than `.data` is
+  E0900, and in an object file so is a read-only static outside `.rodata`.
+- Target profiles: every key is applied or checked. An unknown key, a
+  table other than `[target]`, `code_model` other than `"small"`,
+  `stack_probe = true` and an `entry` naming another procedure are refused
+  by name, and no file is written.
+- `olic` compiles itself (35,836 lines) into 1,635,448 bytes, stage2 ==
+  stage3.
+- Not yet: bitfields in `packed` layouts (C leaves them to the compiler),
+  a bitfield's address, `code_model = "kernel"`.
+
 ## Implemented in stage 51 (2026-09-25): the MMU on AArch64
 
 - New places (design 0025): `arch.a64.ttbr0` (a write is followed by
@@ -1795,9 +1839,9 @@ pinned:
 ## Self-hosting reached (2026-09-23): `stage2 == stage3`
 
 The gate of G4 (design 0022, completion gate 3): `olic`, built by `oli1`,
-compiles its own source (`compiler/`, seventeen modules, 34,693 lines) into
+compiles its own source (`compiler/`, seventeen modules, 35,836 lines) into
 stage 2; stage 2 compiles the same source into stage 3; the two files are the
-same 1,574,856 bytes. `genesis/test.sh` layer 6 does this on every run, and
+same 1,635,448 bytes. `genesis/test.sh` layer 6 does this on every run, and
 also compiles every run, trap and negative fixture with both stage 1 and
 stage 2 and requires the same bytes and the same diagnostics. The chain from
 322 hand-written bytes to a compiler that reproduces itself is now closed,

@@ -1,0 +1,26 @@
+-- output: object
+module sect_side
+-- Sections in an object file are the linker's to place: every code group
+-- and every zero-static group is an ELF section of its own, with a `.rela`
+-- section per code group, and the calls and addresses that cross from one
+-- group into another are relocations (PC32) rather than patched offsets.
+-- tests/c/sect.ld puts `.boot` at 0x800000 and `.lowdata` at 0x900000;
+-- `align` on a procedure and on a static survives as the section's
+-- alignment. The exit status is 42 when every value held.
+
+table : [32]u8
+    section ".lowdata"
+    align 64
+count : u64 <- 30
+
+proc early -> u64
+    section ".boot"
+    align 64
+    ret count + 1
+end
+
+proc start -> s32
+    entry
+    table[3] <- 11
+    ret s32.wrap(early() + u64(table[3]))
+end

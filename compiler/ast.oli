@@ -1209,8 +1209,11 @@ end
 proc ps_layout(cx: ref Ctx, n: u64, ind: u64)
     nd := node_at(cx, n)
     p_head_name(cx, "layout", n)
-    if nd.sub == 1
+    if nd.sub & 1 == 1
         emit(cx, " packed")
+    end
+    if nd.sub & 2 == 2
+        emit(cx, " union")
     end
     if nd.val > 0
         emit(cx, " align ")
@@ -1225,6 +1228,10 @@ proc ps_field(cx: ref Ctx, n: u64)
     p_head_name(cx, "field", n)
     emit(cx, " ")
     emit_type(cx, kid1(cx, n))
+    if nd.sub > 0
+        emit(cx, " bits ")
+        emit_uint(cx, u64(nd.sub))
+    end
     if nd.val > 0
         emit(cx, " align ")
         emit_uint(cx, nd.val)

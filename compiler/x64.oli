@@ -43,6 +43,7 @@ AF_ADRP := 34
 AF_TRAP := 35
 AF_VEC := 36
 AF_PADR := 37
+AF_GOT := 38
 -- The line table (DWARF, `compiler/elf.oli`): one record per change of
 -- source line along the code — position, line, module.
 LINE_REC_MAX := 262144
@@ -2572,6 +2573,18 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         -- this one: the writable segment's place is known only once the
         -- code is complete.
         d := dat_at(ob, ins.a)
+        if d.got == 1
+            -- `extern NAME : T` or an exported static of an object file: `mov rax, [rip + NAME@GOTPCREL]`, fix 12 —
+            -- the address the linker leaves in the GOT (or relaxes to a
+            -- `lea`), so an executable, a PIE and a shared library all link.
+            rex(ob, 64, R_AX, NOREG, NOREG)
+            cb(ob, 139)
+            cb(ob, 5)
+            add_fix(mc, ob.ncode, 12, ins.a)
+            c32(ob, 0)
+            st_val(ob, mc, R_AX, i)
+            ret
+        end
         lea_rip(ob, mc, R_AX, 11, d.off)
         st_val(ob, mc, R_AX, i)
         ret
@@ -3034,6 +3047,27 @@ proc next_live(ob: ref Oir, mc: ref Mach, b: u64) -> u64
     ret mc.curlast
 end
 
+proc cross_group(ob: ref Oir, mc: ref Mach, f: ref Fix) -> u64
+    -- 1 when a rel32 call (a procedure's, kind 0, or the trap routine's,
+    -- kind 3) leaves the code section group it is in.
+    t : u64 <- 0
+    if f.kind == 0
+        op := oproc_at(ob, f.target)
+        if op.isextern == 1
+            ret 0
+        end
+        t <- op.codepos
+    elif f.kind == 3
+        t <- mc.trappos
+    else
+        ret 0
+    end
+    if code_group_of(ob, f.pos) != code_group_of(ob, t)
+        ret 1
+    end
+    ret 0
+end
+
 proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
     -- `call`/`jz`/`jmp` are rel32 from the end of the instruction; a static
     -- address is absolute, because the image is a fixed-address non-PIE.
@@ -3050,6 +3084,11 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
             if abs_kind(f.kind) == 1
                 -- An object file: an absolute address is a relocation the
                 -- linker fills (`compiler/elf.oli`), the field stays zero.
+                i <- i + 1
+                continue
+            end
+            if cross_group(ob, mc, f) == 1
+                -- A call into another code section: PC32, the linker's.
                 i <- i + 1
                 continue
             end
@@ -3117,6 +3156,24 @@ proc pad_section(ob: rw ref Oir, pg: ref Prog, database: u64)
     end
 end
 
+proc pad_proc(pg: ref Prog, ob: rw ref Oir, gstart: u64, database: u64, al: u64)
+    -- `align N` on a procedure: `int3` bytes until its first instruction
+    -- is on the boundary — an address of the image, or in an object file
+    -- an offset of its section, which the section's own alignment carries.
+    if al <= 1
+        ret
+    end
+    if pg.objmode == 1
+        while (ob.ncode - gstart) % al != 0
+            cb(ob, 204)
+        end
+        ret
+    end
+    while (database + ob.ndata + ob.ncode) % al != 0
+        cb(ob, 204)
+    end
+end
+
 proc abs_kind(k: u64) -> word
     -- The fixes that are absolute addresses: read-only statics (2, 8), the
     -- writable segment (4, 6, 7) and procedures (5, 9).
@@ -3174,6 +3231,7 @@ proc lower_all(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, database: u64)
                 if opq.isextern == 0
                     if view_eq(proc_sect(pg, opq.pi), sect_name(ob, g))
                         opq.sect <- g
+                        pad_proc(pg, ob, sg.start, database, proc_align(pg, opq.pi))
                         lower_proc(pg, ob, mc, q)
                         opq.codeend <- ob.ncode
                     end

@@ -1901,9 +1901,19 @@ proc check_lit(pg: ref Prog, mi: u64, n: u64)
     name := tok_text(cx, hn.t0)
     idx : word <- item_find(pg, name)
     declared : u64 <- 0
+    isunion : u64 <- 0
     if idx >= 0
         it := item_at(pg, u64.bits(idx))
         declared <- it.nfld
+        if it.kind == 0
+            cxu := mod_ctx(pg, it.mod)
+            un := node_at(cxu, it.node)
+            if u64(un.sub) & 2 == 2
+                -- a `union` literal names exactly one of its fields
+                isunion <- 1
+                declared <- 1
+            end
+        end
     else
         idx <- variant_fields_of(pg, name)
         if idx < 0
@@ -1932,6 +1942,10 @@ proc check_lit(pg: ref Prog, mi: u64, n: u64)
     if wrong == 0
         if given < declared
             sdiag(pg, mi, 208, hn.t0)
+        elif isunion == 1
+            if given > 1
+                sdiag(pg, mi, 208, hn.t0)
+            end
         end
     end
 end
@@ -2060,6 +2074,7 @@ proc check_items(pg: ref Prog)
         while f < it.nfld
             fr := fld_at(pg, it.first + f)
             check_type(pg, fr.mod, kid1(cx, fr.node))
+            check_bitfield(pg, i, it.first + f)
             f <- f + 1
         end
         i <- i + 1
@@ -2073,6 +2088,148 @@ proc check_items(pg: ref Prog)
             check_proc(pg, v.mod, v.node)
         end
         q <- q + 1
+    end
+    check_static_sections(pg)
+end
+
+proc bitfield_type(t: view u8) -> u64
+    -- The integer types a bitfield may take its unit from.
+    if view_eq(t, "u8") == 1
+        ret 1
+    end
+    if view_eq(t, "u16") == 1
+        ret 1
+    end
+    if view_eq(t, "u32") == 1
+        ret 1
+    end
+    if view_eq(t, "u64") == 1
+        ret 1
+    end
+    if view_eq(t, "s8") == 1
+        ret 1
+    end
+    if view_eq(t, "s16") == 1
+        ret 1
+    end
+    if view_eq(t, "s32") == 1
+        ret 1
+    end
+    if view_eq(t, "s64") == 1
+        ret 1
+    end
+    if view_eq(t, "uword") == 1
+        ret 1
+    end
+    if view_eq(t, "word") == 1
+        ret 1
+    end
+    ret 0
+end
+
+proc check_bitfield(pg: rw ref Prog, ii: u64, fi: u64)
+    -- `name : T bits N`: only in a layout that is not `packed`, over an
+    -- integer T of at least N bits (E0900 for the first two, E0212 when N
+    -- does not fit T).
+    fr := fld_at(pg, fi)
+    cx := mod_ctx(pg, fr.mod)
+    fn := node_at(cx, fr.node)
+    if fn.sub == 0
+        ret
+    end
+    it := item_at(pg, ii)
+    if it.kind != 0
+        sdiag(pg, fr.mod, 900, fn.t0)
+        ret
+    end
+    ln := node_at(cx, it.node)
+    if u64(ln.sub) & 1 == 1
+        sdiag(pg, fr.mod, 900, fn.t0)
+        ret
+    end
+    ty := node_at(cx, kid1(cx, fr.node))
+    if ty.t1 != ty.t0 + 1
+        sdiag(pg, fr.mod, 900, ty.t0)
+        ret
+    end
+    if bitfield_type(tok_text(cx, ty.t0)) == 0
+        sdiag(pg, fr.mod, 900, ty.t0)
+        ret
+    end
+    if u64(fn.sub) > fr.size * 8
+        sdiag(pg, fr.mod, 212, fn.t0)
+    end
+end
+
+proc section_clause_tok(pg: ref Prog, mi: u64, node: u64) -> u64
+    -- The string token of a declaration's `section` clause.
+    cx := mod_ctx(pg, mi)
+    k : u64 <- kid1(cx, node)
+    while k != 0
+        kn := node_at(cx, k)
+        if kn.kind == N_CLAUSE
+            if kn.sub == C_SECTION
+                c := node_at(cx, kid1(cx, k))
+                ret c.t0
+            end
+        end
+        k <- sibling(cx, k)
+    end
+    ret 0
+end
+
+proc check_static_sections(pg: rw ref Prog)
+    -- A `section` on a static is honoured or refused, never dropped: a
+    -- zero static gets a group of its own and a `.text…`/`.rodata…` one is
+    -- laid in front of the code, but an initialised static can only be in
+    -- `.data` (E0900 for any other name), and an object file has one
+    -- `.rodata`, so there a read-only static names no other section.
+    vi : u64 <- 0
+    while vi < pg.nval
+        v := val_at(pg, vi)
+        if static_is_extern(pg, vi) == 1
+            -- `extern NAME : T`: only an object file carries an unresolved
+            -- symbol, and the place is the other object's to lay out, so a
+            -- `section` or `align` of its own would be dropped — both E0900.
+            cxe := mod_ctx(pg, v.mod)
+            ve := node_at(cxe, v.node)
+            if pg.objmode == 0
+                sdiag(pg, v.mod, 900, ve.t0)
+            end
+            ke : u64 <- kid1(cxe, v.node)
+            while ke != 0
+                kne := node_at(cxe, ke)
+                if kne.kind == N_CLAUSE
+                    sdiag(pg, v.mod, 900, kne.t0)
+                end
+                ke <- sibling(cxe, ke)
+            end
+        elif v.kind == 1
+            s := clause_section(pg, v.mod, v.node)
+            if s.len > 0
+                cx := mod_ctx(pg, v.mod)
+                vn := node_at(cx, v.node)
+                ro : u64 <- 0
+                if starts_with(s, ".text") == 1
+                    ro <- 1
+                end
+                if starts_with(s, ".rodata") == 1
+                    ro <- 1
+                end
+                if ro == 0
+                    if vn.sub == 1
+                        if view_eq(s, ".data") == 0
+                            sdiag(pg, v.mod, 900, section_clause_tok(pg, v.mod, v.node))
+                        end
+                    end
+                elif pg.objmode == 1
+                    if view_eq(s, ".rodata") == 0
+                        sdiag(pg, v.mod, 900, section_clause_tok(pg, v.mod, v.node))
+                    end
+                end
+            end
+        end
+        vi <- vi + 1
     end
 end
 

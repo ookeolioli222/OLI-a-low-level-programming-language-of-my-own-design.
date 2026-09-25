@@ -37,7 +37,7 @@ construct answers each system-programming requirement.
 | custom calling conventions | `calls sysv` (default), `calls none`, `calls interrupt`; `calls c` = alias of `sysv` | V0/V1 |
 | packed structures | `layout X packed` | V0 |
 | explicit alignment | `align N` on layouts, fields, statics, procedures, zone allocations | V0 |
-| bit fields | `bit` and `bits N` field types inside `packed` layouts | V1 |
+| bit fields | `name : T bits N` fields in C's SysV layout, and `layout X union` — **run** (stage 52; `tests/run/bitfields.oli`, `tests/c/bits_side.oli`) | V1 (runs) |
 | CPU intrinsics | `cpu.halt`, `cpu.pause`, `cpu.cpuid`, `cpu.rdmsr/wrmsr`, `cpu.cr3`, `cpu.interrupts(on/off)`, `cpu.tsc`, `cpu.lgdt/lidt` | V0 (halt, pause), V1 (rest) |
 | hardware places and commands | `arch.x64.cr0/2/3/4/8`, `arch.x64.msr[n]`, `arch.x64.gdt/idt <- ref t`, `arch.x64.tr`, `cpu.stack`, `cpu.frame`, `port.u8[n]`, `cpu.halt/pause/interrupts/fence`, `cpu.id(leaf)`, `cpu.tsc()`, `cpu.call(p)`, `cpu.jump(a)`, `arch.x64.segments(code, data)`; on AArch64 `arch.a64.vbar/cntv_ctl/cntv_tval/cntfrq/esr/elr/far/cpacr/vectors` and the GICv3 `arch.a64.icc_*` registers, user mode with `arch.a64.spsr/sp_el0`, `arch.a64.eret(p)` and `arch.a64.svc(v)`, the MMU with `arch.a64.ttbr0/tcr/mair/sctlr` — **run** (design 0015; `tests/run/hw.oli`, `tests/run/segments.oli`, `examples/kernel.oli`) | V0 (runs) |
 | inline machine code | `machine x64 ... end` with `in`/`out`/`clobber`, assembled by `olic` — the escape hatch | V0 |
