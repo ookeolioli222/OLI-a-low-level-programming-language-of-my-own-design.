@@ -51,7 +51,8 @@ R_11 := 11
 
 -- The five bytes of a trap site after its condition: the message address, its
 -- length and the `call` to the routine below.
-TRAP_SEQ := 25
+-- lea rdi, [rip + message] (7), mov rsi, length (10), call (5).
+TRAP_SEQ := 22
 
 layout Lbl
     pos : u64
@@ -235,6 +236,28 @@ proc st_slot(ob: rw ref Oir, r: u64, s: u64)
     cb(ob, 137)
     modrm_bp(ob, r)
     c32(ob, slot_disp(s))
+end
+
+proc lea_rip(ob: rw ref Oir, mc: rw ref Mach, r: u64, kind: u64, target: u64)
+    -- `lea r, [rip + disp32]`: the address of a static relative to the end
+    -- of this instruction, so that the code does not depend on where it is
+    -- loaded — fix 10 for the read-only segment, 11 for the writable one;
+    -- in an object file an `R_X86_64_PC32` (compiler/elf.oli).
+    rex(ob, 64, r, NOREG, NOREG)
+    cb(ob, 141)
+    cb(ob, 5 + r % 8 * 8)
+    add_fix(mc, ob.ncode, kind, target)
+    c32(ob, 0)
+end
+
+proc patch_rel(ob: rw ref Oir, pos: u64, target: u64, here: u64)
+    -- A rel32 from `here` (the end of the instruction) to `target`, either
+    -- way, without leaving the word.
+    if target >= here
+        patch32(ob, pos, target - here)
+    else
+        patch32(ob, pos, 4294967296 - (here - target))
+    end
 end
 
 proc mov_imm(ob: rw ref Oir, r: u64, v: u64)
@@ -666,8 +689,7 @@ proc trap_call(ob: rw ref Oir, mc: rw ref Mach, si: u64)
         m := tmsg_of(ob, si - 1)
         fs := stat_at(ob, m.fstat - 1)
         mov_imm(ob, R_DI, m.kind - 1)
-        mov_imm(ob, R_SI, 0)
-        add_fix(mc, ob.ncode - 8, 2, fs.off)
+        lea_rip(ob, mc, R_SI, 10, fs.off)
         mov_imm(ob, R_DX, fs.len)
         mov_imm(ob, R_CX, m.line)
         cb(ob, 232)
@@ -677,8 +699,7 @@ proc trap_call(ob: rw ref Oir, mc: rw ref Mach, si: u64)
         ret
     end
     st := stat_at(ob, si - 1)
-    mov_imm(ob, R_DI, 0)
-    add_fix(mc, ob.ncode - 8, 2, st.off)
+    lea_rip(ob, mc, R_DI, 10, st.off)
     mov_imm(ob, R_SI, st.len)
     cb(ob, 232)
     add_fix(mc, ob.ncode, 3, 0)
@@ -713,7 +734,8 @@ proc trap_len(mc: ref Mach) -> u64
         if mc.trapproc == 0
             ret 2
         end
-        ret 45
+        -- mov rdi (10), lea rsi [rip] (7), mov rdx (10), mov rcx (10), call (5).
+        ret 42
     end
     ret TRAP_SEQ
 end
@@ -1910,8 +1932,7 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
     end
     if op == O_SADDR
         st := stat_at(ob, ins.a)
-        mov_imm(ob, R_AX, 0)
-        add_fix(mc, ob.ncode - 8, 2, st.off)
+        lea_rip(ob, mc, R_AX, 10, st.off)
         st_val(ob, mc, R_AX, i)
         ret
     end
@@ -2098,11 +2119,11 @@ proc lower_ins(pg: ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
         ret
     end
     if op == O_DADDR
-        -- The address of a static place: the writable segment's base, known
-        -- only once the code is complete, plus the place's offset.
+        -- The address of a static place, relative to the instruction after
+        -- this one: the writable segment's place is known only once the
+        -- code is complete.
         d := dat_at(ob, ins.a)
-        mov_imm(ob, R_AX, 0)
-        add_fix(mc, ob.ncode - 8, 4, d.off)
+        lea_rip(ob, mc, R_AX, 11, d.off)
         st_val(ob, mc, R_AX, i)
         ret
     end
@@ -2572,6 +2593,11 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
     while i < mc.nfix
         f := fix_at(mc, i)
         if mc.objmode == 1
+            if f.kind >= 10
+                -- rip-relative across sections: the linker's (PC32).
+                i <- i + 1
+                continue
+            end
             if abs_kind(f.kind) == 1
                 -- An object file: an absolute address is a relocation the
                 -- linker fills (`compiler/elf.oli`), the field stays zero.
@@ -2598,6 +2624,10 @@ proc apply_fixes(ob: rw ref Oir, mc: ref Mach, database: u64)
             patch64(ob, f.pos, database + ob.ndata + op5.codepos)
         elif f.kind == 6
             patch64(ob, f.pos, mc.dbase + f.target)
+        elif f.kind == 10
+            patch_rel(ob, f.pos, database + f.target, database + ob.ndata + f.pos + 4)
+        elif f.kind == 11
+            patch_rel(ob, f.pos, mc.dbase + f.target, database + ob.ndata + f.pos + 4)
         elif f.kind == 9
             -- `addr32 NAME` of a procedure: its absolute address in 32 bits.
             op9 := oproc_at(ob, f.target)

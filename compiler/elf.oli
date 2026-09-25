@@ -926,6 +926,13 @@ proc build_rela(ob: ref Oir, mc: ref Mach, rb: rw view u8) -> u64
             op5 := oproc_at(ob, f.target)
             put_rela(rb, n, f.pos, 2 * 4294967296 + 1, op5.codepos)
             n <- n + 1
+        elif f.kind == 10
+            -- `lea r, [rip + .rodata + off]`: PC32 against .rodata.
+            put_rela(rb, n, f.pos, 4294967296 + 2, pc_addend(f.target))
+            n <- n + 1
+        elif f.kind == 11
+            data_rela(ob, rb, n, f)
+            n <- n + 1
         elif f.kind == 9
             -- `addr32` of a procedure: `R_X86_64_32` against .text.
             op9 := oproc_at(ob, f.target)
@@ -960,11 +967,27 @@ proc data_rela(ob: ref Oir, rb: rw view u8, n: u64, f: ref Fix)
     if f.kind == 7
         kind <- 11
     end
-    if f.target < ob.dsize
-        put_rela(rb, n, f.pos, 3 * 4294967296 + kind, f.target)
-    else
-        put_rela(rb, n, f.pos, 4 * 4294967296 + kind, f.target - ob.dsize)
+    off : u64 <- f.target
+    sym : u64 <- 3
+    if f.target >= ob.dsize
+        off <- f.target - ob.dsize
+        sym <- 4
     end
+    if f.kind == 11
+        -- rip-relative (`lea r, [rip + …]`): PC32, the addend less the four
+        -- bytes of the displacement itself.
+        put_rela(rb, n, f.pos, sym * 4294967296 + 2, pc_addend(off))
+        ret
+    end
+    put_rela(rb, n, f.pos, sym * 4294967296 + kind, off)
+end
+
+proc pc_addend(off: u64) -> u64
+    -- `off - 4` as a two's-complement word.
+    if off >= 4
+        ret off - 4
+    end
+    ret 18446744073709551612 + off
 end
 
 proc obj_header(b: rw view u8, shoff: u64)

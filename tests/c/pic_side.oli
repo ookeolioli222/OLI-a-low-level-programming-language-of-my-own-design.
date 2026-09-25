@@ -1,0 +1,19 @@
+-- output: object
+module pic_side
+-- Position-independent code: statics in .data and .rodata reached through
+-- `lea r, [rip + …]` (R_X86_64_PC32 in the object), a call into libc
+-- (PLT32). tests/c/pic_main.c links it into cc's default PIE and into a
+-- shared library, neither with text relocations.
+extern proc puts(s : addr u8) -> s32
+counter : u64 <- 40
+table : [4]u32 <- { 1, 2, 3, 4 }
+pub proc oli_bump(k : u64) -> u64
+    export "oli_bump"
+    counter <- counter + k + u64(table[1])
+    ret counter
+end
+pub proc oli_hello() -> s32
+    export "oli_hello"
+    permit memory.raw
+    ret puts("hello from an Oli-- shared object\0".addr)
+end

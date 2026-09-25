@@ -127,9 +127,13 @@ built from the initial stack (`[rsp] = argc`, `[rsp+8..] = argv`).
 | debug | `.symtab` always; DWARF 4 `.debug_line` (a row per change of source line, one file per module, `a.b` as `a/b.oli`) and `.debug_info`/`.debug_abbrev` (one compile unit — the root module, language `0x8000` — and a subprogram per procedure with its range) in every executable (stage 29); an object file carries none yet (its addresses would need relocations) |
 
 `-- output: object` (stage 24) produces `ET_REL`: the same sections at address
-0 each, no program headers, `.rela.text` with `R_X86_64_64` for every absolute
-address the executable would have patched (`R_X86_64_32S` for a disp32 of a
-machine block), against the section symbol of what it names, and
+0 each, no program headers, `.rela.text` with `R_X86_64_PC32` (addend
+offset − 4) for every static the compiler's code reaches — since stage 39 every
+static address is `lea r, [rip + disp32]`, in executables too, so the code is
+position-independent and links into a PIE or a shared library without text
+relocations — `R_X86_64_64`/`R_X86_64_32S` only for what a machine block
+names absolutely (`mov r64, static`, `[static]`), `R_X86_64_32` for
+`addr32`, all against the section symbol of what they name, and
 `R_X86_64_PLT32` (addend −4) per call to an `extern` procedure, which is an
 undefined global symbol under its bare name; an entry procedure is also
 `_start`. Every call to an `extern` clears `al` first (a variadic C callee's

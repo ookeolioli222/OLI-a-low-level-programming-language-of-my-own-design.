@@ -1631,7 +1631,7 @@ echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2
 # `_start` for an entry procedure. Two Oli-- objects link with ld alone and
 # run; the C half of tests/c links with cc, calls into Oli-- and is called
 # back, and prints what tests/c/expected.out says.
-for n in oli_side lib_side main_side; do
+for n in oli_side lib_side main_side pic_side; do
     ( cd .. && genesis/build/olic < tests/c/$n.oli > genesis/build/$n.o 2> genesis/build/$n.err ) || fail "object: olic could not compile tests/c/$n.oli: $(head -1 build/$n.err)"
 done
 readelf -h build/oli_side.o | grep -q 'Type: *REL' || fail "object: oli_side.o is not ET_REL"
@@ -1639,7 +1639,7 @@ readelf -SW build/oli_side.o | grep -q '\.rela\.text  *RELA' || fail "object: ol
 [ "$(nm build/oli_side.o | grep -c ' U c_double$\| U write$')" = 2 ] || fail "object: the two extern procedures must be undefined symbols"
 nm build/oli_side.o | grep -q ' T oli_add$' || fail "object: the exported procedure must be the global symbol oli_add"
 [ "$(readelf -rW build/oli_side.o | grep -c 'R_X86_64_PLT32')" = 2 ] || fail "object: one PLT32 relocation per extern call"
-[ "$(readelf -rW build/oli_side.o | grep -c 'R_X86_64_64  *0000000000000000 .rodata')" = 2 ] || fail "object: the string literal's address and length go through .rodata relocations"
+[ "$(readelf -rW build/oli_side.o | grep -c 'R_X86_64_PC32  *0000000000000000 .rodata')" = 2 ] || fail "object: the string literal and the trap message are reached rip-relative through .rodata (PC32)"
 readelf -a build/oli_side.o > /dev/null 2> build/readelf.err || fail "object: readelf -a rejects oli_side.o"
 [ ! -s build/readelf.err ] || fail "object: readelf -a warns about oli_side.o: $(head -1 build/readelf.err)"
 nm build/main_side.o | grep -q ' T _start$' || fail "object: the entry procedure must also be _start"
@@ -1651,6 +1651,22 @@ if command -v cc > /dev/null 2>&1; then
     ./build/c_prog > build/c_prog.out || fail "object: the C program linked with Oli-- exited non-zero"
     cmp build/c_prog.out ../tests/c/expected.out || fail "object: the C program's output differs from tests/c/expected.out"
     echo "ok: object files: two Oli-- objects link with ld alone and run; oli_side.o links with C by cc, C calls oli_add, oli_add calls C's c_double and libc's write, and the output is tests/c/expected.out"
+    # Position-independent code: every static is reached rip-relative, so
+    # the object links into cc's default PIE and into a shared library with
+    # no text relocation, and both run.
+    ! readelf -rW build/pic_side.o | grep -q 'R_X86_64_64\|R_X86_64_32' || fail "pic: the compiler's own code must not carry an absolute relocation"
+    cc -o build/pic_pie ../tests/c/pic_main.c build/pic_side.o 2> build/cc.err || fail "pic: cc could not link a PIE: $(head -1 build/cc.err)"
+    [ ! -s build/cc.err ] || fail "pic: linking the PIE warned: $(head -1 build/cc.err)"
+    file build/pic_pie | grep -q 'pie executable' || fail "pic: cc did not make a PIE"
+    ./build/pic_pie > build/pic_pie.out || fail "pic: the PIE exited non-zero"
+    cmp build/pic_pie.out ../tests/c/pic_expected.out || fail "pic: the PIE's output differs from tests/c/pic_expected.out"
+    cc -shared -o build/libpic_side.so build/pic_side.o 2> build/cc.err || fail "pic: cc could not make a shared library: $(head -1 build/cc.err)"
+    [ ! -s build/cc.err ] || fail "pic: linking the shared library warned: $(head -1 build/cc.err)"
+    ! readelf -d build/libpic_side.so | grep -q TEXTREL || fail "pic: the shared library needs text relocations"
+    cc -o build/pic_so ../tests/c/pic_main.c -Lbuild -lpic_side 2> build/cc.err || fail "pic: cc could not link against libpic_side.so"
+    LD_LIBRARY_PATH=build ./build/pic_so > build/pic_so.out || fail "pic: the program linked against the shared library exited non-zero"
+    cmp build/pic_so.out ../tests/c/pic_expected.out || fail "pic: the shared-library program's output differs"
+    echo "ok: position-independent code - statics rip-relative (PC32), the object linked into a PIE and into libpic_side.so without text relocations, both run"
 else
     echo "ok: object files: two Oli-- objects link with ld alone and run (no cc on this machine: the C half of tests/c was not linked)"
 fi
