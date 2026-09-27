@@ -1,0 +1,29 @@
+module function_values
+import std.os
+
+proc write(v : view u8)
+    permit os.syscall
+    os.syscall(os.WRITE, 1, v.addr, v.len)
+end
+
+proc encode(a : u64, b : u64) -> u64
+    ret a * 10 + b
+end
+
+proc main -> s32
+    entry
+    permit os.syscall
+    first := encode(2, 3)
+    second := encode(4, 5)
+    if first != 23
+        ret 1
+    end
+    if second != 45
+        ret 2
+    end
+    if first != 23
+        ret 3
+    end
+    write("first=23; second=45; first still=23\n")
+    ret 0
+end

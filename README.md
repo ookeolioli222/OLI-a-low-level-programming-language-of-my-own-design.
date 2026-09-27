@@ -91,6 +91,8 @@ genesis/build/show_oir    < examples/hello.oli    # the OIR the back end lowers
 genesis/build/olic < examples/hello.oli > genesis/build/hello2.elf
 chmod +x genesis/build/hello2.elf
 genesis/build/hello2.elf                 # Hello Oli-- - high-level Oli--, compiled by olic
+
+bin/olic examples/fibonacci.oli -o genesis/build/fib2 && genesis/build/fib2   # fib(10)=55 - the command-line form
 ```
 
 The first example uses the genesis machine sub-language; the last compiles the
@@ -154,7 +156,7 @@ compiler/            olic written in oli-core (G4): io, lexer, diagnostics, AST,
 genesis/hexbin.sh    the only non-Oli-- build step: materializes hex0.bin once (POSIX sh)
 genesis/test.sh      verifies every layer (POSIX sh + coreutils)
 lib/                 core and std library modules written in Oli-- (V0 subset)
-examples/            hello.oli, packet_demo.oli (reference programs, both compiled and run by the harness), kernel.oli (a bootable image)
+examples/            hello.oli, packet_demo.oli, fibonacci.oli, loop_sum.oli, function_values.oli (reference programs, all compiled and run by the harness), kernel.oli (a bootable image)
 tests/parse/ok       programs that must parse cleanly
 tests/parse/err      programs with `-- expect: CODE @ LINE:COL` lines
 tests/sema/ok,err    the same for semantic analysis (with the real lib/)

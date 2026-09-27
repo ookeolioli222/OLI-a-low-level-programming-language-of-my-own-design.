@@ -1,0 +1,28 @@
+module loop_sum
+import std.os
+
+proc write(v : view u8)
+    permit os.syscall
+    os.syscall(os.WRITE, 1, v.addr, v.len)
+end
+
+proc sum_to(n : u64) -> u64
+    total : u64 <- 0
+    i : u64 <- 1
+    while i <= n
+        total <- total + i
+        i <- i + 1
+    end
+    ret total
+end
+
+proc main -> s32
+    entry
+    permit os.syscall
+    answer := sum_to(10)
+    if answer != 55
+        ret 1
+    end
+    write("sum(1..10)=55\n")
+    ret 0
+end

@@ -1780,6 +1780,26 @@ pinned:
   member); `addr u8 (r)` is the conversion the language documents, and the
   demo uses it.
 
+## Documented (2026-09-27): the Polish handbook and three small examples
+
+`docs/PODRECZNIK_OLI_PL.md` is a practical handbook in Polish — syntax,
+types, places and arrays, procedures, control flow, layouts, zones, fallible
+results, I/O through `os.syscall`, modules, permits and machine blocks, the
+commands, diagnostics, a cheat sheet, operator precedence, `choice`,
+freestanding programs, the ABI, costs, the repository, exercises and a status
+section. Every complete program in it was compiled by `olic` before it was
+written down, and the two snippets that narrowed implicitly now say
+`s32.wrap(...)` and `u64.bits(...)`, as the language requires. Its status
+section follows `docs/LANGUAGE.md`: arrays, `each` over a range, `choice`,
+`sat`/`checked`, statics and object files run; generics, threads, AVX,
+Windows and the wider standard library do not exist yet.
+
+`examples/fibonacci.oli` (recursion), `examples/loop_sum.oli` (places and a
+`while` loop) and `examples/function_values.oli` (bindings kept across
+calls) are the handbook's worked exercises. Layer 5 of `genesis/test.sh`
+compiles and runs each and checks the line it prints; layer 6 compiles them
+with the self-compiled compiler too and compares the bytes.
+
 ## Implemented in stage 36 (2026-09-25): a physical memory manager
 
 - **`core.frames`** (`lib/core/frames.oli`, Oli-- only): one bit per

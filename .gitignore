@@ -1,2 +1,5 @@
 /genesis/build
 *.oli.out
+
+# a stale clone of the GitHub repository kept beside the working tree
+/OLI-a-low-level-programming-language-of-my-own-design/

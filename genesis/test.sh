@@ -1565,6 +1565,18 @@ set +e; timeout 10 ./build/packet_demo.elf > build/packet_demo.out 2>&1; st=$?; 
 [ "$(wc -c < build/packet_demo.out)" = 19 ] || fail "packet_demo: the output is the verdict, the twelve-byte cpuid vendor and a newline"
 echo "ok: examples/packet_demo.oli - the reference program of the language documents - compiles and runs: zone, layout with a be field, choice failures, each, syscalls, machine block, raw address"
 
+# The small examples of the handbook (docs/PODRECZNIK_OLI_PL.md): each prints
+# one line naming the value it checked and exits 0 only when the value held.
+for pair in "fibonacci fib(10)=55" "loop_sum sum(1..10)=55" "function_values first=23; second=45; first still=23"; do
+    n=${pair%% *}; want=${pair#* }
+    ( cd .. && genesis/build/olic < examples/$n.oli > genesis/build/ex_$n.elf 2> genesis/build/ex_$n.err ) || fail "examples: olic could not compile examples/$n.oli: $(head -1 build/ex_$n.err)"
+    chmod +x build/ex_$n.elf
+    set +e; got=$(timeout 10 ./build/ex_$n.elf 2>&1); st=$?; set -e
+    [ "$st" = 0 ] || fail "examples: $n exited $st, want 0"
+    [ "$got" = "$want" ] || fail "examples: $n printed [$got], want [$want]"
+done
+echo "ok: examples/fibonacci.oli, loop_sum.oli and function_values.oli - recursion, a while loop over places, bindings kept across calls - compile, run and print what they checked"
+
 # M3/M4 (FREESTANDING.md 8): the kernel image, checked structurally first:
 # linked at the address its profile names, the Multiboot2 header (a static
 # layout with an initialiser, placed in `.text.boot`) right after the ELF
@@ -2068,7 +2080,7 @@ echo "ok: G4 - olic compiles its own source, and the compiler that produces comp
 
 # The self-compiled compiler agrees with the genesis-built one on every
 # program of the corpus, byte for byte, diagnostics included.
-for f in ../examples/hello.oli ../tests/run/*.oli ../tests/run/trap/*.oli ../tests/a64/*.oli; do
+for f in ../examples/hello.oli ../examples/fibonacci.oli ../examples/loop_sum.oli ../examples/function_values.oli ../tests/run/*.oli ../tests/run/trap/*.oli ../tests/a64/*.oli; do
     n=$(basename "$f" .oli)
     ( cd .. && genesis/build/olic < "${f#../}" > genesis/build/s1_$n.elf 2> genesis/build/s1_$n.err )
     st1=$?

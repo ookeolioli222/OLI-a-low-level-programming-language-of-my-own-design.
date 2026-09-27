@@ -280,6 +280,7 @@ The detailed schedule is [`ROADMAP.md`](ROADMAP.md), the IDE plan is
 - [`docs/FREESTANDING.md`](docs/FREESTANDING.md)
 - [`docs/KERNEL_PROGRAMMING.md`](docs/KERNEL_PROGRAMMING.md)
 - [`docs/PROGRAM_PRZYKLAD.md`](docs/PROGRAM_PRZYKLAD.md)
+- [`docs/PODRECZNIK_OLI_PL.md`](docs/PODRECZNIK_OLI_PL.md) — the Polish handbook: syntax, types, procedures, I/O, memory, libraries, exercises
 - [`genesis/2-asm/SPEC.md`](genesis/2-asm/SPEC.md)
 - [`genesis/3-oli1/SPEC.md`](genesis/3-oli1/SPEC.md)
 
