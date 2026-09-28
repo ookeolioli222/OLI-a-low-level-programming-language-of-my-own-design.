@@ -1,0 +1,10 @@
+module trap_elemref
+-- expect: trap: bounds at stdin:7
+counts : [4]u64
+proc start -> s32
+    entry
+    i : uword <- 4
+    r := rw ref counts[i]
+    _o := atomic.add(r, 1, seq_cst)
+    ret 0
+end

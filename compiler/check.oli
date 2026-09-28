@@ -681,6 +681,18 @@ proc check_expr(pg: ref Prog, mi: u64, n: u64)
     if k == N_RAWLOAD
         need(pg, mi, "memory.raw", nd.t0)
     end
+    if k == N_UNOP
+        -- `rw ref v[i]`: a writable reference to an element needs the
+        -- element to be writable, as a store into it would (E0111).
+        if nd.sub == U_REFOF
+            if nd.val == 1
+                ran := node_at(cx, kid1(cx, n))
+                if ran.kind == N_INDEX
+                    check_target(pg, mi, kid1(cx, n), nd.t0)
+                end
+            end
+        end
+    end
     if k == N_HWPLACE
         -- An I/O port, read or written: `io.port`; a control register, the
         -- stack and frame pointers, the descriptor tables and the task

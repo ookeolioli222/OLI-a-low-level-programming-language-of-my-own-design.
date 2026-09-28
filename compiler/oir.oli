@@ -4057,6 +4057,31 @@ proc gen_unop(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64, want: view u8) -
             ob.lastlen <- 0
             ret pa
         end
+        if pn.kind == N_INDEX
+            -- `ref v[i]`, `rw ref a[i]`: the address of one element of a
+            -- view or an array, bounds-checked as a load of it would be. A
+            -- subview is not one object, a vector's lane is not a place,
+            -- and an element of device memory would lose its volatility
+            -- through a plain ref: E0900 for those.
+            rb := pg.sbuf
+            ixn := node_at(cx, kid2(cx, arg))
+            rbt := ety(pg, mi, kid1(cx, arg), rb[0..0])
+            if ixn.kind == N_RANGE
+                oir_err(ob, pg, mi, 900, n)
+                ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+            end
+            if is_vector(rbt) == 1
+                oir_err(ob, pg, mi, 900, n)
+                ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+            end
+            if is_mmio(rbt) == 1
+                oir_err(ob, pg, mi, 900, n)
+                ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+            end
+            pe := gen_index_addr(pg, ob, mi, arg)
+            ob.lastlen <- 0
+            ret pe
+        end
         oir_err(ob, pg, mi, 900, n)
         ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
     end

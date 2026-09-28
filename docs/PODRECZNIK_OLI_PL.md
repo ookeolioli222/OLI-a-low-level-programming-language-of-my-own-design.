@@ -609,6 +609,8 @@ v[a..]                -- od a do końca
 T.size                -- rozmiar layoutu
 T.align               -- wyrównanie layoutu
 T.at(v)               -- referencja T nad bajtami widoku
+ref v[i]              -- referencja do jednego elementu (z kontrolą zakresu)
+rw ref a[i]           -- to samo, z prawem zapisu (element musi być zapisywalny)
 z.bytes(n)            -- bufor ze strefy
 z.make(T)             -- obiekt ze strefy
 ```

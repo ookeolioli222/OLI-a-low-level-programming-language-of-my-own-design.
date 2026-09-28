@@ -1,0 +1,12 @@
+-- A writable reference to an element of a read-only view is refused where
+-- a store into that element would be (E0111); a plain `ref` to it is fine.
+K : [2]u64 := { 1, 2 }
+proc main(v : view u32) -> s32
+    entry
+    _a := rw ref v[0]
+    _b := ref v[0]
+    _c := rw ref K[1]
+    ret 0
+end
+-- expect: E0111 @ 6:14
+-- expect: E0111 @ 8:14

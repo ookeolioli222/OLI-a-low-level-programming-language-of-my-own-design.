@@ -1780,6 +1780,28 @@ pinned:
   member); `addr u8 (r)` is the conversion the language documents, and the
   demo uses it.
 
+## Implemented in stage 58 (2026-09-28): references to elements
+
+`ref v[i]` and `rw ref a[i]` — a reference to one element of a view or an
+array — lower in the back end: `gen_unop` hands the index to
+`gen_index_addr`, so the element's address comes after the same
+`check.range` a load of it makes (the `bounds` trap,
+`tests/run/trap/elemref_bounds.oli`), and the front end already typed the
+expression (`ref T` of the element's type) and gave it the view's region.
+Three shapes are refused with E0900: a subview (`ref v[a..b]` is not one
+object), a vector's lane (not a place) and an element of an `mmio` view (a
+plain ref would lose the volatility). `rw ref v[i]` is checked where a store
+into `v[i]` would be — `check_target`: the rooted place must be `rw`, and
+never a constant — so `rw ref` of a read-only view's element or of an
+aggregate constant's element is E0111 (`tests/sema/err/elemref.oli`).
+
+`tests/run/elemref.oli`: a static table of records changed through
+`rw ref recs[i]`, the ref handed to a procedure, counters of an array and
+of a view under `atomic.add`/`atomic.load`, and a frame array's word through
+a `rw ref`. This closes the gap that shaped `std.threads`'s API in stage 57
+(a one-element view instead of a ref) — `atomic.add(rw ref counts[k], …)`
+now reads as it should.
+
 ## Implemented in stage 57 (2026-09-28): threads on hosted x86-64
 
 `lib/std/threads.oli` (`thread` is a reserved word): `spawn(slot, stack,

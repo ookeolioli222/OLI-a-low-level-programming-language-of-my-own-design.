@@ -67,6 +67,7 @@ hdr.len <- 20           -- store: into a field through a ref
 | `place <~ expr` | move an `own` value into an `own` place; the source is consumed (a later read is `E0340`) | ZERO: one store, or a register move after `mem2reg` | **runs** (`tests/run/own.oli`) |
 | `addr x` | the raw address of a place | ZERO | analysed |
 | `ref x` / `rw ref x` | a safe reference to one live object — a local keeps its frame words once its address is taken, a field is the address of that part of the record | ZERO | **runs** |
+| `ref v[i]` / `rw ref a[i]` | a reference to one element of a view or an array (a record of a table, a counter for `atomic.*`): its address after the same `check.range` a load of it makes (`bounds` trap); `rw` only where a store into the element would be allowed (E0111); a subview, a vector's lane or an element of an `mmio` view is E0900 (`tests/run/elemref.oli`, stage 58) | CHECK | **runs** |
 | `[p]` | raw load through an `addr` (`permit memory.raw`) | ZERO | **runs** |
 
 ### Views — `(address, length)` over existing memory, never a copy

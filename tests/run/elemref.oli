@@ -1,0 +1,51 @@
+module elemref_test
+-- References to elements (stage 58): `ref v[i]` and `rw ref a[i]` are the
+-- address of one element of a view or an array, bounds-checked as a load
+-- of it would be - a record of a static table reached and changed through
+-- a ref, the same ref handed to a procedure, counters of an array and of
+-- a view under `atomic.add` and `atomic.load`, and a frame array's word
+-- through a `rw ref`. The exit status is the number of the check that
+-- failed; 42 when every one held.
+
+layout Rec
+    id : u64
+    hits : u32
+    pad : u32
+end
+
+recs : [3]Rec
+counts : [4]u64
+
+proc bump(r : rw ref Rec)
+    r.hits <- r.hits + 1
+end
+
+proc start -> s32
+    entry
+    i : uword <- 0
+    while i < 3
+        r := rw ref recs[i]
+        r.id <- u64(i) * 10
+        bump(r)
+        bump(rw ref recs[i])
+        i <- i + 1
+    end
+    if recs[2].id != 20 then ret 1
+    if recs[1].hits != 2 then ret 2
+    if recs[0].hits != 2 then ret 3
+    k : uword <- 0
+    while k < 4
+        _o := atomic.add(rw ref counts[k], u64(k) + 1, seq_cst)
+        k <- k + 1
+    end
+    if counts[3] != 4 then ret 4
+    if atomic.load(ref counts[2], acquire) != 3 then ret 5
+    v := counts[1..3]
+    if atomic.load(ref v[1], acquire) != 3 then ret 6
+    w : [4]u32
+    q := rw ref w[2]
+    _p := atomic.add(q, 7, seq_cst)
+    if w[2] != 7 then ret 7
+    if w[1] != 0 then ret 8
+    ret 42
+end
