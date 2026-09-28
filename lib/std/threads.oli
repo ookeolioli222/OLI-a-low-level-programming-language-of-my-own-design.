@@ -30,8 +30,7 @@ FUTEX_WAIT : u64 := 0
 --- and `ret`s into the entry with rsp at 8 mod 16, as after a call; when
 --- the entry returns it lands in the stub, which ends this thread alone
 --- (`exit`, 60). The parent leaves the block with the kernel's answer in
---- rax. (The fifth argument, the TLS, is not passed: without CLONE_SETTLS
---- the kernel ignores it.)
+--- rax. The fifth argument, the TLS in r8, is zero: no CLONE_SETTLS.
 pub proc spawn(slot : rw view u32, tstack : rw view u8, start_at : u64) -> word
     permit cpu.asm, memory.raw
     if tstack.len < 256 then ret -22
@@ -40,12 +39,14 @@ pub proc spawn(slot : rw view u32, tstack : rw view u8, start_at : u64) -> word
     [addr u64 (top - 8)] <- start_at
     child := top - 8
     ta := u64(slot.addr)
+    zero : u64 <- 0
     r : word <- 0
     machine x64
         in rdi <- CLONE_FLAGS
         in rsi <- child
         in rdx <- ta
         in r10 <- ta
+        in r8 <- zero
         mov eax, 56
         syscall
         test rax, rax

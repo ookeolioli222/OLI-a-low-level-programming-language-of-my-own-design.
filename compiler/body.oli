@@ -2787,6 +2787,14 @@ proc reg_type(name: view u8) -> view u8
     end
     if name.len == 2
         l2 := name[1]
+        if name[0] == 114
+            -- `r8`, `r9`: 64-bit registers, not a width class
+            if l2 >= 48
+                if l2 <= 57
+                    ret "u64"
+                end
+            end
+        end
         if l2 == 108
             ret "u8"
         end

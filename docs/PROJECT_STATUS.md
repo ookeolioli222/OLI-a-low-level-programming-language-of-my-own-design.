@@ -1780,6 +1780,19 @@ pinned:
   member); `addr u8 (r)` is the conversion the language documents, and the
   demo uses it.
 
+## Implemented in stage 60 (2026-09-28): r8 and r9 in machine blocks
+
+`in r8 <- e` and `in r9 <- e` typed their expression `u16`: `reg_type` in
+`body.oli` read every two-letter name that is not `al`/`ah`-shaped as a
+16-bit register (`ax`, `cx`, …), and `r8`/`r9` are two letters. They are
+64-bit registers — the OIR (`reg_width`) and the encoder (`io_reg`,
+`reg_code_any`) already had them so — and now the front end does too:
+a two-letter name that is `r` and a digit is `u64`. `tests/run/regs.oli`
+passes values in through r8 and r9 (and r10-r15), adds them in the block
+and takes the sum out through r8. `std.threads.spawn` passes the TLS
+argument of `clone` as a zero in r8 again, as the system call is defined,
+rather than leaving the register unset.
+
 ## Implemented in stage 59 (2026-09-28): items named through their module path
 
 `core.x64.Tss.at(v)`, `core.x64.Tss.size`, `sched.Task.align`,

@@ -1,0 +1,39 @@
+module regs_test
+-- The registers r8 to r15 as `in` and `out` of a `machine x64` block
+-- (stage 60): each takes a 64-bit value - `r8` and `r9` were typed as
+-- 16-bit registers by the front end once - the block adds them, and the
+-- sum comes out through r8. The exit status is the number of the check
+-- that failed; 42 when every one held.
+
+proc sum8(a : u64, b : u64, c : u64, d : u64, e : u64, f : u64, g : u64, h : u64) -> u64
+    permit cpu.asm
+    r : u64 <- 0
+    machine x64
+        in r8 <- a
+        in r9 <- b
+        in r10 <- c
+        in r11 <- d
+        in r12 <- e
+        in r13 <- f
+        in r14 <- g
+        in r15 <- h
+        add r8, r9
+        add r8, r10
+        add r8, r11
+        add r8, r12
+        add r8, r13
+        add r8, r14
+        add r8, r15
+        out r8 -> r
+    end
+    ret r
+end
+
+proc start -> s32
+    entry
+    big : u64 <- 0x100000000
+    if sum8(1, 2, 3, 4, 5, 6, 7, 8) != 36 then ret 1
+    if sum8(big, big, 0, 0, 0, 0, 0, 1) != 0x200000001 then ret 2
+    if sum8(0xFFFF, 0x10000, 0, 0, 0, 0, 0, 0) != 0x1FFFF then ret 3
+    ret 42
+end
