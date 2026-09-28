@@ -359,6 +359,44 @@ proc is_item_name(pg: ref Prog, cx: ref Ctx, n: u64) -> word
     ret 1
 end
 
+proc item_base(pg: ref Prog, mi: u64, n: u64) -> word
+    -- The item (a layout or a choice) that `n` names, by its own name
+    -- (`Header`) or through its module path (`core.x64.Tss`, `sched.Task`:
+    -- a chain of members whose root is no value of this program and no
+    -- item itself, so that `Header.field.size` is left to the field
+    -- constants); -1 for anything else.
+    cx := mod_ctx(pg, mi)
+    nd := node_at(cx, n)
+    if nd.kind == N_NAME
+        if name_kind(pg, mi, n) != 0
+            ret -1
+        end
+        ret item_find(pg, tok_text(cx, nd.t0))
+    end
+    if nd.kind != N_FIELD
+        ret -1
+    end
+    r : u64 <- n
+    loop
+        rn := node_at(cx, r)
+        if rn.kind != N_FIELD
+            break
+        end
+        r <- kid1(cx, r)
+    end
+    root := node_at(cx, r)
+    if root.kind != N_NAME
+        ret -1
+    end
+    if name_kind(pg, mi, r) != 0
+        ret -1
+    end
+    if item_find(pg, tok_text(cx, root.t0)) >= 0
+        ret -1
+    end
+    ret item_find(pg, tok_text(cx, nd.t0))
+end
+
 proc name_kind(pg: ref Prog, mi: u64, n: u64) -> word
     -- 1 local, 2 constant, 3 static, 0 unknown.
     cx := mod_ctx(pg, mi)
@@ -819,6 +857,14 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
             ret CK_PROC
         end
     end
+    if bn.kind == N_FIELD
+        -- `core.x64.Tss.at(v)`: the item through its module path.
+        if item_base(pg, mi, base) >= 0
+            if view_eq(m, "at")
+                ret CK_AT
+            end
+        end
+    end
     if view_eq(m, "bytes")
         ret CK_BYTES
     end
@@ -1109,6 +1155,15 @@ proc field_type(pg: ref Prog, mi: u64, n: u64, want: view u8) -> view u8
         -- `Name.field.offset` / `Name.field.size`: a constant.
         if field_const_kind(pg, mi, n) > 0
             ret lit_type(pg, want)
+        end
+        -- `core.x64.Tss.size`: the item through its module path.
+        if item_base(pg, mi, base) >= 0
+            if view_eq(m, "size")
+                ret lit_type(pg, want)
+            end
+            if view_eq(m, "align")
+                ret lit_type(pg, want)
+            end
         end
     end
     if bn.kind == N_NAME

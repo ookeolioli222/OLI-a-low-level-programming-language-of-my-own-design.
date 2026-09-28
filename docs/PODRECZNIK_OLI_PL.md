@@ -264,7 +264,8 @@ magic := hdr.magic
 hdr.flags <- 1
 ```
 
-`Name.size` i `Name.align` są stałymi kompilacji. `packed` usuwa zwykłe
+`Name.size` i `Name.align` są stałymi kompilacji, także przez ścieżkę modułu
+(`core.x64.Tss.size`, `sched.Task.at(bufor)`). `packed` usuwa zwykłe
 dopełnianie, a `align N` wymusza wyrównanie. `be T` i `le T` oznaczają kolejność
 bajtów pola. Zbyt krótki lub źle wyrównany widok powoduje trap `bounds` albo
 `misaligned`.

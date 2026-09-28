@@ -1,0 +1,29 @@
+module qualified_test
+import core.x64
+import core.x64.sched
+-- Items named through their module path (stage 59): `core.x64.TablePointer.at(v)`,
+-- `core.x64.TablePointer.size`, `sched.Task.size`, `sched.Task.state.offset`
+-- and `sched.Task.sp.size` - the same refs and constants as with the bare
+-- item name, from a library module the program imports. `core.x64.sched`
+-- holds `machine x64` blocks, so this fixture is x86-64 only. The exit
+-- status is the number of the check that failed; 42 when every one held.
+
+tp_bytes : [16]u8
+    align 8
+
+proc start -> s32
+    entry
+    if core.x64.TablePointer.size != 10 then ret 1
+    if sched.Task.size != 16 then ret 2
+    if sched.Task.state.offset != 8 then ret 3
+    if sched.Task.sp.size != 8 then ret 4
+    if sched.Sched.align != 8 then ret 5
+    t := core.x64.TablePointer.at(tp_bytes[..])
+    t.limit <- 0x37
+    t.base <- 0x1234
+    if tp_bytes[0] != 0x37 then ret 6
+    if tp_bytes[2] != 0x34 then ret 7
+    if tp_bytes[3] != 0x12 then ret 8
+    if t.base != 0x1234 then ret 9
+    ret 42
+end

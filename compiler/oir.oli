@@ -3557,6 +3557,15 @@ proc gen_field(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         if field_const_kind(pg, mi, n) > 0
             ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
         end
+        -- `core.x64.Tss.size` / `.align`: the item through its module path.
+        if item_base(pg, mi, base) >= 0
+            if view_eq(m, "size")
+                ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
+            end
+            if view_eq(m, "align")
+                ret emit_ins(ob, O_CONST, 0, 0, 0, const_value(pg, mi, n))
+            end
+        end
     end
     if bn.kind == N_NAME
         if name_kind(pg, mi, base) == 0

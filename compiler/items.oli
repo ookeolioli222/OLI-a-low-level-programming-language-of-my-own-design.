@@ -803,11 +803,8 @@ proc field_const_kind(pg: ref Prog, mi: u64, n: u64) -> word
     if base.kind != N_FIELD
         ret 0
     end
-    inner := node_at(cx, kid1(cx, kid1(cx, n)))
-    if inner.kind != N_NAME
-        ret 0
-    end
-    idx := item_find(pg, tok_text(cx, inner.t0))
+    -- the item by its own name or through its module path
+    idx := item_base(pg, mi, kid1(cx, kid1(cx, n)))
     if idx < 0
         ret 0
     end
@@ -824,8 +821,7 @@ proc field_const(pg: ref Prog, mi: u64, n: u64) -> u64
     cx := mod_ctx(pg, mi)
     nd := node_at(cx, n)
     base := node_at(cx, kid1(cx, n))
-    inner := node_at(cx, kid1(cx, kid1(cx, n)))
-    idx := item_find(pg, tok_text(cx, inner.t0))
+    idx := item_base(pg, mi, kid1(cx, kid1(cx, n)))
     if idx < 0
         ret 0
     end
@@ -899,6 +895,21 @@ proc const_value(pg: ref Prog, mi: u64, n: u64) -> u64
                 end
                 if view_eq(m, "align")
                     ret it.alignv
+                end
+            end
+        end
+        if base.kind == N_FIELD
+            -- `core.x64.Tss.size`: the item through its module path.
+            qidx := item_base(pg, mi, kid1(cx, n))
+            if qidx >= 0
+                resolve_item(pg, u64.bits(qidx))
+                qit := item_at(pg, u64.bits(qidx))
+                qm := tok_text(cx, nd.t0)
+                if view_eq(qm, "size")
+                    ret qit.size
+                end
+                if view_eq(qm, "align")
+                    ret qit.alignv
                 end
             end
         end

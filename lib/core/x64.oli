@@ -30,3 +30,25 @@ pub layout TablePointer packed
     limit : u16
     base : u64
 end
+
+--- The 64-bit task state segment `ltr` points the CPU at (104 bytes, no
+--- padding): a kernel that runs one ring needs nothing of it; one that
+--- enters ring 3 needs rsp0 — the stack an interrupt or `int n` from ring 3
+--- lands on — and the I/O map base past the end (104) for no map.
+pub layout Tss packed
+    reserved0 : u32
+    rsp0 : u64
+    rsp1 : u64
+    rsp2 : u64
+    reserved1 : u64
+    ist1 : u64
+    ist2 : u64
+    ist3 : u64
+    ist4 : u64
+    ist5 : u64
+    ist6 : u64
+    ist7 : u64
+    reserved2 : u64
+    reserved3 : u16
+    iomap : u16
+end

@@ -1780,6 +1780,25 @@ pinned:
   member); `addr u8 (r)` is the conversion the language documents, and the
   demo uses it.
 
+## Implemented in stage 59 (2026-09-28): items named through their module path
+
+`core.x64.Tss.at(v)`, `core.x64.Tss.size`, `sched.Task.align`,
+`sched.Task.state.offset` and `sched.Task.sp.size` work as their bare
+forms do. One helper, `item_base` in `body.oli`, names the item a node
+stands for: an N_NAME that is no value of the program, or a chain of
+members whose root is no value and no item itself (so `Header.field.size`
+stays with the field constants); `call_kind` (`.at`), `field_type`
+(`.size`/`.align`), `field_const_kind` and `field_const` (a field's
+constants), `const_value` and `gen_field` ask it. Items are program-wide by
+their last component (`item_find`), which is what makes the path a spelling
+rather than a scope. `tests/run/qualified.oli` checks the constants and a
+ref over bytes through `core.x64.TablePointer.at`; the kernel example's TSS
+layout is `core.x64.Tss` in the library now, named through its path in
+`gdt_init`, as stage 55 intended before this gap stopped it. (The first cut
+of `item_base` wrote `if … then break`, which `oli1` — the oli-core compiler
+that builds the front end at layer 4 — does not accept; the compiler's own
+source is oli-core, and the block form is what it has.)
+
 ## Implemented in stage 58 (2026-09-28): references to elements
 
 `ref v[i]` and `rw ref a[i]` — a reference to one element of a view or an
