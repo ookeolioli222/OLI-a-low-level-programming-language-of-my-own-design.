@@ -100,5 +100,12 @@ from EL0 run on SP_EL1, apart from the user stack. Stage 51:
 `tests/a64/free/mmu.oli` builds 4 KiB translation tables in Oli-- arrays,
 turns the MMU on through `mair`, `tcr`, `ttbr0` and `sctlr`, reads a word
 through an alias mapping, and its EL0 program is stopped by a permission
-fault (ESR 0x9200000d) when it reads kernel memory. Not yet: more than one
-CPU, GICv3 SGIs, TTBR1 (a higher-half kernel), ASIDs.
+fault (ESR 0x9200000d) when it reads kernel memory. Stage 56 (2026-09-28):
+more than one CPU — `arch.a64.mpidr` (MPIDR_EL1, read only) and
+`arch.a64.cpu_on(target, p)`, PSCI CPU_ON through `hvc #0` with the address
+of `p` in x2, the answer in x0; `tests/a64/free/smp.oli` starts CPUs 1-3 on
+`virt -smp 4`, each at a `calls none` entry of its own (a `calls none` body
+holds no values, so the entry cannot pick a stack by MPIDR itself), counted
+in with `atomic.add`, and CPU_ON for a CPU that does not exist answers
+INVALID_PARAMETERS. Not yet: GICv3 SGIs between CPUs, TTBR1 (a higher-half
+kernel), ASIDs.

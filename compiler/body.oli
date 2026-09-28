@@ -607,6 +607,7 @@ CK_VLOAD := 28
 CK_VSTORE := 29
 CK_ERET := 30
 CK_SVC := 31
+CK_CPUON := 32
 
 proc ref_elem(t: view u8) -> view u8
     -- The `T` of `ref T` / `rw ref T`; empty for any other type.
@@ -725,6 +726,10 @@ proc call_kind(pg: ref Prog, mi: u64, n: u64) -> word
         end
         if cn.sub == 25
             ret CK_SVC
+        end
+        -- `arch.a64.cpu_on(target, p)`: another CPU started at `p`.
+        if cn.sub == 33
+            ret CK_CPUON
         end
         ret 0
     end
@@ -901,6 +906,9 @@ proc call_type(pg: ref Prog, mi: u64, n: u64) -> view u8
         ret "(no value)"
     end
     if ck == CK_SVC
+        ret "u64"
+    end
+    if ck == CK_CPUON
         ret "u64"
     end
     if ck == CK_CPUJUMP
@@ -1934,6 +1942,10 @@ proc pintrinsic_name(pg: ref Prog, ck: u64, name: view u8)
         put(1, "Svc")
         ret
     end
+    if ck == CK_CPUON
+        put(1, "CpuOn")
+        ret
+    end
     if ck == CK_CPUJUMP
         put(1, "CpuJump")
         ret
@@ -2131,6 +2143,13 @@ proc pcall(pg: ref Prog, mi: u64, n: u64, ty: view u8)
             pexpr(pg, mi, a2, "u16")
         elif ck == CK_SVC
             pexpr(pg, mi, a2, "u64")
+        elif ck == CK_CPUON
+            if j == 0
+                pexpr(pg, mi, a2, "u64")
+            else
+                pnn := node_at(cx, a2)
+                put(1, tok_text(cx, pnn.t0))
+            end
         elif ck == CK_ERET
             enn := node_at(cx, a2)
             put(1, tok_text(cx, enn.t0))
@@ -3717,6 +3736,11 @@ proc tcall(pg: rw ref Prog, mi: u64, n: u64)
         ret
     end
     if ck == CK_SVC
+        texpr(pg, mi, kid2(cx, n), "u64")
+        ret
+    end
+    if ck == CK_CPUON
+        -- the target MPIDR; the second argument is a procedure name
         texpr(pg, mi, kid2(cx, n), "u64")
         ret
     end

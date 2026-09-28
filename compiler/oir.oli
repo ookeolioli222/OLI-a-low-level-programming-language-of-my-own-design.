@@ -1939,6 +1939,10 @@ proc gen_hwload(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
             oir_err(ob, pg, mi, 900, n)
             ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
         end
+        if nd.sub == 33
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
     end
     if nd.sub >= 3
         if nd.sub == 5
@@ -1998,6 +2002,10 @@ proc gen_store_hw(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64)
                 bad <- 1
             end
             if tn.sub == 25
+                bad <- 1
+            end
+            if tn.sub >= 32
+                -- MPIDR_EL1 is read only; `cpu_on` is a command.
                 bad <- 1
             end
         end
@@ -2864,6 +2872,26 @@ proc gen_call(pg: rw ref Prog, ob: rw ref Oir, mi: u64, n: u64) -> u64
         sv := gen_expr(pg, ob, mi, sibling(cx, kid1(cx, n)), "u64")
         ob.lastlen <- 0
         ret emit_ins(ob, O_MSRRD, sv, 0, 0, 25)
+    end
+    if ck == CK_CPUON
+        -- `arch.a64.cpu_on(target, p)`: PSCI CPU_ON through the firmware —
+        -- x0 = 0xC4000003, x1 = target, x2 = the address of `p`, x3 = 0,
+        -- `hvc #0`, the answer from x0 (`hw.cmd arch.a64.cpu_on %t, NAME`,
+        -- O_MSRRD with `val` 33 and the procedure in `c`).
+        if pg.arch64 == 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        ta := sibling(cx, kid1(cx, n))
+        pnn := node_at(cx, sibling(cx, ta))
+        ppi := proc_find(pg, tok_text(cx, pnn.t0))
+        if ppi < 0
+            oir_err(ob, pg, mi, 900, n)
+            ret emit_ins(ob, O_CONST, 0, 0, 0, 0)
+        end
+        tv := gen_expr(pg, ob, mi, ta, "u64")
+        ob.lastlen <- 0
+        ret emit_ins(ob, O_MSRRD, tv, 0, u64.bits(ppi), 33)
     end
     if ck == CK_CPUCALL
         -- `cpu.call(p)`: a bare `call` to the procedure, for an entry with
@@ -7666,10 +7694,19 @@ proc print_ins(pg: ref Prog, ob: ref Oir, i: u64)
     if op == O_MSRRD
         if ins.val == 25
             put(1, "hw.cmd arch.a64.svc ")
+        elif ins.val == 33
+            put(1, "hw.cmd arch.a64.cpu_on ")
         else
             put(1, "hw.load arch.x64.msr ")
         end
         pv(ob, pg, ins.a)
+        if ins.val == 33
+            put(1, ", ")
+            opv := proc_at(pg, ins.c)
+            ocx := mod_ctx(pg, opv.mod)
+            ond := node_at(ocx, opv.node)
+            put(1, tok_text(ocx, ond.t0))
+        end
         ret
     end
     if op == O_ATOMIC

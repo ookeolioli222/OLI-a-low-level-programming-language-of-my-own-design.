@@ -1,0 +1,151 @@
+-- target: freestanding
+-- profile: tests/a64/free/virt.oli-target
+module asmp
+import core
+-- More than one CPU (stage 56). QEMU's `virt` board starts CPU 0 alone; the
+-- others wait in the firmware for PSCI CPU_ON. `arch.a64.cpu_on(target, p)`
+-- asks for it (function 0xC4000003 through `hvc #0`): the CPU whose MPIDR
+-- is `target` enters procedure `p` at EL1 with the MMU off and no stack.
+-- A `calls none` body holds no values (FREESTANDING.md 3), so each CPU has
+-- an entry of its own that sets its 4 KiB of `stacks` and calls `cpu_main`,
+-- which reads `arch.a64.mpidr`, writes its number into the roll and counts
+-- itself in with an atomic add. CPU 0 waits for three, prints the roll, and
+-- asks for a CPU that does not exist, which PSCI refuses with
+-- INVALID_PARAMETERS (-2). The secondaries then sleep in `wfi`; nothing
+-- else runs on them.
+
+stack : [16K]u8
+    align 16
+
+stacks : [16K]u8
+    align 16
+
+online : u64
+
+roll : [4]u64
+
+CPUS := 4
+
+proc start -> never
+    entry
+    calls none
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stack.addr) + 16K)
+    cpu.call(main)
+    loop
+        cpu.halt()
+    end
+end
+
+proc on_trap(_kind : core.TrapKind, site : core.Site) -> never
+    traps
+    permit cpu.halt
+    puts("trap at ")
+    puts(site.file)
+    puts(":")
+    putu(u64(site.line))
+    puts("\n")
+    loop
+        cpu.halt()
+    end
+end
+
+proc putc(c : u8)
+    permit memory.mmio
+    uart := mem.mmio(u32, 0x09000000, 16)
+    while (uart[6] >> 5) & 1 == 1
+    end
+    uart[0] <- u32(c)
+end
+
+proc puts(s : view u8)
+    each c in s
+        putc(c)
+    end
+end
+
+proc putu(v : u64)
+    if v >= 10
+        putu(v / 10)
+    end
+    putc(u8.wrap(48 + v % 10))
+end
+
+proc secondary1 -> never
+    -- Where PSCI puts CPU 1: EL1, MMU off, x0 the context (0), no stack.
+    calls none
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stacks.addr) + 8K)
+    cpu.call(cpu_main)
+    loop
+        cpu.halt()
+    end
+end
+
+proc secondary2 -> never
+    calls none
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stacks.addr) + 12K)
+    cpu.call(cpu_main)
+    loop
+        cpu.halt()
+    end
+end
+
+proc secondary3 -> never
+    calls none
+    permit cpu.control, cpu.halt, memory.raw
+    cpu.stack <- addr u8 (u64(stacks.addr) + 16K)
+    cpu.call(cpu_main)
+    loop
+        cpu.halt()
+    end
+end
+
+proc cpu_main -> never
+    -- On a secondary, with a stack: the roll and the count, then sleep.
+    permit cpu.control, cpu.halt
+    id := arch.a64.mpidr & 0xFF
+    if id < CPUS
+        roll[uword(id)] <- id + 1
+    end
+    _n := atomic.add(rw ref online, 1, seq_cst)
+    loop
+        cpu.halt()
+    end
+end
+
+proc main -> never
+    permit cpu.control, cpu.halt
+    me := arch.a64.mpidr & 0xFF
+    roll[uword(me)] <- me + 1
+    puts("cpu 0: starting 3 more\n")
+    r1 := arch.a64.cpu_on(1, secondary1)
+    r2 := arch.a64.cpu_on(2, secondary2)
+    r3 := arch.a64.cpu_on(3, secondary3)
+    if r1 + r2 + r3 != 0
+        puts("cpu_on failed\n")
+    end
+    while atomic.load(ref online, acquire) < CPUS - 1
+        cpu.pause()
+    end
+    puts("4 cpus up, roll:")
+    k : u64 <- 0
+    while k < CPUS
+        puts(" ")
+        putu(roll[uword(k)])
+        k <- k + 1
+    end
+    puts("\n")
+    bad := arch.a64.cpu_on(7, secondary1)
+    puts("cpu_on 7: ")
+    if bad == 0xFFFFFFFFFFFFFFFE
+        puts("invalid parameters\n")
+    else
+        putu(bad)
+        puts("\n")
+    end
+    loop
+        cpu.halt()
+    end
+end

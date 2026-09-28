@@ -355,6 +355,12 @@ proc a64_place_name(sub: u64) -> view u8
     if sub == 28
         ret "arch.a64.ttbr0"
     end
+    if sub == 32
+        ret "arch.a64.mpidr"
+    end
+    if sub == 33
+        ret "arch.a64.cpu_on"
+    end
     if sub == 29
         ret "arch.a64.tcr"
     end

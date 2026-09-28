@@ -2055,6 +2055,19 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     [ "$(grep -c 'Taking exception 2 \[SVC\]' build/ammu.qlog)" = 51 ] || fail "aarch64: the MMU kernel must take exactly 51 SVCs"
     [ "$(grep -c 'Taking exception' build/ammu.qlog)" = 52 ] || fail "aarch64: the MMU kernel took an unexpected exception"
     echo "ok: AArch64 MMU - the kernel builds 4 KiB translation tables (arch.a64.mair, tcr, ttbr0 with tlbi, sctlr), reads a word back through an alias mapping, and EL0 - code read-only, its stack read-write, everything else denied - is stopped by a level-1 permission fault when it reads kernel memory"
+    # More than one CPU (stage 56): PSCI CPU_ON through `arch.a64.cpu_on`,
+    # each secondary on a stack of its own, counted in with an atomic add,
+    # a CPU that does not exist refused by the firmware.
+    ( cd .. && genesis/build/olic < tests/a64/free/smp.oli > genesis/build/asmp.elf 2> genesis/build/asmp.err ) || fail "aarch64: olic could not compile the SMP kernel: $(head -1 build/asmp.err)"
+    rm -f build/asmp.serial
+    set +e
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" $qal -M virt -cpu cortex-a53 -smp 4 -m 128 -display none -monitor none -serial file:build/asmp.serial -kernel build/asmp.elf -d int -D build/asmp.qlog > /dev/null 2>&1
+    set -e
+    printf 'cpu 0: starting 3 more\n4 cpus up, roll: 1 2 3 4\ncpu_on 7: invalid parameters\n' > build/asmp.want
+    cmp build/asmp.serial build/asmp.want || fail "aarch64: the SMP kernel printed [$(cat build/asmp.serial)]"
+    [ "$(grep -c 'Taking exception 11 \[Hypervisor Call\] on CPU 0' build/asmp.qlog)" = 4 ] || fail "aarch64: CPU 0 must make exactly four hypervisor calls (three CPU_ON and the refused one)"
+    [ "$(grep -c 'Taking exception' build/asmp.qlog)" = 4 ] || fail "aarch64: the SMP kernel took an unexpected exception"
+    echo "ok: AArch64 SMP - arch.a64.cpu_on(target, p) starts CPUs 1-3 through PSCI (hvc #0, CPU_ON) at calls-none entries with stacks of their own; each reads arch.a64.mpidr, writes the roll and counts itself in with atomic.add, CPU 0 prints the roll 1 2 3 4, and CPU_ON for a CPU that does not exist answers INVALID_PARAMETERS; exactly four hypervisor calls, nothing else"
 else
     echo "ok: AArch64 exceptions - the timer kernel builds with its vector table on a 2 KiB boundary (no qemu-system-aarch64 here: not booted)"
 fi
@@ -2066,7 +2079,9 @@ printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\n
 printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    _x := arch.a64.icc_eoir1\n    loop\n        cpu.halt()\n    end\nend\n' > build/va4.oli
 printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.icc_iar1 <- 1\n    loop\n        cpu.halt()\n    end\nend\n' > build/va5.oli
 printf 'module p\nproc start -> s32\n    entry\n    _r := arch.a64.svc(1)\n    ret 0\nend\n' > build/va6.oli
-for v in va1:5 va2:7 va3:4 va4:7 va5:7 va6:4; do
+printf -- '-- target: freestanding\n-- profile: tests/a64/free/virt.oli-target\nmodule p\nproc start -> never\n    entry\n    permit cpu.control, cpu.halt\n    arch.a64.mpidr <- 1\n    loop\n        cpu.halt()\n    end\nend\n' > build/va7.oli
+printf 'module p\nproc start -> s32\n    entry\n    permit cpu.control\n    _r := arch.a64.cpu_on(1, start)\n    ret 0\nend\n' > build/va8.oli
+for v in va1:5 va2:7 va3:4 va4:7 va5:7 va6:4 va7:7 va8:5; do
     n=${v%%:*}
     set +e; ( cd .. && genesis/build/olic < genesis/build/$n.oli > genesis/build/$n.elf 2> genesis/build/$n.err ); st=$?; set -e
     [ "$st" = 1 ] || fail "aarch64: $n exited $st, want E0900"

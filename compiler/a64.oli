@@ -924,6 +924,20 @@ proc a_ins(pg: rw ref Prog, ob: rw ref Oir, mc: rw ref Mach, i: u64)
             a_st(ob, mc, 9, i)
             ret
         end
+        if ins.val == 33
+            -- `arch.a64.cpu_on(target, p)`: x0 = CPU_ON (0xC4000003),
+            -- x1 = target, x2 = adr p, x3 = 0 (the context); hvc #0; the
+            -- PSCI answer from x0.
+            a_imm(ob, 0, 3288334339)
+            a_ld(ob, mc, 1, ins.a)
+            add_fix(mc, ob.ncode, AF_PADR, ins.c)
+            aw(ob, 268435458)
+            a_movz(ob, 3, 0, 0)
+            aw(ob, 3556769794)
+            a_mov(ob, 9, 0)
+            a_st(ob, mc, 9, i)
+            ret
+        end
     end
     if op == O_RLOAD
         -- A volatile (`mmio`) access is the same instruction: this back end
@@ -1817,7 +1831,10 @@ proc a_sysenc(r: u64) -> u64
     -- 14 ESR_EL1, 15 ELR_EL1, 16 FAR_EL1, 18 CPACR_EL1, 19 ICC_IAR1_EL1,
     -- 20 ICC_EOIR1_EL1, 21 ICC_PMR_EL1, 22 ICC_IGRPEN1_EL1, 23 ICC_SRE_EL1,
     -- 26 and 99 SPSR_EL1, 27 SP_EL0, 28 TTBR0_EL1, 29 TCR_EL1, 30 MAIR_EL1,
-    -- 31 SCTLR_EL1.
+    -- 31 SCTLR_EL1, 32 MPIDR_EL1.
+    if r == 32
+        ret 160
+    end
     if r == 10
         ret 49152
     end

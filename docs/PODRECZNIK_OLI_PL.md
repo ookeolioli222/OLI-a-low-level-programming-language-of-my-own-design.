@@ -1015,12 +1015,13 @@ napisany w Oli-- i kompiluje sam siebie do identycznych bajtów
 (`genesis/test.sh`, warstwa 6). Przykładowy kernel `examples/kernel.oli`
 uruchamia się pod QEMU (przerwania, stronicowanie, scheduler wywłaszczający
 z timera, zadanie w ring 3 rozmawiające z kernelem przez `int 0x80`), a drugi
-backend, AArch64, uruchamia prawie cały korpus
+backend, AArch64, startuje cztery CPU przez PSCI i uruchamia prawie cały korpus
 testów pod `qemu-aarch64` i własny kernel pod `qemu-system-aarch64`.
 
 Rozwijane albo planowane: generyki, wątki, szersze wektory (AVX), cel Windows
 (PE/COFF), biblioteka standardowa poza `std.os` i `core.*`, kolekcje z jawnymi
-alokatorami, opcja `--lib`, wiele procesorów oraz IDE. Konstrukcja, która ma składnię, ale nie ma
+alokatorami, opcja `--lib`, wiele procesorów na x86-64 (na AArch64 cztery CPU
+już startują przez PSCI) oraz IDE. Konstrukcja, która ma składnię, ale nie ma
 jeszcze backendu, kończy się `E0900`; to informacja o braku implementacji, nie
 o błędzie w programie.
 

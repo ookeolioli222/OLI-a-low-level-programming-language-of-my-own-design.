@@ -1780,6 +1780,35 @@ pinned:
   member); `addr u8 (r)` is the conversion the language documents, and the
   demo uses it.
 
+## Implemented in stage 56 (2026-09-28): more than one CPU on AArch64
+
+Two additions to design 0025's hardware places, in `parse.oli`, `ast.oli`,
+`body.oli`, `oir.oli` and `a64.oli` alone: `arch.a64.mpidr`, MPIDR_EL1 as a
+read-only `u64` place (one `mrs`; a write is E0900, `build/va7.oli`), and the
+command `arch.a64.cpu_on(target, p) -> u64` — PSCI CPU_ON through the
+firmware: x0 = 0xC4000003, x1 = `target`, x2 = the address of procedure `p`
+(an `adr` with the same fixup `eret` uses), x3 = 0, `hvc #0`, the PSCI answer
+from x0. In the OIR it is `hw.cmd arch.a64.cpu_on %target, NAME` (O_MSRRD
+with `val` 33, the procedure in `c`, KERNEL class, never removed); on x86-64
+it is E0900 (`build/va8.oli`).
+
+`tests/a64/free/smp.oli` on `virt -cpu cortex-a53 -smp 4`: CPU 0 starts
+CPUs 1, 2 and 3, each at a `calls none` entry of its own that sets 4 KiB of
+`stacks` as its stack and calls `cpu_main`, which reads `arch.a64.mpidr`,
+writes its number into the roll and counts itself in with `atomic.add`
+(`ldaxr`/`stlxr`); CPU 0 spins on `atomic.load` until three are in, prints
+`4 cpus up, roll: 1 2 3 4`, and asks CPU_ON for MPIDR 7, which does not exist:
+`cpu_on 7: invalid parameters` (-2). QEMU's interrupt log shows exactly four
+hypervisor calls on CPU 0 and nothing else. A `calls none` body holds no
+values (FREESTANDING.md §3), which is why each CPU has an entry of its own
+rather than one entry that picks a stack by MPIDR; loosening that rule on
+AArch64, where such values live in x19-x28, is a separate step.
+
+The compiler built with these changes compiles every existing fixture and
+the kernel example to the same bytes as before and reaches its fixpoint.
+Not yet: interrupts between CPUs (GICv3 SGIs), a higher-half kernel (TTBR1),
+ASIDs; on x86-64 a second CPU needs the APIC and a real-mode trampoline.
+
 ## Implemented in stage 55 (2026-09-28): a user-mode task, and M4 complete
 
 `examples/kernel.oli` runs a program in ring 3. `gdt_init` extends the GDT
