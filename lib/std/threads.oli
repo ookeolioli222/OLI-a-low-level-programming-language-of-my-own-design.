@@ -1,0 +1,81 @@
+--- Threads on hosted x86-64 Linux (V2, stage 57): `spawn` is one `clone`
+--- system call with a stack the caller owns, `join` waits on the word the
+--- kernel clears when the thread ends. Nothing is allocated here: the
+--- stack and the thread's word are the caller's memory, as the scheduler's
+--- task table is a kernel's. A thread is its id word, a `u32` the caller
+--- keeps (one element of a view: `tids[i..i + 1]`), stored by the kernel
+--- when the thread starts (CLONE_PARENT_SETTID) and cleared, with a futex
+--- wake, when it ends (CLONE_CHILD_CLEARTID). A thread's entry is a
+--- procedure with no parameters and no result; its address comes from a
+--- machine block (`mov rax, worker; out rax -> e`), as for
+--- `core.x64.sched`. The system call is written as a `machine x64` block,
+--- so this module is x86-64 only for now: a program that imports it does
+--- not compile for AArch64 (E0900 at the block). `thread` is a reserved
+--- word, hence `std.threads`.
+module std.threads
+import std.os
+
+--- CLONE_VM, FS, FILES, SIGHAND, THREAD, SYSVSEM, PARENT_SETTID and
+--- CHILD_CLEARTID: a thread of this process, sharing everything, its id
+--- written into the word and cleared from it.
+CLONE_FLAGS : u64 := 0x350F00
+FUTEX : word := 202
+FUTEX_WAIT : u64 := 0
+
+--- Starts a thread at `start_at` on `tstack` (256 bytes at least, its top
+--- aligned down to 16) and records it in `slot[0]`: the thread's id, or
+--- the kernel's -errno (-22 for a stack too short or an empty slot). The
+--- child begins on its own stack with the entry address as the only word
+--- on it: it pops that, pushes the address of the exit stub and the entry,
+--- and `ret`s into the entry with rsp at 8 mod 16, as after a call; when
+--- the entry returns it lands in the stub, which ends this thread alone
+--- (`exit`, 60). The parent leaves the block with the kernel's answer in
+--- rax. (The fifth argument, the TLS, is not passed: without CLONE_SETTLS
+--- the kernel ignores it.)
+pub proc spawn(slot : rw view u32, tstack : rw view u8, start_at : u64) -> word
+    permit cpu.asm, memory.raw
+    if tstack.len < 256 then ret -22
+    if slot.len < 1 then ret -22
+    top := (u64(tstack.addr) + u64(tstack.len)) & ~u64(15)
+    [addr u64 (top - 8)] <- start_at
+    child := top - 8
+    ta := u64(slot.addr)
+    r : word <- 0
+    machine x64
+        in rdi <- CLONE_FLAGS
+        in rsi <- child
+        in rdx <- ta
+        in r10 <- ta
+        mov eax, 56
+        syscall
+        test rax, rax
+        jnz .parent
+        pop rax
+        lea rcx, [.done]
+        push rcx
+        push rax
+        ret
+    .done:
+        mov eax, 60
+        xor edi, edi
+        syscall
+    .parent:
+        out rax -> r
+        clobber rcx, r11
+    end
+    ret r
+end
+
+--- Waits until the thread whose word is `slot[0]` has ended: the word is
+--- read, then `futex` WAIT on it while it still holds that id — the kernel
+--- wakes the word when it clears it. Returns at once for a thread that has
+--- ended, one never started, or an empty slot.
+pub proc join(slot : view u32)
+    permit os.syscall
+    if slot.len < 1 then ret
+    loop
+        v := slot[0]
+        if v == 0 then ret
+        os.syscall(FUTEX, u64(slot.addr), FUTEX_WAIT, u64(v), 0)
+    end
+end

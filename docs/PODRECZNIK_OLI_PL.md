@@ -402,7 +402,7 @@ agregatowe (w `.rodata`) i pliki obiektowe (`-- output: object`,
 `extern proc`, `export`) działają; program w Oli-- linkuje się z C w obie
 strony (`tests/c/`). Biblioteka standardowa jest jeszcze mała: `std.os`,
 `core`, `core.mem`, `core.frames`, `core.x64`, `core.x64.paging`,
-`core.x64.sched` i `core.a64` (sekcja 25).
+`core.x64.sched`, `core.a64` i `std.threads` (sekcja 25).
 
 ## 12. Uprawnienia i kod sprzętowy
 
@@ -890,6 +890,27 @@ i := paging.pml4_index(address)
 
 Ten moduł jest przeznaczony głównie dla kernela i trybu freestanding.
 
+### `std.threads`
+
+Wątki na hostowanym x86-64: `threads.spawn(slot, stos, wejście)` to jedno
+wywołanie `clone` ze stosem, który należy do programu, a `threads.join(slot)`
+czeka na futexie na słowo, które kernel zeruje po zakończeniu wątku. Wątek
+to jego słowo `u32` w jednoelementowym widoku (`tids[i..i + 1]`); wejście to
+procedura bez parametrów, której adres bierze się z bloku `machine x64`
+(`mov rax, worker; out rax -> e`). Przykład: `tests/run/threads.oli`.
+(`thread` jest słowem zarezerwowanym, stąd `std.threads`.)
+
+```oli
+import std.threads
+
+tids : [4]u32
+stacks : [64K]u8
+    align 16
+
+r := threads.spawn(tids[0..1], stacks[..16K], e)
+threads.join(tids[0..1])
+```
+
 ### `core.frames` i `core.x64.sched`
 
 `core.frames` to menedżer pamięci fizycznej: mapa bitowa ramek 4 KiB
@@ -1009,8 +1030,9 @@ warunki, `while`, `loop`, `each` po widoku, tablicy i zakresie, procedury i
 rekurencja, napisy, widoki, tablice, strefy, layouty (także pola `be`/`le`),
 referencje, wyniki fallible, `choice`, dane statyczne i stałe, bloki
 `machine x64`, syscalle Linuksa, tryb freestanding z własnym wejściem,
-przerwania (`calls interrupt`), MMIO, porty, atomiki, `own T`, liczby
-zmiennoprzecinkowe `f32`/`f64` i wektory 128-bitowe. Kompilator `olic` jest
+przerwania (`calls interrupt`), MMIO, porty, atomiki, wątki (`std.threads`
+na x86-64), `own T`, liczby zmiennoprzecinkowe `f32`/`f64` i wektory
+128-bitowe. Kompilator `olic` jest
 napisany w Oli-- i kompiluje sam siebie do identycznych bajtów
 (`genesis/test.sh`, warstwa 6). Przykładowy kernel `examples/kernel.oli`
 uruchamia się pod QEMU (przerwania, stronicowanie, scheduler wywłaszczający
@@ -1018,7 +1040,7 @@ z timera, zadanie w ring 3 rozmawiające z kernelem przez `int 0x80`), a drugi
 backend, AArch64, startuje cztery CPU przez PSCI i uruchamia prawie cały korpus
 testów pod `qemu-aarch64` i własny kernel pod `qemu-system-aarch64`.
 
-Rozwijane albo planowane: generyki, wątki, szersze wektory (AVX), cel Windows
+Rozwijane albo planowane: generyki, wątki na AArch64, szersze wektory (AVX), cel Windows
 (PE/COFF), biblioteka standardowa poza `std.os` i `core.*`, kolekcje z jawnymi
 alokatorami, opcja `--lib`, wiele procesorów na x86-64 (na AArch64 cztery CPU
 już startują przez PSCI) oraz IDE. Konstrukcja, która ma składnię, ale nie ma

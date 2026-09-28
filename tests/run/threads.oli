@@ -1,0 +1,66 @@
+module threads_test
+import std.threads
+-- Threads (V2, stage 57): four threads on stacks the program owns, started
+-- by `std.threads.spawn` (one `clone`), each taking a number from a shared
+-- counter with `atomic.add`, noting itself and adding a thousand to the
+-- total, one at a time; the main thread joins each on the word the kernel
+-- clears (`std.threads.join`, futex) and checks the total, the roll and
+-- that a stack too short is refused. `spawn` is a `machine x64` block, so
+-- this fixture is x86-64 only. The exit status is the number of the check
+-- that failed; 42 when every one held.
+
+ROUNDS := 1000
+
+next : u64
+total : u64
+seen : [4]u64
+stacks : [64K]u8
+    align 16
+tids : [4]u32
+
+proc worker
+    -- Runs on its own stack, in every thread at once.
+    id := atomic.add(rw ref next, 1, seq_cst)
+    if id < 4
+        seen[uword(id)] <- id + 1
+    end
+    i : u64 <- 0
+    while i < ROUNDS
+        _o := atomic.add(rw ref total, 1, seq_cst)
+        i <- i + 1
+    end
+end
+
+proc start -> s32
+    entry
+    permit cpu.asm
+    e : u64 <- 0
+    machine x64
+        mov rax, worker
+        out rax -> e
+    end
+    if threads.spawn(tids[0..1], stacks[..64], e) != -22 then ret 1
+    if threads.spawn(tids[0..0], stacks[..16K], e) != -22 then ret 2
+    i : uword <- 0
+    while i < 4
+        r := threads.spawn(tids[i..i + 1], stacks[i * 16K..(i + 1) * 16K], e)
+        if r <= 0 then ret 3
+        i <- i + 1
+    end
+    j : uword <- 0
+    while j < 4
+        threads.join(tids[j..j + 1])
+        if tids[j] != 0 then ret 4
+        j <- j + 1
+    end
+    if total != 4 * ROUNDS then ret 5
+    if next != 4 then ret 6
+    if seen[0] != 1 then ret 7
+    if seen[1] != 2 then ret 8
+    if seen[2] != 3 then ret 9
+    if seen[3] != 4 then ret 10
+    -- joining again, or an empty slot, returns at once
+    threads.join(tids[0..1])
+    threads.join(tids[0..0])
+    ret 42
+end

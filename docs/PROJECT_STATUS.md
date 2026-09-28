@@ -1780,6 +1780,41 @@ pinned:
   member); `addr u8 (r)` is the conversion the language documents, and the
   demo uses it.
 
+## Implemented in stage 57 (2026-09-28): threads on hosted x86-64
+
+`lib/std/threads.oli` (`thread` is a reserved word): `spawn(slot, stack,
+start_at) -> word` and `join(slot)`. A thread is its id word, a `u32` the
+program keeps as one element of a view — the kernel stores the id there
+when the thread starts (CLONE_PARENT_SETTID) and clears it, with a futex
+wake, when it ends (CLONE_CHILD_CLEARTID). `spawn` is one `clone` (56) with
+CLONE_VM|FS|FILES|SIGHAND|THREAD|SYSVSEM and a stack the caller owns: the
+entry address is the only word on the child's stack; the child pops it,
+pushes the address of the exit stub and the entry, and `ret`s into the entry
+with rsp at 8 mod 16, as after a call; the entry's return lands in the stub,
+`exit` (60) of that thread alone. The parent leaves the block with the
+kernel's answer (the id, or -errno; -22 for a stack under 256 bytes or an
+empty slot). `join` reads the word and waits on `futex` (202) while it
+still holds the id. The block is `machine x64`, so the module compiles for
+x86-64 only; AArch64 threads wait for inline machine code on that back end.
+
+Three things the language does not yet give, found on the way: a ref to an
+element of a view or an array (`ref v[i]`, `rw ref a[i]`) is E0900 in the
+back end, which is why the API takes a one-element view rather than a `ref`
+to a record; `Name.at` through a qualified layout name (`core.x64.Tss.at`)
+is E0900, which is why the kernel example's TSS layout is local to it; and
+`r8` in a machine block's `in` is read as the 8-bit register class, so the
+TLS argument of `clone` is left unset (the kernel ignores it without
+CLONE_SETTLS).
+
+`tests/run/threads.oli`: four threads on 16 KiB slices of one static, each
+taking its number from a counter with `atomic.add`, noting itself and adding
+a thousand to a total, one at a time; the main thread refuses a short stack
+and an empty slot, joins each, and checks the total (4000), the roll and
+the cleared words; six runs out of six exit 42. The harness runs it like
+every fixture (x86-64 only: the `machine x64` mention keeps it out of the
+AArch64 pass) and pins the one `clone`, the exit stub and the single
+`futex` call of `join`.
+
 ## Implemented in stage 56 (2026-09-28): more than one CPU on AArch64
 
 Two additions to design 0025's hardware places, in `parse.oli`, `ast.oli`,
