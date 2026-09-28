@@ -894,9 +894,11 @@ Ten moduł jest przeznaczony głównie dla kernela i trybu freestanding.
 
 `core.frames` to menedżer pamięci fizycznej: mapa bitowa ramek 4 KiB
 (`frames.init`, `frames.load_multiboot`, `frames.alloc`, `frames.alloc_run`,
-`frames.release`, `frames.count_free`). `core.x64.sched` to kooperacyjny
-scheduler: zadania na własnych stosach, `sched.spawn`, `sched.ready` i
-`sched.switch`. Oba używa `examples/kernel.oli`.
+`frames.release`, `frames.count_free`). `core.x64.sched` to scheduler:
+zadania na własnych stosach, `sched.spawn`, `sched.yield`, `sched.exit`,
+`sched.ready` i `sched.switch`; kooperacyjny, a wywołany z procedury obsługi
+przerwania timera (`sched.preempt`) wywłaszczający. Oba używa
+`examples/kernel.oli`.
 
 ## 26. Ćwiczenia dla początkujących
 
@@ -1011,13 +1013,14 @@ przerwania (`calls interrupt`), MMIO, porty, atomiki, `own T`, liczby
 zmiennoprzecinkowe `f32`/`f64` i wektory 128-bitowe. Kompilator `olic` jest
 napisany w Oli-- i kompiluje sam siebie do identycznych bajtów
 (`genesis/test.sh`, warstwa 6). Przykładowy kernel `examples/kernel.oli`
-uruchamia się pod QEMU, a drugi backend, AArch64, uruchamia prawie cały korpus
+uruchamia się pod QEMU (przerwania, stronicowanie, scheduler wywłaszczający
+z timera, zadanie w ring 3 rozmawiające z kernelem przez `int 0x80`), a drugi
+backend, AArch64, uruchamia prawie cały korpus
 testów pod `qemu-aarch64` i własny kernel pod `qemu-system-aarch64`.
 
 Rozwijane albo planowane: generyki, wątki, szersze wektory (AVX), cel Windows
 (PE/COFF), biblioteka standardowa poza `std.os` i `core.*`, kolekcje z jawnymi
-alokatorami, opcja `--lib`, wywłaszczanie w schedulerze kernela, tryb
-użytkownika na x86-64 oraz IDE. Konstrukcja, która ma składnię, ale nie ma
+alokatorami, opcja `--lib`, wiele procesorów oraz IDE. Konstrukcja, która ma składnię, ale nie ma
 jeszcze backendu, kończy się `E0900`; to informacja o braku implementacji, nie
 o błędzie w programie.
 

@@ -252,5 +252,25 @@ timer, the page tables and a physical frame allocator over the loader's
 memory map and a heap zone over its frames already there, and a cooperative
 scheduler (`core.x64.sched`, stage 53): `init_tasks`, `spawn(table, stack,
 entry)`, `yield`, `exit` and `ready` over a task table and stacks the kernel
-owns — `ping` and `pong` run round-robin with main before interrupts are on.
-Next: preemption from the timer interrupt.
+owns — `ping` and `pong` run round-robin with main before interrupts are on
+— and preemption from the timer (stage 54): the timer's `calls interrupt`
+handler calls `sched.preempt` after its EOI, the switch leaves the handler's
+frame on the interrupted task's stack and its `iretq` completes when the task
+is switched back in; a new task starts through `launch`, which pops the flags
+word `spawn` left for it — its caller's flags — so a task spawned with
+interrupts on runs with them on even when first run from the handler, and one
+spawned before the IDT is loaded runs with them off. `spin_a` and `spin_b` never yield and both run to their
+end. Under preemption `yield` and `exit` are called with interrupts off.
+A user-mode task (stage 55): the GDT the trampoline built is extended with a
+ring-3 code and data segment and a TSS descriptor over a `Tss` layout whose
+rsp0 names the stack an interrupt from ring 3 lands on, `lgdt` again and `ltr`
+(`arch.x64.tr <- 0x28`), the page tables carry the `USER` bit, and vector
+0x80 has a gate with DPL 3 (`kind` 0xEE). A task of the scheduler enters
+ring 3 by pushing user ss, rsp, flags, cs and `user_main` and `iretq`; the
+program in ring 3 reaches the kernel only through `int 0x80`, a request word
+and an answer word in memory (a byte to print, the count served, exit), and
+the exit request ends the task from inside the handler, where interrupts are
+off, so the switch goes to main. The kernel prints `user: exited from cs
+000000000000001b after 26 requests` — cs with RPL 3, and the count is the
+line's bytes plus two. The M4 scope of this section is complete; what a
+minimal kernel does not have is listed in `docs/PROJECT_STATUS.md`.

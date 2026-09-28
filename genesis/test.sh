@@ -1600,7 +1600,9 @@ readelf -l build/kernel.elf | grep -q 'LOAD .*0x0000000000100000 0x0000000000100
 objdump -d --no-show-raw-insn build/kernel.elf > build/kernel.dis
 [ "$(grep -c 'out    %al,(%dx)' build/kernel.dis)" -ge 15 ] || fail "kernel: COM1, the two PICs and the PIT are written through port places, one out dx, al each ($(grep -c 'out    %al,(%dx)' build/kernel.dis) found)"
 [ "$(grep -c 'sti$' build/kernel.dis)" = 1 ] || fail "kernel: cpu.interrupts(on) must be one sti"
-[ "$(grep -c 'iretq' build/kernel.dis)" = 2 ] || fail "kernel: the int 3 and timer handlers must both end in iretq"
+[ "$(grep -c 'iretq' build/kernel.dis)" = 4 ] || fail "kernel: the int 3, timer and int 0x80 handlers end in iretq and user_task enters ring 3 with one - four in all"
+grep -q 'lgdt   (%rax)' build/kernel.dis || fail "kernel: arch.x64.gdt <- must be one lgdt (the table with the ring-3 segments and the TSS)"
+grep -q 'ltr    %eax' build/kernel.dis || fail "kernel: arch.x64.tr <- must be one ltr"
 [ "$(grep -c 'mov    %rax,%cr3' build/kernel.dis)" = 2 ] || fail "kernel: cr3 is written twice - the trampoline's tables and paging_init's"
 [ "$(grep -c 'mov    %cr3,%rax' build/kernel.dis)" = 1 ] || fail "kernel: cr3 must be read back once"
 grep -q 'cpuid' build/kernel.dis || fail "kernel: cpu.id(0) must be one cpuid"
@@ -1616,7 +1618,7 @@ nm build/kernel.elf | grep -q '^00000000001000b0 R kernel.header$' || fail "kern
 [ "$(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')" = ".rodata .text.boot .text .text.trap .data .bss.boot .bss .symtab .strtab .shstrtab .debug_abbrev .debug_info .debug_line " ] || fail "kernel: the sections must follow examples/x86_64-kernel.oli-target: $(readelf -SW build/kernel.elf | grep -oP '\] \.\S+' | tr -d '] ' | tr '\n' ' ')"
 nm build/kernel.elf | grep -q ' T core.x64.paging.identity_2m$' || fail "kernel: the pub procedures of core.x64.paging must be global symbols"
 grep -q 'call core.x64.paging.identity_2m\|= call ' build/kernel.oir || fail "kernel: the page directory must be filled by core.x64.paging"
-[ "$(od -An -tx1 -v build/kernel.elf | tr -d '\n' | grep -o '48 cf' | wc -l)" = 2 ] || fail "kernel: exactly two calls-interrupt handlers end in iretq"
+[ "$(od -An -tx1 -v build/kernel.elf | tr -d '\n' | grep -o '48 cf' | wc -l)" = 4 ] || fail "kernel: exactly four iretq - three calls-interrupt handlers and the entry into ring 3"
 ( cd .. && genesis/build/explain < examples/kernel.oli > genesis/build/kernel.explain 2>/dev/null ) || fail "kernel: explain"
 [ "$(grep -c 'syscalls=0' build/kernel.explain)" = "$(grep -c '(proc ' build/kernel.explain)" ] || fail "kernel: a procedure of the kernel makes a system call"
 # The boot path: the Multiboot 1 header (magic, flags bit 16, checksum,
@@ -1665,7 +1667,10 @@ if [ -n "$QEMU" ]; then
     grep -q '^frame: 0000000000[0-9a-f]\{6\} written and read$' build/kernel.serial || fail "boot: a frame must be allocated, written and read back"
     grep -q '^heap: 1000 records at 0000000000[0-9a-f]\{6\}, sum of squares 332833500, 1M refused, frames returned$' build/kernel.serial || fail "boot: the kernel heap - a zone at a megabyte of frames - must hold a thousand records, refuse 1M more and give its frames back"
     [ "$(sed -n 6p build/kernel.serial)" = "sched: 12121 in 11 switches, both tasks done" ] || fail "boot: the cooperative scheduler (core.x64.sched) must run ping three rounds and pong two, round-robin with main, in eleven switches: [$(sed -n 6p build/kernel.serial)]"
-    [ "$(wc -l < build/kernel.serial)" = 9 ] || fail "boot: COM1 must carry exactly nine lines, carries $(wc -l < build/kernel.serial)"
+    grep -q '^preempt: a [1-9][0-9]* rounds, b [1-9][0-9]* rounds, no yield, [1-9][0-9]* switches, both tasks done$' build/kernel.serial || fail "boot: two tasks that never yield must both run rounds and both end under preemption from the timer (core.x64.sched.preempt): [$(sed -n 10p build/kernel.serial)]"
+    [ "$(sed -n 11p build/kernel.serial)" = "user: hello from ring 3" ] || fail "boot: the user program must print its line from ring 3 through int 0x80, byte by byte: [$(sed -n 11p build/kernel.serial)]"
+    [ "$(sed -n 12p build/kernel.serial)" = "user: exited from cs 000000000000001b after 26 requests" ] || fail "boot: the user task must have run with cs 0x1b (RPL 3) and made 26 requests - 24 bytes, the count and the exit: [$(sed -n 12p build/kernel.serial)]"
+    [ "$(wc -l < build/kernel.serial)" = 12 ] || fail "boot: COM1 must carry exactly twelve lines, carries $(wc -l < build/kernel.serial)"
     # The same image with twice the memory: the frame count must follow the
     # machine by exactly 64 MiB / 4 KiB, so it is read, not assumed.
     set +e
@@ -1676,11 +1681,11 @@ if [ -n "$QEMU" ]; then
     f64=$(sed -n 's/^memory: .* regions, \([0-9]*\) frames free$/\1/p' build/kernel.serial)
     f128=$(sed -n 's/^memory: .* regions, \([0-9]*\) frames free$/\1/p' build/kernel128.serial)
     [ -n "$f64" ] && [ -n "$f128" ] && [ "$((f128 - f64))" = 16384 ] || fail "boot: 128 MiB must free 16384 frames more than 64 MiB ($f64, $f128)"
-    echo "ok: BOOT - $("$QEMU" -version | head -1 | sed 's/ (.*//') loads kernel.elf by its Multiboot header in 32-bit mode, the trampoline enters long mode, the kernel greets on COM1, reports cpuid, frees the RAM of the loader's memory map ($f64 frames at 64 MiB, $f128 at 128 MiB) and writes an allocated frame, runs a heap zone laid at a megabyte of frames, runs two tasks on their own stacks under a cooperative scheduler, takes int 3 and 100 timer ticks, and exits through isa-debug-exit with 33"
+    echo "ok: BOOT - $("$QEMU" -version | head -1 | sed 's/ (.*//') loads kernel.elf by its Multiboot header in 32-bit mode, the trampoline enters long mode, the kernel greets on COM1, reports cpuid, frees the RAM of the loader's memory map ($f64 frames at 64 MiB, $f128 at 128 MiB) and writes an allocated frame, runs a heap zone laid at a megabyte of frames, runs two tasks on their own stacks under a cooperative scheduler, takes int 3 and 100 timer ticks, preempts two spinning tasks from the timer handler until both are done, runs a task in ring 3 that prints through int 0x80 and is ended from the handler, and exits through isa-debug-exit with 33"
 else
     echo "skipped: no qemu-system-x86_64 here (set OLI_QEMU, and OLI_QEMU_BIOS/OLI_QEMU_DATA for its firmware) - the boot of examples/kernel.oli was verified with QEMU 10.0.13 on 2026-09-24, transcript in docs/PROJECT_STATUS.md"
 fi
-echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2 header at offset 176, COM1, the PICs and the PIT written through port places, cpuid, lidt and int 3 in its machine blocks, two calls-interrupt handlers ending in iretq, sti, and no system call anywhere (run it: qemu-system-x86_64 -kernel kernel.elf -serial stdio)"
+echo "ok: examples/kernel.oli is an ELF64 loaded at 0x100000 with its Multiboot2 header at offset 176, COM1, the PICs and the PIT written through port places, cpuid, lidt and int 3 in its machine blocks, three calls-interrupt handlers ending in iretq and a fourth iretq into ring 3, the timer handler calling core.x64.sched.preempt, lgdt and ltr, sti, and no system call anywhere (run it: qemu-system-x86_64 -kernel kernel.elf -serial stdio)"
 
 # Object files (ABI.md 6, `-- output: object`): a relocatable ELF with the
 # same sections at address 0, .rela.text for every absolute address and
@@ -1862,7 +1867,11 @@ echo "ok: every key of a target profile is applied or checked - an unknown key, 
 # (then the ud2 every procedure ends in).
 objdump -d --no-show-raw-insn build/sched.elf | awk '/<core.x64.sched.switch>:/,/^$/' | sed 1d | sed '/^$/d' | awk '{$1=""; print}' | tr -s ' ' > build/sched.dis
 [ "$(tr '\n' ';' < build/sched.dis)" = " push %rbp; push %rbx; push %r12; push %r13; push %r14; push %r15; mov %rsp,(%rdi); mov %rsi,%rsp; pop %r15; pop %r14; pop %r13; pop %r12; pop %rbx; pop %rbp; ret; ud2;" ] || fail "sched: core.x64.sched.switch must be exactly its block, is [$(tr '\n' ';' < build/sched.dis)]"
-echo "ok: core.x64.sched - tests/run/sched.oli runs three tasks and main round-robin (the order, 13 switches, locals across yields, a yield five frames deep, a DONE slot taken again, a full table and a short stack refused); switch is exactly its block of pushes, two rsp moves, pops and ret"
+objdump -d --no-show-raw-insn build/sched.elf | awk '/<core.x64.sched.launch>:/,/^$/' | sed 1d | sed '/^$/d' | awk '{$1=""; print}' | tr -s ' ' > build/launch.dis
+[ "$(tr '
+' ';' < build/launch.dis)" = " popf; ret; ud2;" ] || fail "sched: core.x64.sched.launch must be exactly popfq and ret, is [$(tr '
+' ';' < build/launch.dis)]"
+echo "ok: core.x64.sched - tests/run/sched.oli runs three tasks and main round-robin (the order, 13 switches, locals across yields, a yield five frames deep, a DONE slot taken again, a full table and a short stack refused); switch is exactly its block of pushes, two rsp moves, pops and ret, and launch - the first instructions of every task - exactly popfq and ret"
 # tests/run/switch.oli: a calls-none procedure's machine block is the whole
 # procedure - the lowering saves nothing through rbp, which it does not own.
 objdump -d --no-show-raw-insn build/switch.elf | awk '/<switch_test.switch_to>:/,/^$/' > build/switch.dis
@@ -1972,13 +1981,17 @@ fi
 # 0x40080000 whose entry sets its own stack; with qemu-system-aarch64
 # (OLI_QEMU_SYSTEM_AARCH64) it boots on the virt board and prints its lines
 # on the PL011 UART, then halts in wfi (the timeout ends QEMU).
+# OLI_QEMU_DATA, when set, names the directory of QEMU's ROM files for this
+# board too (a QEMU that is not installed system-wide needs it).
+qal=""
+[ -n "${OLI_QEMU_DATA:-}" ] && qal="-L $OLI_QEMU_DATA"
 ( cd .. && genesis/build/olic < tests/a64/free/kernel.oli > genesis/build/akernel.elf 2> genesis/build/akernel.err ) || fail "aarch64: olic could not compile the bare-metal kernel: $(head -1 build/akernel.err)"
 readelf -h build/akernel.elf | grep -q 'Machine: *AArch64' || fail "aarch64: the kernel is not AArch64"
 readelf -lW build/akernel.elf | grep -q 'LOAD .*0x0000000040080000' || fail "aarch64: the kernel must be loaded at 0x40080000"
 if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     rm -f build/akernel.serial
     set +e
-    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/akernel.serial -kernel build/akernel.elf > /dev/null 2>&1
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" $qal -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/akernel.serial -kernel build/akernel.elf > /dev/null 2>&1
     set -e
     kl=$(grep -n 'small\[k\] <- 1' ../tests/a64/free/kernel.oli | cut -d: -f1)
     printf 'Oli-- on aarch64, bare metal\nfib(20) = 6765, calls 21891\nzone sum = 2016\ntimer ok\ntrap at stdin:%s\n' "$kl" > build/akernel.want
@@ -1996,7 +2009,7 @@ readelf -SW build/atimer.elf | grep -q ' \.text\.vectors .* 00000000400[0-9a-f]\
 if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     rm -f build/atimer.serial
     set +e
-    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/atimer.serial -kernel build/atimer.elf -d int -D build/atimer.qlog > /dev/null 2>&1
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" $qal -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/atimer.serial -kernel build/atimer.elf -d int -D build/atimer.qlog > /dev/null 2>&1
     set -e
     printf 'vectors installed\nticks 100\na hundred periods passed\nresumed where it stopped\nfloats on\n' > build/atimer.want
     cmp build/atimer.serial build/atimer.want || fail "aarch64: the timer kernel printed [$(cat build/atimer.serial)]"
@@ -2008,7 +2021,7 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     ( cd .. && genesis/build/olic < tests/a64/free/gic3.oli > genesis/build/agic3.elf 2> genesis/build/agic3.err ) || fail "aarch64: olic could not compile the GICv3 kernel: $(head -1 build/agic3.err)"
     rm -f build/agic3.serial
     set +e
-    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt,gic-version=3 -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/agic3.serial -kernel build/agic3.elf -d int -D build/agic3.qlog > /dev/null 2>&1
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" $qal -M virt,gic-version=3 -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/agic3.serial -kernel build/agic3.elf -d int -D build/agic3.qlog > /dev/null 2>&1
     set -e
     printf 'data abort: esr class 0x0000000000000025, far 0x0000010000000000, faults 1\ngicv3 on\nticks 100, faults 2\nnested abort inside an irq returned\n' > build/agic3.want
     cmp build/agic3.serial build/agic3.want || fail "aarch64: the GICv3 kernel printed [$(cat build/agic3.serial)]"
@@ -2021,7 +2034,7 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     ( cd .. && genesis/build/olic < tests/a64/free/user.oli > genesis/build/auser.elf 2> genesis/build/auser.err ) || fail "aarch64: olic could not compile the user-mode kernel: $(head -1 build/auser.err)"
     rm -f build/auser.serial
     set +e
-    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/auser.serial -kernel build/auser.elf -d int -D build/auser.qlog > /dev/null 2>&1
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" $qal -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/auser.serial -kernel build/auser.elf -d int -D build/auser.qlog > /dev/null 2>&1
     set -e
     printf 'kernel: entering EL0\nhello from EL0\nthe kernel has served 16 calls\nkernel: user exited after 48 calls, 1 refused (class 0)\n' > build/auser.want
     cmp build/auser.serial build/auser.want || fail "aarch64: the user-mode kernel printed [$(cat build/auser.serial)]"
@@ -2034,7 +2047,7 @@ if [ -n "${OLI_QEMU_SYSTEM_AARCH64:-}" ]; then
     ( cd .. && genesis/build/olic < tests/a64/free/mmu.oli > genesis/build/ammu.elf 2> genesis/build/ammu.err ) || fail "aarch64: olic could not compile the MMU kernel: $(head -1 build/ammu.err)"
     rm -f build/ammu.serial
     set +e
-    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/ammu.serial -kernel build/ammu.elf -d int -D build/ammu.qlog > /dev/null 2>&1
+    timeout 10 "$OLI_QEMU_SYSTEM_AARCH64" $qal -M virt -cpu cortex-a53 -m 128 -display none -monitor none -serial file:build/ammu.serial -kernel build/ammu.elf -d int -D build/ammu.qlog > /dev/null 2>&1
     set -e
     printf 'mmu on\nthrough the alias: 0x00001234\nhello from EL0 under the MMU\nstill running at EL0\nkernel: user exited; refused class 0x00000024 at 0x80080000\n' > build/ammu.want
     cmp build/ammu.serial build/ammu.want || fail "aarch64: the MMU kernel printed [$(cat build/ammu.serial)]"

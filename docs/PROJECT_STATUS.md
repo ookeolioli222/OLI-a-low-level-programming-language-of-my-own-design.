@@ -1780,6 +1780,79 @@ pinned:
   member); `addr u8 (r)` is the conversion the language documents, and the
   demo uses it.
 
+## Implemented in stage 55 (2026-09-28): a user-mode task, and M4 complete
+
+`examples/kernel.oli` runs a program in ring 3. `gdt_init` extends the GDT
+the trampoline built from three descriptors to seven: a 64-bit code segment
+with DPL 3 at 0x18, a data segment with DPL 3 at 0x20, and the sixteen-byte
+descriptor of a task state segment at 0x28 — base and limit in pieces around
+type 0x89 — over a `Tss` layout (packed, 104 bytes) whose rsp0 is the top of
+a stack of its own, the one the CPU switches to on any interrupt or `int n`
+from ring 3; then `lgdt` again with the longer limit and `ltr` through
+`arch.x64.tr <- 0x28`. `paging_init` sets the `USER` bit on its tables (the
+demo shares the identity map between the rings; a kernel with address spaces
+would map ring 3 separately). `set_gate` takes the gate's kind, and vector
+0x80 gets 0xEE — an interrupt gate ring 3 may raise.
+
+`user_task` is a task of the scheduler: in ring 0, on the stack `spawn` gave
+it, it pushes the user data selector with RPL 3, the top of `user_stack`,
+flags with IF, the user code selector with RPL 3 and `user_main`, and
+`iretq` — the first `iretq` of the image that is not a handler's return.
+`user_main` runs in ring 3 with an ordinary frame: it can halt nothing,
+touch no port and load no segment, so it prints through `user_call`, which
+stores the request word, raises `int 0x80` and returns the answer word.
+`on_user` serves it: a byte below 256 to COM1, USER_COUNT answers with the
+requests served, USER_EXIT calls `sched.exit` from inside the handler, where
+interrupts are off, so the switch goes to main and ring 3 is never resumed.
+The timer preempts the user task like any other: its handler frames lie on
+the rsp0 stack, the switch saves that rsp, and the `iretq` back to ring 3
+completes when the task is switched in again.
+
+Booted under QEMU 10.2.1 on 2026-09-28, the eleventh and twelfth lines on
+COM1: `user: hello from ring 3` and `user: exited from cs 000000000000001b
+after 26 requests` — cs 0x1b is 0x18 with RPL 3, and 26 is the line's 24
+bytes plus the count and the exit; QEMU's interrupt log shows vectors 3, 32
+and 0x80 only, no fault. The harness checks both lines, the twelve lines, the
+four `iretq`s, `lgdt` and `ltr`.
+
+**M4 is complete** as `docs/KERNEL_PROGRAMMING.md` §5 scoped it: Multiboot
+boot, own stack, serial and VGA, cpuid, GDT, IDT and handlers, PIC and PIT,
+page tables, a frame allocator and a heap zone, a cooperative and a
+preemptive scheduler, and a user-mode task. What it is not: one CPU only, no
+address space per task, no file system, no loader for programs other than
+the one in the image. Those are not on the roadmap's M4 row.
+
+## Implemented in stage 54 (2026-09-28): preemption from the timer
+
+`core.x64.sched` gained `preempt`, which is `yield` called from the timer's
+`calls interrupt` handler after its EOI: the switch leaves the handler's
+whole frame — the five words the CPU pushed, the fourteen registers the
+prologue pushed, the saved rbp — on the interrupted task's stack, and that
+task's `iretq` completes when it is switched back in, with the flags it had.
+A new task now begins through `launch`, a `calls none` procedure that is
+exactly `popfq; ret`: `spawn` reads its caller's flags with `pushfq` and
+leaves them under the entry address, so a task spawned with interrupts on
+runs with them on even when first run from inside the handler, where the
+interrupt gate cleared IF — and a task spawned before the IDT is loaded runs
+with them off. (The first cut left a constant with IF set, and the
+cooperative demo, which runs before the IDT exists, then took the BIOS's
+timer interrupt into no table once in a while: a triple fault after the heap
+line in one harness boot out of five. The flags of the spawner are the
+rule.) In a process `popfq` cannot change IF and changes nothing, and
+`tests/run/sched.oli` passes as before (13 switches). Under preemption `yield` and `exit` are called with
+interrupts off — the switch in restores them through the flags every path
+pops — because a tick between `sc.cur <- to` and the `switch` would save the
+wrong stack under the wrong slot.
+
+`examples/kernel.oli` runs the demo after its hundred ticks: `spin_a` and
+`spin_b` never yield, count rounds until tick 300 and exit; main waits in
+`hlt`. Booted under QEMU 10.2.1 on 2026-09-28: `preempt: a 74141766 rounds,
+b 74775673 rounds, no yield, 203 switches, both tasks done`, the tenth line on
+COM1, exit through isa-debug-exit with 33. The harness checks the line's
+shape (both counts and the switches non-zero), the ten lines, and that
+`launch` is exactly its two instructions. The timer handler is still one of
+the two `iretq`s of the image.
+
 ## Documented (2026-09-27): the Polish handbook and three small examples
 
 `docs/PODRECZNIK_OLI_PL.md` is a practical handbook in Polish — syntax,

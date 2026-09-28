@@ -50,7 +50,7 @@ compiler abstractions, and the current limitations, see
 | M1 | high-level `examples/hello.oli` compiles to a static ELF64 and runs without libc or a linker |
 | M2 | variables, arithmetic, control flow, procedures, zones, views, `each`, layouts and refs run; more features remain |
 | M3 freestanding output | implemented; own entry, stack, traps, sections and target profiles |
-| M4 kernel path | demonstrated under QEMU; kernel facilities are still narrow |
+| M4 minimal kernel | complete as scoped (2026-09-28): boots under QEMU with interrupts, page tables, a frame allocator and heap, a cooperative and preemptive scheduler and a task in ring 3 served through `int 0x80`; one CPU, one address space, no file system |
 | Standard library, IDE and ecosystem libraries | small or planned |
 
 The verified details and completion gates are maintained in

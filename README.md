@@ -64,7 +64,7 @@ file.**
 | M1 | `olic hello.oli && ./hello` prints `Hello Oli--` via raw Linux syscalls | **done** (layer 5 of `genesis/test.sh`) |
 | M2 | Variables, arithmetic, control flow, procedures, layouts, views, zones | **done**: all of it runs, plus refs, fallible results, statics, arrays in frames and raw access (`tests/run/`) |
 | M3 | Freestanding binary with own entry point and own stack | **done**: own entry with no frame, own stack, `traps` with `core.Site`, zones `at`/`from`, `cpu.halt()`, `-- load:` address, Multiboot2 header as a static in `.text.boot`, port I/O — `tests/run/freestanding.oli` and `tests/freestanding/` run as processes, `examples/kernel.oli` is checked structurally (no emulator in the harness; `qemu-system-x86_64 -kernel` runs it) |
-| M4 | Minimal kernel written in Oli-- | **in progress**: `calls interrupt` handlers with `core.x64.InterruptFrame` (run for real in `tests/run/interrupt.oli`), an IDT and `int 3` in `examples/kernel.oli`; `mem.mmio`, page tables and the PIC/APIC remain |
+| M4 | Minimal kernel written in Oli-- | `calls interrupt` handlers with `core.x64.InterruptFrame`, an IDT, `int 3`, the PICs and the PIT, `mem.mmio`, page tables in cr3, a frame allocator and a heap zone over its frames, and `core.x64.sched` — cooperative (`yield`) and preemptive from the timer handler (`preempt`, stage 54), and a task that enters ring 3 through `iretq` under its own GDT and TSS and reaches the kernel only through `int 0x80` (stage 55) — all booted under QEMU in `examples/kernel.oli` | **done 2026-09-28** |
 
 ## Try it
 
